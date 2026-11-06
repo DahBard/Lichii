@@ -55,10 +55,18 @@ u64 TicksPerMicrosecond() {
     return ticks;
 }
 
+// clang and GCC compile the WAITPKG intrinsics into a function marked for it. MSVC builds (the
+// comparison build) spin with PAUSE as before.
+#if defined(__clang__) || defined(__GNUC__)
+#define LICHII_WAITPKG 1
+#else
+#define LICHII_WAITPKG 0
+#endif
+
 bool UsesWaitpkg() {
     static const bool enabled = [] {
         const char* const value = std::getenv("LICHII_WAITPKG_SPIN");
-        if (value != nullptr && value[0] == '0') {
+        if (!LICHII_WAITPKG || (value != nullptr && value[0] == '0')) {
             return false;
         }
         return g_cpu_caps.waitpkg && g_cpu_caps.invariant_tsc &&
@@ -67,20 +75,20 @@ bool UsesWaitpkg() {
     return enabled;
 }
 
-#if defined(__clang__) || defined(__GNUC__)
-__attribute__((target("waitpkg")))
-#endif
-void Monitor(const void* address) {
+#if LICHII_WAITPKG
+__attribute__((target("waitpkg"))) void Monitor(const void* address) {
     _umonitor(const_cast<void*>(address));
 }
 
-#if defined(__clang__) || defined(__GNUC__)
-__attribute__((target("waitpkg")))
-#endif
-void WaitUntil(u64 deadline) {
+__attribute__((target("waitpkg"))) void WaitUntil(u64 deadline) {
     // Control bit 0 set: C0.1, the state with the faster wakeup.
     _umwait(1, deadline);
 }
+#else
+void Monitor(const void*) {}
+
+void WaitUntil(u64) {}
+#endif
 
 #else
 
