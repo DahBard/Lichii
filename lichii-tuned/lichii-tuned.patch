@@ -1261,7 +1261,7 @@ index fd7233cf93..357ae0a1d0 100644
  
      for (auto& [display_id, manager] : m_vsync_managers) {
 diff --git a/src/frontend_common/config.cpp b/src/frontend_common/config.cpp
-index 698385ed1e..60a6f84536 100644
+index 698385ed1e..8186377a31 100644
 --- a/src/frontend_common/config.cpp
 +++ b/src/frontend_common/config.cpp
 @@ -134,12 +134,12 @@ void Config::SetUpIni() {
@@ -1281,7 +1281,7 @@ index 698385ed1e..60a6f84536 100644
          seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
          seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
          seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
-@@ -147,6 +147,24 @@ void Config::SetUpIni() {
+@@ -147,6 +147,25 @@ void Config::SetUpIni() {
          seed(Settings::values.use_asynchronous_shaders, ToString(true));
          EndGroup();
      }
@@ -1290,7 +1290,8 @@ index 698385ed1e..60a6f84536 100644
 +        // configuration as well. Whatever is changed afterwards is kept.
 +        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
 +        constexpr s64 TunedDefaultsVersion = 1;
-+        if (ReadIntegerSetting(std::string("lichii_tuned_defaults"), 0) < TunedDefaultsVersion) {
++        // Read without a default: with one, a key without a default flag reads as that default.
++        if (ReadIntegerSetting(std::string("lichii_tuned_defaults")) < TunedDefaultsVersion) {
 +            seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
 +            seed(Settings::values.use_asynchronous_shaders, ToString(true));
 +            seed(Settings::values.use_reactive_flushing, ToString(false));
