@@ -1,0 +1,849 @@
+diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
+new file mode 100644
+index 0000000..9401f79
+--- /dev/null
++++ b/dist/lichii-tuned/README-tuned.txt
+@@ -0,0 +1,26 @@
++Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
++==============================================================================
++
++Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichii, branch
++"tuned". Same emulator and the same user data folder as the official build, plus:
++
++ * Compiled by clang with Lichii's PGO profile, for x86-64-v3 (AVX2, BMI2, FMA) and tuned
++   for Arrow Lake. It runs on any CPU with AVX2 (Intel Haswell / AMD Zen and newer).
++ * Hybrid CPU core placement (Windows): the GPU command threads (GPU, GPUBack, VulkanWorker)
++   run on the P-cores, the emulated CPU cores on P- and E-cores, pipeline builds and core
++   timing on E-cores, and no emulator thread on the two 2.5 GHz low-power E-cores.
++ * Intel WAITPKG waits: the GPU threads and idle emulated cores wait for each other with
++   UMWAIT (the core idles until the other thread writes) instead of spinning on PAUSE, which
++   leaves more of a laptop CPU's power budget to the busy cores.
++
++A/B launchers (this build with one change switched off; compare the same scene each time):
++ ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
++ ab-2-no-core-placement.bat   Windows places every thread (LICHII_CPU_POLICY=off)
++ ab-3-soft-placement.bat      only keeps threads off the low-power E-cores (LICHII_CPU_POLICY=soft)
++ ab-4-strict-placement.bat    emulated CPU cores on P-cores too (LICHII_CPU_POLICY=strict)
++ ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
++ perf-trace.bat               default settings plus per-second GPU thread zones and frame timing
++                              in the log (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1)
++
++The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
++"Core placement:" line per thread, so you can check what each launcher did.
+diff --git a/dist/lichii-tuned/ab-1-stock-threading.bat b/dist/lichii-tuned/ab-1-stock-threading.bat
+new file mode 100644
+index 0000000..ee3bc60
+--- /dev/null
++++ b/dist/lichii-tuned/ab-1-stock-threading.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Compiler changes only: Windows places threads, PAUSE spinning.
++set LICHII_CPU_POLICY=off&& set LICHII_WAITPKG_SPIN=0
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
+new file mode 100644
+index 0000000..09e1ff8
+--- /dev/null
++++ b/dist/lichii-tuned/ab-2-no-core-placement.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Windows places every thread.
++set LICHII_CPU_POLICY=off
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-3-soft-placement.bat b/dist/lichii-tuned/ab-3-soft-placement.bat
+new file mode 100644
+index 0000000..1ab5862
+--- /dev/null
++++ b/dist/lichii-tuned/ab-3-soft-placement.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Only keep threads off the low-power E-cores; pipeline builds on E-cores.
++set LICHII_CPU_POLICY=soft
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-4-strict-placement.bat b/dist/lichii-tuned/ab-4-strict-placement.bat
+new file mode 100644
+index 0000000..7354086
+--- /dev/null
++++ b/dist/lichii-tuned/ab-4-strict-placement.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Emulated CPU cores on P-cores too.
++set LICHII_CPU_POLICY=strict
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-5-no-umwait.bat b/dist/lichii-tuned/ab-5-no-umwait.bat
+new file mode 100644
+index 0000000..9595b82
+--- /dev/null
++++ b/dist/lichii-tuned/ab-5-no-umwait.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem PAUSE spinning instead of UMWAIT waits.
++set LICHII_WAITPKG_SPIN=0
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
+new file mode 100644
+index 0000000..cf4b318
+--- /dev/null
++++ b/dist/lichii-tuned/perf-trace.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Logs GPU thread zones and frame timing every second.
++set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
+index 56709cf..af2d19c 100644
+--- a/src/common/CMakeLists.txt
++++ b/src/common/CMakeLists.txt
+@@ -102,6 +102,8 @@ add_library(
+     scm_rev.h
+     scope_exit.h
+     spin_recursive_mutex.h
++    spin_wait.cpp
++    spin_wait.h
+     scratch_buffer.h
+     settings.cpp
+     settings.h
+@@ -163,7 +165,9 @@ set_source_files_properties(zbic_compression.cpp PROPERTIES
+ 
+ if(WIN32)
+     target_sources(common PRIVATE windows/timer_resolution.cpp
+-        windows/timer_resolution.h)
++        windows/timer_resolution.h
++        windows/hybrid_cpu.cpp
++        windows/hybrid_cpu.h)
+     target_link_libraries(common PRIVATE ntdll)
+ endif()
+ 
+diff --git a/src/common/spin_wait.cpp b/src/common/spin_wait.cpp
+new file mode 100644
+index 0000000..dfa56aa
+--- /dev/null
++++ b/src/common/spin_wait.cpp
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <algorithm>
++#include <chrono>
++#include <cstdlib>
++#include <thread>
++
++#include "common/spin_wait.h"
++
++#ifdef ARCHITECTURE_x86_64
++#ifdef _MSC_VER
++#include <intrin.h>
++#endif
++#include <immintrin.h>
++#include "common/cpu_features.h"
++#endif
++
++namespace Common::SpinWait {
++
++#ifdef ARCHITECTURE_x86_64
++
++u64 Now() {
++    return static_cast<u64>(__rdtsc());
++}
++
++void Pause() {
++    _mm_pause();
++}
++
++namespace {
++
++u64 MeasurePauseTicks() {
++    // Skylake-derived Intel cores take ~140 cycles per PAUSE, AMD's far fewer: the spin budgets
++    // in pauses were tuned on one of them, so they are kept as time on this CPU.
++    u64 best = ~u64{0};
++    for (int trial = 0; trial < 5; ++trial) {
++        const u64 start = Now();
++        for (int i = 0; i < 256; ++i) {
++            _mm_pause();
++        }
++        best = (std::min)(best, Now() - start);
++    }
++    return std::clamp<u64>(best / 256, 1, 1000);
++}
++
++} // Anonymous namespace
++
++u64 PauseTicks() {
++    static const u64 ticks = MeasurePauseTicks();
++    return ticks;
++}
++
++u64 TicksPerMicrosecond() {
++    static const u64 ticks = (std::max)(g_cpu_caps.tsc_frequency / 1'000'000, u64{1});
++    return ticks;
++}
++
++bool UsesWaitpkg() {
++    static const bool enabled = [] {
++        const char* const value = std::getenv("LICHII_WAITPKG_SPIN");
++        if (value != nullptr && value[0] == '0') {
++            return false;
++        }
++        return g_cpu_caps.waitpkg && g_cpu_caps.invariant_tsc &&
++               g_cpu_caps.tsc_frequency >= 100'000'000;
++    }();
++    return enabled;
++}
++
++#if defined(__clang__) || defined(__GNUC__)
++__attribute__((target("waitpkg")))
++#endif
++void Monitor(const void* address) {
++    _umonitor(const_cast<void*>(address));
++}
++
++#if defined(__clang__) || defined(__GNUC__)
++__attribute__((target("waitpkg")))
++#endif
++void WaitUntil(u64 deadline) {
++    // Control bit 0 set: C0.1, the state with the faster wakeup.
++    _umwait(1, deadline);
++}
++
++#else
++
++u64 Now() {
++    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                std::chrono::steady_clock::now().time_since_epoch())
++                                .count());
++}
++
++void Pause() {
++#if defined(__aarch64__)
++    asm volatile("yield");
++#else
++    std::this_thread::yield();
++#endif
++}
++
++u64 PauseTicks() {
++    return 1;
++}
++
++u64 TicksPerMicrosecond() {
++    return 1000;
++}
++
++bool UsesWaitpkg() {
++    return false;
++}
++
++void Monitor(const void*) {}
++
++void WaitUntil(u64) {}
++
++#endif
++
++} // namespace Common::SpinWait
+diff --git a/src/common/spin_wait.h b/src/common/spin_wait.h
+new file mode 100644
+index 0000000..5f5a5a4
+--- /dev/null
++++ b/src/common/spin_wait.h
+@@ -0,0 +1,91 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <chrono>
++
++#include "common/common_types.h"
++
++namespace Common {
++
++namespace SpinWait {
++
++/// Whether waits idle the core with UMONITOR/UMWAIT: the CPU has WAITPKG (Intel Tremont, Alder
++/// Lake and later), its TSC rate is known, and LICHII_WAITPKG_SPIN is not 0.
++bool UsesWaitpkg();
++
++/// TSC ticks a PAUSE instruction takes on this CPU (measured once).
++u64 PauseTicks();
++
++/// TSC ticks per microsecond.
++u64 TicksPerMicrosecond();
++
++u64 Now();
++void Pause();
++
++/// Arms the address monitor on `address`'s cache line (UMONITOR). Requires UsesWaitpkg().
++void Monitor(const void* address);
++
++/// Idles the core in C0.1 until `deadline` (TSC), a write to the monitored line or an
++/// interrupt (UMWAIT). Requires UsesWaitpkg().
++void WaitUntil(u64 deadline);
++
++template <typename Ready>
++bool IdleUntil(const void* address, u64 deadline, Ready& ready) {
++    // Conditions that are not on the monitored line are seen within a slice.
++    const u64 slice = 4 * TicksPerMicrosecond();
++    while (true) {
++        if (ready()) {
++            return true;
++        }
++        const u64 now = Now();
++        if (now >= deadline) {
++            return false;
++        }
++        Monitor(address);
++        if (ready()) {
++            return true;
++        }
++        WaitUntil(deadline - now > slice ? now + slice : deadline);
++    }
++}
++
++} // namespace SpinWait
++
++/// Waits until `ready()` holds, at most about as long as `pauses` PAUSE instructions take on
++/// this CPU. The first polls spin with PAUSE; after them, on CPUs with WAITPKG, the core idles
++/// in C0.1 until another core writes `address`'s cache line instead of executing PAUSE, which
++/// wakes as fast and leaves more of a power-limited CPU's budget to the busy cores. Returns
++/// whether `ready()` held.
++template <typename Ready>
++bool SpinUntil(const void* address, u32 pauses, Ready&& ready) {
++    constexpr u32 FastPolls = 64;
++    u32 spin = 0;
++    for (; spin < pauses && spin < FastPolls; ++spin) {
++        if (ready()) {
++            return true;
++        }
++        SpinWait::Pause();
++    }
++    if (spin < pauses && SpinWait::UsesWaitpkg()) {
++        const u64 deadline = SpinWait::Now() + u64{pauses - spin} * SpinWait::PauseTicks();
++        return SpinWait::IdleUntil(address, deadline, ready);
++    }
++    for (; spin < pauses; ++spin) {
++        if (ready()) {
++            return true;
++        }
++        SpinWait::Pause();
++    }
++    return ready();
++}
++
++/// Waits like SpinUntil for up to `duration`. Requires SpinWait::UsesWaitpkg().
++template <typename Ready>
++bool SpinUntilFor(const void* address, std::chrono::microseconds duration, Ready&& ready) {
++    const u64 deadline =
++        SpinWait::Now() + static_cast<u64>(duration.count()) * SpinWait::TicksPerMicrosecond();
++    return SpinWait::IdleUntil(address, deadline, ready);
++}
++
++} // namespace Common
+diff --git a/src/common/thread.cpp b/src/common/thread.cpp
+index fdf0b2a..bc5baf3 100644
+--- a/src/common/thread.cpp
++++ b/src/common/thread.cpp
+@@ -5,7 +5,9 @@
+ // SPDX-FileCopyrightText: 2014 Citra Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <array>
+ #include <chrono>
++#include <cstring>
+ #include <string>
+ #include <thread>
+ 
+@@ -22,6 +24,7 @@
+ #elif defined(_WIN32)
+ #include <windows.h>
+ #include "common/string_util.h"
++#include "common/windows/hybrid_cpu.h"
+ #include "common/windows/timer_resolution.h"
+ #else
+ #if defined(__FreeBSD__)
+@@ -503,13 +506,24 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
+ #endif
+ }
+ 
++#ifdef _WIN32
++namespace {
++// The name core placement logs (MinGW builds have no other record of it).
++thread_local std::array<char, 32> t_thread_name{};
++} // Anonymous namespace
++#endif
++
+ void SetCurrentThreadName(const char* name) {
+-#ifdef _MSC_VER
+-    // Sets the debugger-visible name of the current thread.
+-    if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)
+-        pf(GetCurrentThread(), UTF8ToUTF16W(name).data()); // Windows 10+
+-    else
+-        ; // No-op
++#ifdef _WIN32
++    // Sets the debugger-visible name of the current thread (Windows 10+), MinGW builds included.
++    using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
++    static const auto set_description = reinterpret_cast<SetThreadDescriptionFn>(
++        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"KernelBase.dll"),
++                                               "SetThreadDescription")));
++    if (set_description != nullptr) {
++        set_description(GetCurrentThread(), UTF8ToUTF16W(name).c_str());
++    }
++    std::strncpy(t_thread_name.data(), name, t_thread_name.size() - 1);
+ #elif  defined(__APPLE__)
+     pthread_setname_np(name);
+ #elif defined(__HAIKU__)
+@@ -529,11 +543,6 @@ void SetCurrentThreadName(const char* name) {
+         buf[len] = '\0';
+         pthread_setname_np(pthread_self(), buf);
+     }
+-#elif defined(_WIN32)
+-    // MinGW with the POSIX threading model does not support pthread_setname_np
+-    // See for reference
+-    // https://gitlab.freedesktop.org/mesa/mesa/-/blame/main/src/util/u_thread.c?ref_type=heads#L75
+-    (void)name;
+ #else
+     pthread_setname_np(pthread_self(), name);
+ #endif
+@@ -546,6 +555,24 @@ void SetCurrentThreadToPerformanceCores() {
+         return;
+     }
+     SetCurrentThreadCoreGroup(CoreGroup::Performance);
++#elif defined(_WIN32)
++    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Performance, t_thread_name.data());
++#endif
++}
++
++void SetCurrentThreadToFastestCores() {
++#if defined(_WIN32)
++    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Fastest, t_thread_name.data());
++#else
++    SetCurrentThreadToPerformanceCores();
++#endif
++}
++
++void SetCurrentThreadToWaitingCores() {
++#if defined(_WIN32)
++    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Waiting, t_thread_name.data());
++#else
++    SetCurrentThreadToPerformanceCores();
+ #endif
+ }
+ 
+@@ -556,6 +583,8 @@ void SetCurrentThreadToEfficiencyCores() {
+         return;
+     }
+     SetCurrentThreadCoreGroup(CoreGroup::Efficiency);
++#elif defined(_WIN32)
++    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Background, t_thread_name.data());
+ #endif
+ }
+ 
+@@ -563,6 +592,8 @@ void SetCurrentThreadToBackgroundWork() {
+ #if defined(__ANDROID__)
+     ADPF::AddCurrentThread(ADPF::Session::Background);
+     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
++#elif defined(_WIN32)
++    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Background, t_thread_name.data());
+ #endif
+ }
+ 
+@@ -570,6 +601,8 @@ void SetCurrentThreadToAllCores() {
+ #if defined(__ANDROID__)
+     ADPF::RemoveCurrentThread();
+     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
++#elif defined(_WIN32)
++    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Any, t_thread_name.data());
+ #endif
+ }
+ 
+diff --git a/src/common/thread.h b/src/common/thread.h
+index 4a36295..6843bc5 100644
+--- a/src/common/thread.h
++++ b/src/common/thread.h
+@@ -108,6 +108,12 @@ enum class ThreadPlacement : u32 {
+ void SetCurrentThreadPriority(ThreadPriority new_priority);
+ void SetCurrentThreadName(const char* name);
+ void SetCurrentThreadToPerformanceCores();
++/// The threads that bound the frame time; on a hybrid x86 CPU under Windows, P-cores only.
++/// Elsewhere the same as SetCurrentThreadToPerformanceCores.
++void SetCurrentThreadToFastestCores();
++/// Threads that wait without sleeping (spinning or UMWAIT); on a hybrid x86 CPU under Windows,
++/// E-cores. Elsewhere the same as SetCurrentThreadToPerformanceCores.
++void SetCurrentThreadToWaitingCores();
+ void SetCurrentThreadToEfficiencyCores();
+ void SetCurrentThreadToBackgroundWork();
+ void SetCurrentThreadToAllCores();
+diff --git a/src/common/windows/hybrid_cpu.cpp b/src/common/windows/hybrid_cpu.cpp
+new file mode 100644
+index 0000000..46cff50
+--- /dev/null
++++ b/src/common/windows/hybrid_cpu.cpp
+@@ -0,0 +1,225 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <windows.h>
++
++#include <algorithm>
++#include <cstdlib>
++#include <string_view>
++#include <vector>
++
++#include "common/common_types.h"
++#include "common/logging.h"
++#include "common/windows/hybrid_cpu.h"
++
++namespace Common::Windows {
++
++namespace {
++
++using GetSystemCpuSetInformationFn = BOOL(WINAPI*)(PSYSTEM_CPU_SET_INFORMATION, ULONG, PULONG,
++                                                   HANDLE, ULONG);
++using SetCpuSetsFn = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
++
++// LICHII_CPU_POLICY:
++//  off    - Windows places every thread.
++//  soft   - keep off a low-power island (Meteor/Arrow Lake-H SoC-tile E-cores) and run pipeline
++//           builds on E-cores.
++//  auto   - soft, plus the GPU command threads on P-cores and core timing on E-cores (default).
++//  strict - auto, plus the guest CPU cores on P-cores.
++enum class Policy { Off, Soft, Auto, Strict };
++
++Policy ReadPolicy() {
++    const char* const text = std::getenv("LICHII_CPU_POLICY");
++    const std::string_view value = text != nullptr ? text : "";
++    if (value == "off" || value == "0") {
++        return Policy::Off;
++    }
++    if (value == "soft") {
++        return Policy::Soft;
++    }
++    if (value == "strict") {
++        return Policy::Strict;
++    }
++    return Policy::Auto;
++}
++
++constexpr std::string_view PolicyName(Policy policy) {
++    switch (policy) {
++    case Policy::Off:
++        return "off";
++    case Policy::Soft:
++        return "soft";
++    case Policy::Auto:
++        return "auto";
++    case Policy::Strict:
++        return "strict";
++    }
++    return "?";
++}
++
++struct Topology {
++    Policy policy = Policy::Off;
++    SetCpuSetsFn set_thread = nullptr;
++    std::vector<ULONG> fastest;   ///< The highest efficiency class (P-cores).
++    std::vector<ULONG> shared;    ///< Every core sharing a last-level cache with them.
++    std::vector<ULONG> efficient; ///< The slower cores among those (E-cores).
++};
++
++template <typename T>
++T LoadKernel32(const char* name) {
++    const HMODULE module = GetModuleHandleW(L"kernel32.dll");
++    if (module == nullptr) {
++        return nullptr;
++    }
++    return reinterpret_cast<T>(reinterpret_cast<void*>(GetProcAddress(module, name)));
++}
++
++Topology Detect() {
++    Topology topology;
++    const auto get_info = LoadKernel32<GetSystemCpuSetInformationFn>("GetSystemCpuSetInformation");
++    const auto set_thread = LoadKernel32<SetCpuSetsFn>("SetThreadSelectedCpuSets");
++    const auto set_process = LoadKernel32<SetCpuSetsFn>("SetProcessDefaultCpuSets");
++    if (get_info == nullptr || set_thread == nullptr) {
++        return topology;
++    }
++    ULONG length = 0;
++    get_info(nullptr, 0, &length, GetCurrentProcess(), 0);
++    if (length == 0) {
++        return topology;
++    }
++    std::vector<u64> storage((length + sizeof(u64) - 1) / sizeof(u64));
++    auto* const bytes = reinterpret_cast<u8*>(storage.data());
++    if (!get_info(reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(bytes), length, &length,
++                  GetCurrentProcess(), 0)) {
++        return topology;
++    }
++
++    struct Cpu {
++        ULONG id;
++        u32 cache; ///< Processor group and last-level cache index.
++        BYTE efficiency;
++    };
++    std::vector<Cpu> cpus;
++    for (ULONG offset = 0; offset + sizeof(DWORD) * 2 <= length;) {
++        const auto* const info = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(bytes + offset);
++        if (info->Size == 0 || offset + info->Size > length) {
++            break;
++        }
++        if (info->Type == CpuSetInformation &&
++            (info->CpuSet.AllFlags & SYSTEM_CPU_SET_INFORMATION_REALTIME) == 0) {
++            cpus.push_back(Cpu{
++                .id = info->CpuSet.Id,
++                .cache = (u32{info->CpuSet.Group} << 8) | info->CpuSet.LastLevelCacheIndex,
++                .efficiency = info->CpuSet.EfficiencyClass,
++            });
++        }
++        offset += info->Size;
++    }
++    if (cpus.empty()) {
++        return topology;
++    }
++    const auto by_class = [](const Cpu& a, const Cpu& b) { return a.efficiency < b.efficiency; };
++    const BYTE top = std::ranges::max_element(cpus, by_class)->efficiency;
++    const BYTE bottom = std::ranges::min_element(cpus, by_class)->efficiency;
++    if (top == bottom) {
++        LOG_INFO(Common, "CPU: {} logical processors of one core type, no core placement",
++                 cpus.size());
++        return topology;
++    }
++
++    std::vector<u32> fast_caches;
++    for (const Cpu& cpu : cpus) {
++        if (cpu.efficiency == top && std::ranges::find(fast_caches, cpu.cache) == fast_caches.end()) {
++            fast_caches.push_back(cpu.cache);
++        }
++    }
++    const auto shares_cache = [&fast_caches](const Cpu& cpu) {
++        return std::ranges::find(fast_caches, cpu.cache) != fast_caches.end();
++    };
++    // Three tiers (Meteor Lake, Arrow Lake-H): slower cores both on and off the P-cores' L3.
++    // The ones off it (two SoC-tile E-cores at 2.5 GHz without L3) are left out entirely. With
++    // two tiers (Alder/Raptor Lake, Lunar Lake) every slower core is an E-core.
++    const bool island =
++        std::ranges::any_of(cpus, [&](const Cpu& cpu) { return !shares_cache(cpu); }) &&
++        std::ranges::any_of(cpus, [&](const Cpu& cpu) {
++            return cpu.efficiency != top && shares_cache(cpu);
++        });
++    for (const Cpu& cpu : cpus) {
++        const bool usable = !island || shares_cache(cpu);
++        if (cpu.efficiency == top) {
++            topology.fastest.push_back(cpu.id);
++        }
++        if (usable) {
++            topology.shared.push_back(cpu.id);
++            if (cpu.efficiency != top) {
++                topology.efficient.push_back(cpu.id);
++            }
++        }
++    }
++
++    const Policy policy = ReadPolicy();
++    LOG_INFO(Common,
++             "Hybrid CPU: {} P-cores, {} E-cores, {} low-power cores left out; core placement {} "
++             "(LICHII_CPU_POLICY=off|soft|auto|strict)",
++             topology.fastest.size(), topology.efficient.size(),
++             cpus.size() - topology.shared.size(), PolicyName(policy));
++    if (policy == Policy::Off) {
++        return topology;
++    }
++    topology.policy = policy;
++    topology.set_thread = set_thread;
++    if (island && set_process != nullptr) {
++        set_process(GetCurrentProcess(), topology.shared.data(),
++                    static_cast<ULONG>(topology.shared.size()));
++    }
++    return topology;
++}
++
++const Topology& GetTopology() {
++    static const Topology topology = Detect();
++    return topology;
++}
++
++/// The CPU sets of a role, or nullptr for the process default.
++const std::vector<ULONG>* RoleCpus(const Topology& topology, CoreRole role) {
++    const bool strict = topology.policy == Policy::Strict;
++    const bool placed = topology.policy == Policy::Auto || strict;
++    switch (role) {
++    case CoreRole::Any:
++        return nullptr;
++    case CoreRole::Fastest:
++        return placed ? &topology.fastest : &topology.shared;
++    case CoreRole::Performance:
++        return strict ? &topology.fastest : &topology.shared;
++    case CoreRole::Waiting:
++        return placed ? &topology.efficient : &topology.shared;
++    case CoreRole::Background:
++        return &topology.efficient;
++    }
++    return nullptr;
++}
++
++} // Anonymous namespace
++
++void SetCurrentThreadCoreRole(CoreRole role, const char* thread_name) {
++    const Topology& topology = GetTopology();
++    if (topology.set_thread == nullptr) {
++        return;
++    }
++    const std::vector<ULONG>* const cpus = RoleCpus(topology, role);
++    const bool placed = cpus != nullptr && !cpus->empty();
++    const BOOL result =
++        placed ? topology.set_thread(GetCurrentThread(), cpus->data(),
++                                     static_cast<ULONG>(cpus->size()))
++               : topology.set_thread(GetCurrentThread(), nullptr, 0);
++    // Pipeline builders and other pools would log one line per worker.
++    if (placed && (role != CoreRole::Background || result == FALSE)) {
++        const std::string_view set = cpus == &topology.fastest ? "P-cores"
++                                     : cpus == &topology.efficient ? "E-cores"
++                                                                   : "P- and E-cores";
++        LOG_INFO(Common, "Core placement: {} on {} ({} logical processors){}",
++                 thread_name != nullptr && thread_name[0] != '\0' ? thread_name : "thread", set,
++                 cpus->size(), result == FALSE ? ", failed" : "");
++    }
++}
++
++} // namespace Common::Windows
+diff --git a/src/common/windows/hybrid_cpu.h b/src/common/windows/hybrid_cpu.h
+new file mode 100644
+index 0000000..b960cd7
+--- /dev/null
++++ b/src/common/windows/hybrid_cpu.h
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++namespace Common::Windows {
++
++/// What a thread does, for placing it on a hybrid CPU (Intel Alder Lake and later).
++enum class CoreRole {
++    Any,         ///< The process default: every core but a low-power island.
++    Fastest,     ///< Threads that bound the frame time (GPU command threads): P-cores.
++    Performance, ///< Busy, latency-sensitive threads (guest cores): P- and E-cores.
++    Waiting,     ///< Threads that wait without sleeping (core timing): E-cores.
++    Background,  ///< Throughput work (pipeline builds): E-cores.
++};
++
++/// Restricts the calling thread to the CPU sets of its role. Does nothing on CPUs with a single
++/// core type or with LICHII_CPU_POLICY=off.
++void SetCurrentThreadCoreRole(CoreRole role, const char* thread_name);
++
++} // namespace Common::Windows
+diff --git a/src/core/core_timing.cpp b/src/core/core_timing.cpp
+index dfc3f6f..aab922f 100644
+--- a/src/core/core_timing.cpp
++++ b/src/core/core_timing.cpp
+@@ -74,7 +74,7 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
+         timer_thread = std::jthread([this](std::stop_token stop_token) {
+             Common::SetCurrentThreadName("HostTiming");
+             Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
+-            Common::SetCurrentThreadToPerformanceCores();
++            Common::SetCurrentThreadToWaitingCores();
+             on_thread_init();
+             has_started = true;
+ 
+diff --git a/src/core/hle/kernel/physical_core.cpp b/src/core/hle/kernel/physical_core.cpp
+index 4fb59fb..2fd5856 100644
+--- a/src/core/hle/kernel/physical_core.cpp
++++ b/src/core/hle/kernel/physical_core.cpp
+@@ -9,6 +9,7 @@
+ #include <thread>
+ #include "common/scope_exit.h"
+ #include "common/settings.h"
++#include "common/spin_wait.h"
+ #include "core/core.h"
+ #include "core/debugger/debugger.h"
+ #include "core/hle/kernel/k_process.h"
+@@ -243,7 +244,12 @@ void PhysicalCore::Idle(KernelCore& kernel) {
+ #endif
+     }
+     const auto spin = std::chrono::microseconds{spin_us};
+-    if (spin.count() > 0) {
++    if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
++        // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
++        Common::SpinUntilFor(&m_is_interrupted, spin, [this] {
++            return m_is_interrupted.load(std::memory_order_acquire);
++        });
++    } else if (spin.count() > 0) {
+         const auto deadline = std::chrono::steady_clock::now() + spin;
+         while (!m_is_interrupted.load(std::memory_order_acquire) &&
+                std::chrono::steady_clock::now() < deadline) {
+diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
+index 5adb071..4dcfc5b 100644
+--- a/src/video_core/gpu_split.cpp
++++ b/src/video_core/gpu_split.cpp
+@@ -20,6 +20,7 @@
+ #include "common/dkb_cpu_trace.h"
+ #include "common/logging.h"
+ #include "common/settings.h"
++#include "common/spin_wait.h"
+ #include "common/thread.h"
+ #include "core/core.h"
+ #include "video_core/engines/engine_interface.h"
+@@ -247,7 +248,15 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
+ }
+ 
+ void GpuSplit::Backoff(u32 spins, u64 target) {
+-    if (spins < 16384) {
++    if (Common::SpinWait::UsesWaitpkg()) {
++        if (spins == 0) {
++            // The same spin as below, with the core idling until the back stores `consumed`.
++            Common::SpinUntil(&consumed, 16384, [this, target] {
++                return consumed.load(std::memory_order_acquire) >= target;
++            });
++            return;
++        }
++    } else if (spins < 16384) {
+         Pause();
+         return;
+     }
+@@ -411,7 +420,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
+     on_back_thread = true;
+     back_running.store(true, std::memory_order_release);
+     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+-    Common::SetCurrentThreadToPerformanceCores();
++    Common::SetCurrentThreadToFastestCores();
+     system->RegisterHostThread();
+ #ifdef _WIN32
+     g_back_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
+@@ -423,12 +432,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
+         if (available == read_position) {
+             Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
+             // The front usually sends more within microseconds: spin briefly before sleeping.
+-            for (u32 spins = 0; spins < 8192 && available == read_position &&
+-                                !hook_requested.load(std::memory_order_relaxed);
+-                 ++spins) {
+-                Pause();
++            Common::SpinUntil(&published, 8192, [&] {
+                 available = published.load(std::memory_order_acquire);
+-            }
++                return available != read_position ||
++                       hook_requested.load(std::memory_order_relaxed);
++            });
+             if (available == read_position && idle_hook != nullptr) {
+                 hook_requested.store(false, std::memory_order_seq_cst);
+                 idle_hook(idle_argument);
+diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
+index 7f37569..aa6142b 100644
+--- a/src/video_core/gpu_thread.cpp
++++ b/src/video_core/gpu_thread.cpp
+@@ -52,7 +52,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+         const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuCommand};
+         Common::SetCurrentThreadName("GPU");
+         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+-        Common::SetCurrentThreadToPerformanceCores();
++        Common::SetCurrentThreadToFastestCores();
+         system.RegisterHostThread();
+ 
+         auto current_context = context.Acquire();
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+index 19bbcd9..69396b4 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
++++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+@@ -501,7 +501,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
+     Common::SetCurrentThreadName("VulkanWorker");
+     const Common::DkbCpuTrace::Registration trace_thread{Common::DkbCpuTrace::Role::VulkanWorker};
+     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+-    Common::SetCurrentThreadToPerformanceCores();
++    Common::SetCurrentThreadToFastestCores();
+ 
+     const auto TryPopQueue{[this](auto& work) -> bool {
+         if (work_queue.empty()) {
