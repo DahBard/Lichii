@@ -1,6 +1,6 @@
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000..9401f79
+index 0000000000..9401f79cb6
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
 @@ -0,0 +1,26 @@
@@ -32,7 +32,7 @@ index 0000000..9401f79
 +"Core placement:" line per thread, so you can check what each launcher did.
 diff --git a/dist/lichii-tuned/ab-1-stock-threading.bat b/dist/lichii-tuned/ab-1-stock-threading.bat
 new file mode 100644
-index 0000000..ee3bc60
+index 0000000000..ee3bc60c7f
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-1-stock-threading.bat
 @@ -0,0 +1,4 @@
@@ -42,7 +42,7 @@ index 0000000..ee3bc60
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
 new file mode 100644
-index 0000000..09e1ff8
+index 0000000000..09e1ff8464
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-2-no-core-placement.bat
 @@ -0,0 +1,4 @@
@@ -52,7 +52,7 @@ index 0000000..09e1ff8
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-3-soft-placement.bat b/dist/lichii-tuned/ab-3-soft-placement.bat
 new file mode 100644
-index 0000000..1ab5862
+index 0000000000..1ab5862c59
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-3-soft-placement.bat
 @@ -0,0 +1,4 @@
@@ -62,7 +62,7 @@ index 0000000..1ab5862
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-4-strict-placement.bat b/dist/lichii-tuned/ab-4-strict-placement.bat
 new file mode 100644
-index 0000000..7354086
+index 0000000000..735408678a
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-4-strict-placement.bat
 @@ -0,0 +1,4 @@
@@ -72,7 +72,7 @@ index 0000000..7354086
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-5-no-umwait.bat b/dist/lichii-tuned/ab-5-no-umwait.bat
 new file mode 100644
-index 0000000..9595b82
+index 0000000000..9595b829a8
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-5-no-umwait.bat
 @@ -0,0 +1,4 @@
@@ -82,7 +82,7 @@ index 0000000..9595b82
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
 new file mode 100644
-index 0000000..cf4b318
+index 0000000000..cf4b3183de
 --- /dev/null
 +++ b/dist/lichii-tuned/perf-trace.bat
 @@ -0,0 +1,4 @@
@@ -90,8 +90,39 @@ index 0000000..cf4b318
 +rem Logs GPU thread zones and frame timing every second.
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
+diff --git a/externals/cmake-modules/UseLTO.cmake b/externals/cmake-modules/UseLTO.cmake
+index b364ef22d8..35ef3d9fce 100644
+--- a/externals/cmake-modules/UseLTO.cmake
++++ b/externals/cmake-modules/UseLTO.cmake
+@@ -10,12 +10,19 @@ option(ENABLE_LTO "Enable Link-Time Optimization (LTO)" OFF)
+ 
+ if (ENABLE_LTO)
+     include(CheckIPOSupported)
+-    check_ipo_supported(RESULT COMPILER_SUPPORTS_LTO)
+-    if(NOT COMPILER_SUPPORTS_LTO)
++    check_ipo_supported(RESULT COMPILER_SUPPORTS_LTO OUTPUT LTO_CHECK_OUTPUT)
++    if (COMPILER_SUPPORTS_LTO)
++        set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
++        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${COMPILER_SUPPORTS_LTO})
++    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
++        # MSYS2's clang fails CMake's IPO check, while clang and lld do ThinLTO fine: pass the
++        # flags directly (archives then need llvm-ar).
++        message(WARNING "check_ipo_supported failed, using -flto=thin directly:\n${LTO_CHECK_OUTPUT}")
++        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-flto=thin>)
++        add_link_options(-flto=thin)
++    else()
+         message(FATAL_ERROR
+         "Your compiler does not support interprocedural optimization"
+-        " (IPO). Disable ENABLE_LTO and try again.")
++        " (IPO). Disable ENABLE_LTO and try again.\n${LTO_CHECK_OUTPUT}")
+     endif()
+-    set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
+-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${COMPILER_SUPPORTS_LTO})
+-endif()
+\ No newline at end of file
++endif()
 diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
-index 56709cf..af2d19c 100644
+index 56709cf43d..af2d19c4b3 100644
 --- a/src/common/CMakeLists.txt
 +++ b/src/common/CMakeLists.txt
 @@ -102,6 +102,8 @@ add_library(
@@ -116,7 +147,7 @@ index 56709cf..af2d19c 100644
  
 diff --git a/src/common/spin_wait.cpp b/src/common/spin_wait.cpp
 new file mode 100644
-index 0000000..dfa56aa
+index 0000000000..dfa56aa209
 --- /dev/null
 +++ b/src/common/spin_wait.cpp
 @@ -0,0 +1,119 @@
@@ -241,7 +272,7 @@ index 0000000..dfa56aa
 +} // namespace Common::SpinWait
 diff --git a/src/common/spin_wait.h b/src/common/spin_wait.h
 new file mode 100644
-index 0000000..5f5a5a4
+index 0000000000..5f5a5a4568
 --- /dev/null
 +++ b/src/common/spin_wait.h
 @@ -0,0 +1,91 @@
@@ -337,7 +368,7 @@ index 0000000..5f5a5a4
 +
 +} // namespace Common
 diff --git a/src/common/thread.cpp b/src/common/thread.cpp
-index fdf0b2a..bc5baf3 100644
+index fdf0b2a59a..bc5baf3823 100644
 --- a/src/common/thread.cpp
 +++ b/src/common/thread.cpp
 @@ -5,7 +5,9 @@
@@ -454,7 +485,7 @@ index fdf0b2a..bc5baf3 100644
  }
  
 diff --git a/src/common/thread.h b/src/common/thread.h
-index 4a36295..6843bc5 100644
+index 4a36295931..6843bc561b 100644
 --- a/src/common/thread.h
 +++ b/src/common/thread.h
 @@ -108,6 +108,12 @@ enum class ThreadPlacement : u32 {
@@ -472,7 +503,7 @@ index 4a36295..6843bc5 100644
  void SetCurrentThreadToAllCores();
 diff --git a/src/common/windows/hybrid_cpu.cpp b/src/common/windows/hybrid_cpu.cpp
 new file mode 100644
-index 0000000..46cff50
+index 0000000000..46cff506b8
 --- /dev/null
 +++ b/src/common/windows/hybrid_cpu.cpp
 @@ -0,0 +1,225 @@
@@ -703,7 +734,7 @@ index 0000000..46cff50
 +} // namespace Common::Windows
 diff --git a/src/common/windows/hybrid_cpu.h b/src/common/windows/hybrid_cpu.h
 new file mode 100644
-index 0000000..b960cd7
+index 0000000000..b960cd7a8f
 --- /dev/null
 +++ b/src/common/windows/hybrid_cpu.h
 @@ -0,0 +1,20 @@
@@ -728,7 +759,7 @@ index 0000000..b960cd7
 +
 +} // namespace Common::Windows
 diff --git a/src/core/core_timing.cpp b/src/core/core_timing.cpp
-index dfc3f6f..aab922f 100644
+index dfc3f6f2a6..aab922f349 100644
 --- a/src/core/core_timing.cpp
 +++ b/src/core/core_timing.cpp
 @@ -74,7 +74,7 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
@@ -741,7 +772,7 @@ index dfc3f6f..aab922f 100644
              has_started = true;
  
 diff --git a/src/core/hle/kernel/physical_core.cpp b/src/core/hle/kernel/physical_core.cpp
-index 4fb59fb..2fd5856 100644
+index 4fb59fb62a..2fd5856b4b 100644
 --- a/src/core/hle/kernel/physical_core.cpp
 +++ b/src/core/hle/kernel/physical_core.cpp
 @@ -9,6 +9,7 @@
@@ -767,7 +798,7 @@ index 4fb59fb..2fd5856 100644
          while (!m_is_interrupted.load(std::memory_order_acquire) &&
                 std::chrono::steady_clock::now() < deadline) {
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
-index 5adb071..4dcfc5b 100644
+index 5adb071273..4dcfc5b921 100644
 --- a/src/video_core/gpu_split.cpp
 +++ b/src/video_core/gpu_split.cpp
 @@ -20,6 +20,7 @@
@@ -822,7 +853,7 @@ index 5adb071..4dcfc5b 100644
                  hook_requested.store(false, std::memory_order_seq_cst);
                  idle_hook(idle_argument);
 diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
-index 7f37569..aa6142b 100644
+index 7f3756953b..aa6142b278 100644
 --- a/src/video_core/gpu_thread.cpp
 +++ b/src/video_core/gpu_thread.cpp
 @@ -52,7 +52,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
@@ -835,7 +866,7 @@ index 7f37569..aa6142b 100644
  
          auto current_context = context.Acquire();
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-index 19bbcd9..69396b4 100644
+index 19bbcd9680..69396b4fcf 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 @@ -501,7 +501,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
