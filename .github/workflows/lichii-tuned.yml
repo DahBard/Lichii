@@ -1,0 +1,206 @@
+name: lichii-tuned
+
+# Windows builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H) CPU and an
+# AMD RDNA4 (RX 9070 XT) GPU. Every push to the `tuned` branch that touches the patch or this
+# workflow builds both variants; the source is this branch plus lichii-tuned/lichii-tuned.patch.
+on:
+  push:
+    branches: [tuned]
+    paths:
+      - "lichii-tuned/**"
+      - ".github/workflows/lichii-tuned.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push queues behind the running build instead of cancelling it, so the compiler cache
+# from the running build is always saved for the next one.
+concurrency:
+  group: lichii-tuned-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: windows ${{ matrix.variant }}
+    runs-on: windows-2022
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # MinGW clang + the repo's PGO profile + x86-64-v3 (AVX2/BMI2/FMA) tuned for Arrow Lake.
+          - variant: pgo
+            lto: "OFF"
+          # Same plus ThinLTO across the whole program (experimental).
+          - variant: pgo-lto
+            lto: "ON"
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 3000M
+      CCACHE_COMPILERCHECK: content
+      TUNE_FLAGS: -march=x86-64-v3 -mtune=arrowlake
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Apply the tuning patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=lichii-tuned/lichii-tuned.patch
+          if [ -s "$patch" ]; then
+            git apply --whitespace=nowarn --stat "$patch"
+            git apply --whitespace=nowarn "$patch"
+          else
+            echo "No patch: building the branch as is"
+          fi
+          # Name the build in the log and title bar: <commit>-tuned-r<run>-<variant>.
+          printf '%s' "$GITHUB_SHA" > GIT-COMMIT
+          printf '%s' "tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }}" > GIT-REFSPEC
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            git make autoconf libtool automake-wrapper patch jq pactoys ninja
+          pacboy: >-
+            toolchain:p clang:p lld:p cmake:p python-pip:p
+            qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
+            openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
+            vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
+            libusb:p unordered_dense:p jbigkit:p xz:p libdeflate:p bzip2:p
+            lerc:p graphite2:p libwebp:p libtiff:p brotli:p ccache:p
+
+      - name: Restore CPM downloads
+        id: cpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .cache/cpm
+          key: cpm-tuned-v1-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          restore-keys: |
+            cpm-tuned-v1-
+
+      - name: Restore compiler objects
+        id: compiler-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .ccache
+            .thinlto
+          key: objects-tuned-${{ matrix.variant }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            objects-tuned-${{ matrix.variant }}-v1-
+
+      - name: Configure
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
+          linker="-fuse-ld=lld"
+          if [ "${{ matrix.lto }}" = "ON" ]; then
+            mkdir -p .thinlto
+            linker="$linker -Wl,--thinlto-cache-dir=$(cygpath -m "$PWD/.thinlto")"
+          fi
+          cmake -S . -B build/release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DYUZU_TESTS=OFF \
+            -DYUZU_CMD=OFF \
+            -DYUZU_ROOM=OFF \
+            -DYUZU_ROOM_STANDALONE=OFF \
+            -DYUZU_USE_BUNDLED_QT=OFF \
+            -DYUZU_USE_BUNDLED_SDL3=ON \
+            -DYUZU_USE_BUNDLED_FFMPEG=ON \
+            -DVulkanHeaders_FORCE_BUNDLED=ON \
+            -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
+            -DENABLE_UPDATE_CHECKER=OFF \
+            -DUSE_DISCORD_PRESENCE=OFF \
+            -DUSE_CCACHE=ON \
+            -DENABLE_LTO=${{ matrix.lto }} \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            "-DCMAKE_EXE_LINKER_FLAGS=$linker" \
+            "-DCMAKE_C_FLAGS=$profile $TUNE_FLAGS" \
+            "-DCMAKE_CXX_FLAGS=$profile $TUNE_FLAGS"
+
+      - name: Save CPM downloads
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/cpm
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          ccache --zero-stats
+          cmake --build build/release --target yuzu --parallel
+          ccache --show-stats
+
+      - name: Save compiler objects
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .ccache
+            .thinlto
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+
+      # Same packaging as upstream's MinGW build: Qt via windeployqt6, then every non-system DLL
+      # the program and the Qt plugins pull in.
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/ucrt64/bin:$PATH"
+          cd build/release/bin
+          test -f lichii.exe
+          windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
+            --no-system-dxc-compiler --no-system-d3d-compiler lichii.exe
+          deps() {
+            objdump -p "$1" | awk '/DLL Name:/ {print $3}' | while read -r dll; do
+              [ -z "$dll" ] && continue
+              source=$(command -v "$dll" 2>/dev/null || true)
+              [ -z "$source" ] && continue
+              case "$source" in
+                *System32* | *SysWOW64*) continue ;;
+              esac
+              if [ ! -f "$dll" ]; then
+                cp "$source" "$dll"
+                deps "$source"
+              fi
+            done
+          }
+          deps lichii.exe
+          find . -name '*.dll' | while read -r dll; do
+            deps "$dll"
+          done
+          if [ -d "$GITHUB_WORKSPACE/lichii-tuned/package" ]; then
+            cp -r "$GITHUB_WORKSPACE"/lichii-tuned/package/. .
+          fi
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: lichii-tuned-r${{ github.run_number }}-${{ matrix.variant }}
+          path: build/release/bin/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### lichii-tuned r${GITHUB_RUN_NUMBER} (${{ matrix.variant }})"
+            echo "- base: \`${GITHUB_SHA::10}\` on \`${GITHUB_REF_NAME}\`"
+            echo "- flags: PGO + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
+            if [ -s lichii-tuned/lichii-tuned.patch ]; then
+              echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
