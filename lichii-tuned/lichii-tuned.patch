@@ -71,10 +71,10 @@ index 0502b3f38e..48e0ad1f2c 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..59f892abd1
+index 0000000000..0cf7549749
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,66 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -96,11 +96,18 @@ index 0000000000..59f892abd1
 +   anti-aliasing network (#319; AMD GPUs run its tensor math in software), AMD drivers no
 +   longer stall on those shaders (#300), white flashes at GPU accuracy Low (#337), fog white
 +   haze (#292), leaf holes from split warps (#329), held draws build their pipeline at once
-+   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259).
++   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259),
++   no violet halos from shader exports AMD leaves undefined (#353), no green tint growing from
++   shadow lookups through wrong texture handles (#354), batched texture evictions (#376),
++   precise macro reads and cheaper semaphore waits on the split GPU thread (#345).
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
 +   settings; "Game" brings the game's network back).
++
++The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
++CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
++comes from the compiler (only the pgo builds show it) or from the source.
 +
 +A/B launchers (this build with one change switched off or on; compare the same scene each time):
 + ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
@@ -112,8 +119,17 @@ index 0000000000..59f892abd1
 + ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
 + ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
 +                              over OCuLink, but some flicker was reported
-+ perf-trace.bat               default settings plus per-second GPU thread zones and frame timing
-+                              in the log (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1)
++ ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
++                              (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
++                              can be missing for a few frames; logs like perf-trace.bat
++ ab-9-amd-fp16.bat            keeps float16 shader math on AMD (EDEN_AMD_FP16=1); official builds
++                              turn it off for a driver bug in another game, so look for wrong colors
++ ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
++                              even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
++                              GPU does not idle between frames; logs like perf-trace.bat
++ perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
++                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
++                              EDEN_DKB_FRAME_TRACE=1)
 +
 +The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 +"Core placement:" line per thread, so you can check what each launcher did.
@@ -134,6 +150,18 @@ index 0000000000..ee3bc60c7f
 +@echo off
 +rem Compiler changes only: Windows places threads, PAUSE spinning.
 +set LICHII_CPU_POLICY=off&& set LICHII_WAITPKG_SPIN=0
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-10-run-ahead.bat b/dist/lichii-tuned/ab-10-run-ahead.bat
+new file mode 100644
+index 0000000000..66de3f8751
+--- /dev/null
++++ b/dist/lichii-tuned/ab-10-run-ahead.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem The game prepares the next frame while the GPU still renders this one, also when the GPU
++rem is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow GPU never idles between frames. Also logs
++rem GPU timing like perf-trace.bat, for comparison.
++set EDEN_NX2_FRAMES_AHEAD=2&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
 new file mode 100644
@@ -195,14 +223,38 @@ index 0000000000..eadd6f13a3
 +rem Preflush GPU readbacks (fewer readback stalls, may flicker).
 +set EDEN_NX2_PREFLUSH=1
 +start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
+new file mode 100644
+index 0000000000..450bb12718
+--- /dev/null
++++ b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem Skips draws whose new pipeline is still compiling instead of waiting for it
++rem (fewer hitches on new content; an object or effect can be missing for a few frames).
++rem Also logs GPU timing like perf-trace.bat, for comparison.
++set EDEN_NX2_ASYNC_DISCARD=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-9-amd-fp16.bat b/dist/lichii-tuned/ab-9-amd-fp16.bat
+new file mode 100644
+index 0000000000..eb0e7344c4
+--- /dev/null
++++ b/dist/lichii-tuned/ab-9-amd-fp16.bat
+@@ -0,0 +1,5 @@
++@echo off
++rem Keeps float16 shader math on the AMD driver (twice the float32 rate on RDNA). Official
++rem builds turn it off because of a driver bug in another game: look for wrong colors.
++set EDEN_AMD_FP16=1
++start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
 new file mode 100644
-index 0000000000..cf4b3183de
+index 0000000000..7f0dcdb20d
 --- /dev/null
 +++ b/dist/lichii-tuned/perf-trace.bat
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,5 @@
 +@echo off
-+rem Logs GPU thread zones and frame timing every second.
++rem Logs GPU thread zones every 10 s and frame timing every second (EDEN_NX2_GPU_PROFILE=1,
++rem EDEN_DKB_FRAME_TRACE=1); the log is %APPDATA%\eden\log\eden_log.txt.
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
@@ -554,10 +606,10 @@ index 133b503f72..f8573f5c20 100644
  ENUM(AppletMode, HLE, LLE, Disabled);
 diff --git a/src/common/spin_wait.cpp b/src/common/spin_wait.cpp
 new file mode 100644
-index 0000000000..dfa56aa209
+index 0000000000..9d76bc2af8
 --- /dev/null
 +++ b/src/common/spin_wait.cpp
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,127 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +#include <algorithm>
@@ -615,10 +667,18 @@ index 0000000000..dfa56aa209
 +    return ticks;
 +}
 +
++// clang and GCC compile the WAITPKG intrinsics into a function marked for it. MSVC builds (the
++// comparison build) spin with PAUSE as before.
++#if defined(__clang__) || defined(__GNUC__)
++#define LICHII_WAITPKG 1
++#else
++#define LICHII_WAITPKG 0
++#endif
++
 +bool UsesWaitpkg() {
 +    static const bool enabled = [] {
 +        const char* const value = std::getenv("LICHII_WAITPKG_SPIN");
-+        if (value != nullptr && value[0] == '0') {
++        if (!LICHII_WAITPKG || (value != nullptr && value[0] == '0')) {
 +            return false;
 +        }
 +        return g_cpu_caps.waitpkg && g_cpu_caps.invariant_tsc &&
@@ -627,20 +687,20 @@ index 0000000000..dfa56aa209
 +    return enabled;
 +}
 +
-+#if defined(__clang__) || defined(__GNUC__)
-+__attribute__((target("waitpkg")))
-+#endif
-+void Monitor(const void* address) {
++#if LICHII_WAITPKG
++__attribute__((target("waitpkg"))) void Monitor(const void* address) {
 +    _umonitor(const_cast<void*>(address));
 +}
 +
-+#if defined(__clang__) || defined(__GNUC__)
-+__attribute__((target("waitpkg")))
-+#endif
-+void WaitUntil(u64 deadline) {
++__attribute__((target("waitpkg"))) void WaitUntil(u64 deadline) {
 +    // Control bit 0 set: C0.1, the state with the faster wakeup.
 +    _umwait(1, deadline);
 +}
++#else
++void Monitor(const void*) {}
++
++void WaitUntil(u64) {}
++#endif
 +
 +#else
 +
@@ -1240,6 +1300,54 @@ index 4fb59fb62a..2fd5856b4b 100644
          const auto deadline = std::chrono::steady_clock::now() + spin;
          while (!m_is_interrupted.load(std::memory_order_acquire) &&
                 std::chrono::steady_clock::now() < deadline) {
+diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
+index a80387be01..05c11ee0da 100644
+--- a/src/core/hle/service/nx2_gsv.h
++++ b/src/core/hle/service/nx2_gsv.h
+@@ -1750,18 +1750,26 @@ private:
+         // only after this present returns: while a channel stays suspended on one, wait for the
+         // previous frame's fence instead and let the game prepare frame N+1 meanwhile (waiting
+         // for this frame there cost 8-56 ms of every 34-105 ms frame, or never finished).
+-        // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one.
++        // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one,
++        // =2 for the previous frame only, even while the GPU is behind (see below).
+         static const int frames_ahead_setting = [] {
+             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
+-            return value == nullptr ? -1 : value[0] == '1' ? 1 : 0;
++            const int setting =
++                value == nullptr ? -1 : value[0] == '2' ? 2 : value[0] == '1' ? 1 : 0;
++            if (setting == 2) {
++                LOG_INFO(Service, "EDEN_NX2_FRAMES_AHEAD=2: presents wait for the previous frame "
++                                  "only, also while the GPU is behind");
++            }
++            return setting;
+         }();
++        const bool ahead_while_gpu_behind = frames_ahead_setting == 2;
+         // Donkey Kong Bananza's channels wait on each other every frame, so it always ran a frame
+         // ahead, where it rewrote memory the GPU thread hadn't read yet (misread commands, then
+         // a freeze or crash; rubberbanding while moving). Title 1 runs ahead without either.
+         constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
+         // Ocarina waited ~12 ms a frame on its previous frame's fence here (#161).
+         constexpr u64 OcarinaOfTimeProgramId = 0x0400486024DEC000ULL;
+-        int frames_ahead = frames_ahead_setting;
++        int frames_ahead = ahead_while_gpu_behind ? 1 : frames_ahead_setting;
+         const u64 app_program_id = system.GetApplicationProcessProgramID();
+         if (frames_ahead == -1 && app_program_id == DonkeyKongBananzaProgramId) {
+             frames_ahead = 0;
+@@ -1779,8 +1787,11 @@ private:
+             // were at most a frame behind, rewrote command lists Eden had not read yet (misread
+             // commands, then crashes, with a slow GPU). Wait for this frame too then. Not when a
+             // suspended channel brought us here: this frame can't finish before the present
+-            // returns.
+-            const bool gpu_behind = frames_ahead == 1 && m_previous_fence_id < 192 &&
++            // returns. With EDEN_NX2_FRAMES_AHEAD=2 the game prepares the next frame while the
++            // GPU runs this one even then (as before), which keeps a slow GPU busy instead of
++            // idle while the game prepares each frame.
++            const bool gpu_behind = frames_ahead == 1 && !ahead_while_gpu_behind &&
++                                    m_previous_fence_id < 192 &&
+                                     !system.Host1x().GetSyncpointManager().IsReadyGuest(
+                                         m_previous_fence_id, m_previous_fence_value);
+             WaitForFrame(m_previous_fence_id, m_previous_fence_value);
 diff --git a/src/core/hle/service/vi/conductor.cpp b/src/core/hle/service/vi/conductor.cpp
 index fd7233cf93..357ae0a1d0 100644
 --- a/src/core/hle/service/vi/conductor.cpp
@@ -1260,6 +1368,78 @@ index fd7233cf93..357ae0a1d0 100644
      Common::ADPF::SetTargetWorkDuration(std::chrono::nanoseconds{this->GetFramePeriodNs()});
  
      for (auto& [display_id, manager] : m_vsync_managers) {
+diff --git a/src/core/memory.cpp b/src/core/memory.cpp
+index fd289eb5f4..8c558eb98d 100644
+--- a/src/core/memory.cpp
++++ b/src/core/memory.cpp
+@@ -6,6 +6,8 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <atomic>
++#include <chrono>
++#include <unordered_map>
+ #include <algorithm>
+ #include <cstdint>
+ #include <cstring>
+@@ -494,10 +496,58 @@ struct Memory::Impl {
+         }
+     }
+ 
++    // EDEN_NX2_MME_DMA_STATS: how often pages are protected again after an upload and
++    // unprotected by a CPU write, and how many distinct pages that is.
++    struct ProtectStats {
++        std::mutex mutex;
++        std::array<u64, 2> calls{};
++        std::array<u64, 2> pages{};
++        std::unordered_map<u64, u32> protected_pages;
++        std::chrono::steady_clock::time_point last_log{std::chrono::steady_clock::now()};
++
++        static ProtectStats* Get() {
++            static const bool enabled = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr;
++            static ProtectStats stats;
++            return enabled ? &stats : nullptr;
++        }
++
++        void Note(u64 vaddr, u64 size, bool cached) {
++            std::scoped_lock lk{mutex};
++            const u64 first = vaddr >> YUZU_PAGEBITS;
++            const u64 last = (vaddr + size - 1) >> YUZU_PAGEBITS;
++            ++calls[cached];
++            pages[cached] += last - first + 1;
++            if (cached) {
++                for (u64 page = first; page <= last; ++page) {
++                    ++protected_pages[page];
++                }
++            }
++            const auto now = std::chrono::steady_clock::now();
++            if (now - last_log < std::chrono::seconds{5}) {
++                return;
++            }
++            last_log = now;
++            size_t hot = 0;
++            for (const auto& [page, count] : protected_pages) {
++                hot += count >= 100 ? 1 : 0;
++            }
++            LOG_INFO(HW_Memory,
++                     "Page protection (5 s): protect {} calls {} pages ({} distinct, {} protected "
++                     "100+ times), unprotect {} calls {} pages",
++                     calls[1], pages[1], protected_pages.size(), hot, calls[0], pages[0]);
++            calls = {};
++            pages = {};
++            protected_pages.clear();
++        }
++    };
++
+     void RasterizerMarkRegionCached(u64 vaddr, u64 size, bool cached) {
+         if (vaddr == 0 || !AddressSpaceContains(*current_page_table, vaddr, size)) {
+             return;
+         }
++        if (auto* stats = ProtectStats::Get()) {
++            stats->Note(vaddr, size, cached);
++        }
+ 
+         if (current_page_table->fastmem_arena) {
+             Common::MemoryPermission perm{};
 diff --git a/src/frontend_common/config.cpp b/src/frontend_common/config.cpp
 index 698385ed1e..8186377a31 100644
 --- a/src/frontend_common/config.cpp
@@ -1335,11 +1515,41 @@ index a720754316..b687d6d64e 100644
      translations->insert({Settings::EnumMetadata<Settings::AspectRatio>::Index(),
                            {
                                PAIR(AspectRatio, R16_9, tr("Default (16:9)")),
+diff --git a/src/shader_recompiler/host_translate_info.h b/src/shader_recompiler/host_translate_info.h
+index 1f77b70d72..067b081376 100644
+--- a/src/shader_recompiler/host_translate_info.h
++++ b/src/shader_recompiler/host_translate_info.h
+@@ -41,6 +41,9 @@ struct HostTranslateInfo {
+                                         ///< control flow
+     bool single_lane_geometry_subgroups{};
+     bool support_byte_addressed_r16{};
++    /// True when a handle read from a table at a per-invocation index may become a descriptor
++    /// array of the table's entries (not OpenGL: its pipelines bind at most 64 textures)
++    bool support_handle_table_arrays{};
+ 
+     void ApplyDescriptorLimitPolicy() noexcept {
+         if (min_ssbo_alignment == 0) {
 diff --git a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
-index ac2d77c671..f161be942d 100644
+index ac2d77c671..48998144db 100644
 --- a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
 +++ b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
-@@ -516,6 +516,7 @@ void VisitUsages(Info& info, IR::Inst& inst) {
+@@ -483,9 +483,13 @@ void VisitUsages(Info& info, IR::Inst& inst) {
+     case IR::Opcode::SetAttributeIndexed:
+         info.stores_indexed_attributes = true;
+         break;
+-    case IR::Opcode::SetFragColor:
+-        info.stores_frag_color[inst.Arg(0).U32()] = true;
++    case IR::Opcode::SetFragColor: {
++        const u32 render_target{inst.Arg(0).U32()};
++        info.stores_frag_color[render_target] = true;
++        info.frag_color_components[render_target] |=
++            static_cast<u8>(1U << inst.Arg(1).U32());
+         break;
++    }
+     case IR::Opcode::SetSampleMask:
+         info.stores_sample_mask = true;
+         break;
+@@ -516,6 +520,7 @@ void VisitUsages(Info& info, IR::Inst& inst) {
          info.uses_rescaling_uniform = true;
          break;
      case IR::Opcode::TensorMulAdd:
@@ -1347,11 +1557,475 @@ index ac2d77c671..f161be942d 100644
          info.uses_subgroup_shuffles = true;
          info.uses_fp32_denorms_preserve = true;
          info.uses_subgroup_invocation_id = true;
+@@ -839,6 +844,8 @@ void VisitFpModifiers(Info& info, IR::Inst& inst) {
+     case IR::Opcode::FPAdd32:
+     case IR::Opcode::FPFma32:
+     case IR::Opcode::FPMul32:
++    case IR::Opcode::FPMin32:
++    case IR::Opcode::FPMax32:
+     case IR::Opcode::FPRoundEven32:
+     case IR::Opcode::FPFloor32:
+     case IR::Opcode::FPCeil32:
+diff --git a/src/shader_recompiler/ir_opt/texture_pass.cpp b/src/shader_recompiler/ir_opt/texture_pass.cpp
+index e8369a9fee..da64f62f3f 100644
+--- a/src/shader_recompiler/ir_opt/texture_pass.cpp
++++ b/src/shader_recompiler/ir_opt/texture_pass.cpp
+@@ -5,6 +5,8 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <algorithm>
++#include <atomic>
++#include <cstdlib>
+ #include <queue>
+ #include <unordered_map>
+ #include <unordered_set>
+@@ -16,6 +18,7 @@
+ #include <limits>
+ #include <boost/container/small_vector.hpp>
+ 
++#include "common/logging.h"
+ #include "common/scope_exit.h"
+ #include "common/settings.h"
+ #include "shader_recompiler/byte_addressed_image.h"
+@@ -248,15 +251,21 @@ bool IsStorageImageOpcode(IR::Opcode opcode) {
+ }
+ 
+ u32 DynamicSampledTextureArrayCount(const TextureInstVector& to_replace) {
+-    u32 count{};
++    // Arrays, not instructions: every instruction reading an array shares its descriptor (a
++    // light loop samples one table of shadow maps from dozens of places).
++    boost::container::small_vector<std::tuple<u32, u32, u32, u32, bool>, 8> arrays;
+     for (const TextureInst& inst : to_replace) {
+         const auto flags{inst.inst->Flags<IR::TextureInstInfo>()};
+         if (inst.cbuf.count > 1 && !IsStorageImageOpcode(IndexedInstruction(*inst.inst)) &&
+             flags.type != TextureType::Buffer) {
+-            ++count;
++            const std::tuple array{inst.cbuf.index, inst.cbuf.offset, inst.cbuf.handle_program,
++                                   static_cast<u32>(flags.type.Value()), flags.is_depth != 0};
++            if (std::ranges::find(arrays, array) == arrays.end()) {
++                arrays.push_back(array);
++            }
+         }
+     }
+-    return count;
++    return static_cast<u32>(arrays.size());
+ }
+ 
+ bool IsBindless(const IR::Inst& inst) {
+@@ -394,6 +403,14 @@ bool IsMemoryLoad(IR::Opcode opcode) {
+     }
+ }
+ 
++bool IsFloatValue(const IR::Inst& inst) {
++    constexpr IR::Type floats{IR::Type::F16 | IR::Type::F32 | IR::Type::F64 | IR::Type::F16x2 |
++                              IR::Type::F16x3 | IR::Type::F16x4 | IR::Type::F32x2 |
++                              IR::Type::F32x3 | IR::Type::F32x4 | IR::Type::F64x2 |
++                              IR::Type::F64x3 | IR::Type::F64x4};
++    return (inst.Type() & floats) != IR::Type::Void;
++}
++
+ std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, const HostTranslateInfo& host_info, const IR::Block* block) {
+     // A value loaded from memory is not a constant buffer word, whatever its address is built
+     // from: the search does not look into a load's operands (a handle read from a storage
+@@ -415,6 +432,12 @@ std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, c
+         if (IsMemoryLoad(inst->GetOpcode())) {
+             continue;
+         }
++        // Nor into a texture instruction or floating-point math: no handle is made from them,
++        // while a register the program reuses for the handle and for a sample result (a Phi of
++        // both) would lead the search through the sample's coordinates to an unrelated word.
++        if (IsTextureInstruction(*inst) || IsFloatValue(*inst)) {
++            continue;
++        }
+         for (size_t arg = inst->NumArgs(); arg--;) {
+             const IR::Value arg_value{ResolveConditionalPhi(inst->Arg(arg), block)};
+             if (arg_value.IsImmediate()) {
+@@ -445,6 +468,18 @@ thread_local std::unordered_map<const IR::Inst*, u32> g_handle_slots;
+ thread_local u32 g_handle_slot_count{};
+ thread_local int g_handle_depth{};
+ 
++// A handle read from a table at an index each invocation reads for itself (a light index from a
++// per-pixel light list, say) has no single value for a draw. With g_handle_index_allowed, the
++// build takes that index word as the element index of a descriptor array instead
++// (HandleOp::Index), and g_handle_index is the word, which the shader then indexes the array
++// with. Only a word read at an address no draw-wide value gives (g_handle_load_depth counts the
++// reads whose address is being built), which is scaled to a byte offset (g_handle_scaled) to
++// give the address of another read, qualifies, and one word per program.
++thread_local bool g_handle_index_allowed{};
++thread_local IR::Value g_handle_index{};
++thread_local int g_handle_load_depth{};
++thread_local int g_handle_scaled{};
++
+ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget,
+                      const IR::Block* block);
+ 
+@@ -483,11 +518,14 @@ bool BuildHandleProgram(const IR::Value& value, std::vector<u32>& code, int& bud
+         g_handle_slots.emplace(inst, ~0U);
+         const size_t start = code.size();
+         const u32 first_slot = g_handle_slot_count;
++        const IR::Value index_before{g_handle_index};
+         result = BuildHandleNode(value, code, budget, block);
+         g_handle_slots.erase(inst);
+         if (!result) {
+             // The Tee of every value the dropped code kept goes with it: a later use of one of
+-            // them (another Phi input) must build it again, not load a slot nothing wrote.
++            // them (another Phi input) must build it again, not load a slot nothing wrote. So
++            // does an index word the dropped code took.
++            g_handle_index = index_before;
+             code.resize(start);
+             std::erase_if(g_handle_slots, [first_slot](const auto& entry) {
+                 return entry.second != ~0U && entry.second >= first_slot;
+@@ -537,6 +575,30 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
+                 emit(Op::Add);
+             }
+         };
++        // The read's address. One for a word that gives another read's address must be
++        // computable on its own: the word is the index word otherwise (see index_word).
++        const auto address = [&](const IR::Value& offset) {
++            const bool allowed{g_handle_index_allowed};
++            const int scaled{g_handle_scaled};
++            g_handle_index_allowed = allowed && g_handle_load_depth == 0;
++            g_handle_scaled = 0;
++            ++g_handle_load_depth;
++            const bool built{BuildHandleProgram(offset, code, budget, block)};
++            --g_handle_load_depth;
++            g_handle_scaled = scaled;
++            g_handle_index_allowed = allowed;
++            return built;
++        };
++        // This word as the element index of a descriptor array (g_handle_index_allowed).
++        const auto index_word = [&] {
++            if (!g_handle_index_allowed || g_handle_load_depth == 0 || g_handle_scaled == 0 ||
++                (!g_handle_index.IsEmpty() && g_handle_index.InstRecursive() != inst)) {
++                return false;
++            }
++            g_handle_index = IR::Value{const_cast<IR::Inst*>(inst)};
++            emit(Op::Index);
++            return true;
++        };
+         switch (source->GetOpcode()) {
+         case IR::Opcode::GetCbufU32:
+         case IR::Opcode::GetCbufU32x2: {
+@@ -549,7 +611,7 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
+                 code.push_back(offset.U32() + extra);
+                 return true;
+             }
+-            if (!BuildHandleProgram(offset, code, budget, block)) return false;
++            if (!address(offset)) return index_word();
+             add_extra();
+             emit(Op::CbufDynamic);
+             code.push_back(index.U32());
+@@ -560,7 +622,7 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
+         case IR::Opcode::LoadStorage128: {
+             const IR::Value binding{source->Arg(0)};
+             if (!binding.IsImmediate()) return false;
+-            if (!BuildHandleProgram(source->Arg(1), code, budget, block)) return false;
++            if (!address(source->Arg(1))) return index_word();
+             add_extra();
+             emit(Op::Storage);
+             code.push_back(binding.U32());
+@@ -580,9 +642,15 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
+     case IR::Opcode::GetCbufU32:
+     case IR::Opcode::LoadStorage32:
+         return load_word(inst, 0);
+-    case IR::Opcode::CompositeExtractU32x2: {
++    case IR::Opcode::CompositeExtractU32x2:
++    case IR::Opcode::CompositeExtractU32x3:
++    case IR::Opcode::CompositeExtractU32x4: {
++        // A word of a wider load (a handle in a table entry read 16 bytes at a time).
+         const IR::Value element{inst->Arg(1)};
+-        if (!element.IsImmediate() || inst->Arg(0).IsImmediate()) return false;
++        if (!element.IsImmediate() || inst->Arg(0).IsImmediate()) {
++            g_handle_failure = inst->GetOpcode();
++            return false;
++        }
+         return load_word(inst->Arg(0).InstRecursive(), element.U32() * 4);
+     }
+     case IR::Opcode::Phi: {
+@@ -627,11 +695,21 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
+     }
+     case IR::Opcode::IAdd32: return binary(Op::Add);
+     case IR::Opcode::ISub32: return binary(Op::Sub);
+-    case IR::Opcode::IMul32: return binary(Op::Mul);
++    case IR::Opcode::IMul32:
++    case IR::Opcode::ShiftLeftLogical32: {
++        // By a constant: an index scaled to a byte offset (see index_word).
++        const bool is_shift{inst->GetOpcode() == IR::Opcode::ShiftLeftLogical32};
++        const bool scaled{inst->Arg(1).IsImmediate() || (!is_shift && inst->Arg(0).IsImmediate())};
++        g_handle_scaled += scaled ? 1 : 0;
++        const bool built{build(0) && build(1)};
++        g_handle_scaled -= scaled ? 1 : 0;
++        if (!built) return false;
++        emit(is_shift ? Op::Shl : Op::Mul);
++        return true;
++    }
+     case IR::Opcode::BitwiseAnd32: return binary(Op::And);
+     case IR::Opcode::BitwiseOr32: return binary(Op::Or);
+     case IR::Opcode::BitwiseXor32: return binary(Op::Xor);
+-    case IR::Opcode::ShiftLeftLogical32: return binary(Op::Shl);
+     case IR::Opcode::ShiftRightLogical32: return binary(Op::Shr);
+     case IR::Opcode::ShiftRightArithmetic32: return binary(Op::Sar);
+     case IR::Opcode::INeg32: return unary(Op::Neg);
+@@ -772,6 +850,132 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
+ // Programs built while making the texture instructions of the pass running on this thread.
+ thread_local std::vector<std::vector<u32>>* g_handle_programs{};
+ 
++// Drops the Tee operations ending a program (they keep the result for nothing), so that two
++// instructions reading the same handle share the program and the descriptor.
++void TrimTrailingTees(std::vector<u32>& code) {
++    using Op = HandleOp;
++    size_t end{};
++    for (size_t pc = 0; pc < code.size();) {
++        const Op op{static_cast<Op>(code[pc++])};
++        switch (op) {
++        case Op::Cbuf:
++            pc += 2;
++            break;
++        case Op::Immediate:
++        case Op::CbufDynamic:
++        case Op::Storage:
++        case Op::Tee:
++        case Op::Load:
++            pc += 1;
++            break;
++        default:
++            break;
++        }
++        if (op != Op::Tee) {
++            end = (std::min)(pc, code.size());
++        }
++    }
++    code.resize(end);
++}
++
++// Elements of the descriptor array of a handle read from a table at an index word (see
++// g_handle_index_allowed): the table entries a draw binds, larger indices taking the last one.
++// LICHII_BINDLESS_TABLE overrides it (1 to 1024), 0 turning such arrays off (the shader then
++// gets whatever constant buffer word the earlier search finds, as before them).
++u32 HandleTableSize() {
++    static const u32 size = [] {
++        const char* const value = std::getenv("LICHII_BINDLESS_TABLE");
++        if (value == nullptr || value[0] == '\0') {
++            return 64U;
++        }
++        const long parsed = std::strtol(value, nullptr, 10);
++        return static_cast<u32>(std::clamp(parsed, 0L, 1024L));
++    }();
++    return size;
++}
++
++// The block of each instruction and the immediate dominator of each block of the program the
++// pass on this thread runs on, built when a handle program first needs them (Cooper, Harvey and
++// Kennedy, over post order numbers).
++class Dominance {
++public:
++    explicit Dominance(const IR::Program& program) : order{program.post_order_blocks} {
++        for (size_t number = 0; number < order.size(); ++number) {
++            numbers.emplace(order[number], number);
++            for (const IR::Inst& inst : order[number]->Instructions()) {
++                blocks.emplace(&inst, order[number]);
++            }
++        }
++        idom.assign(order.size(), NONE);
++        if (order.empty()) {
++            return;
++        }
++        const size_t entry{order.size() - 1};
++        idom[entry] = entry;
++        const auto intersect = [this](size_t lhs, size_t rhs) {
++            while (lhs != rhs) {
++                while (lhs < rhs) lhs = idom[lhs];
++                while (rhs < lhs) rhs = idom[rhs];
++            }
++            return lhs;
++        };
++        for (bool changed = true; changed;) {
++            changed = false;
++            for (size_t number = entry; number-- > 0;) {
++                size_t dominator{NONE};
++                for (const IR::Block* const predecessor : order[number]->ImmPredecessors()) {
++                    const auto it{numbers.find(predecessor)};
++                    if (it == numbers.end() || idom[it->second] == NONE) {
++                        continue;
++                    }
++                    dominator = dominator == NONE ? it->second : intersect(it->second, dominator);
++                }
++                if (dominator != idom[number]) {
++                    idom[number] = dominator;
++                    changed = true;
++                }
++            }
++        }
++    }
++
++    /// Whether def runs before use on every path to use.
++    [[nodiscard]] bool Dominates(const IR::Inst* def, const IR::Inst* use) const {
++        const auto def_block{blocks.find(def)};
++        const auto use_block{blocks.find(use)};
++        if (def_block == blocks.end() || use_block == blocks.end()) {
++            return false;
++        }
++        if (def_block->second == use_block->second) {
++            for (const IR::Inst& inst : def_block->second->Instructions()) {
++                if (&inst == def) return true;
++                if (&inst == use) return false;
++            }
++            return false;
++        }
++        const size_t target{numbers.at(def_block->second)};
++        for (size_t number = numbers.at(use_block->second); idom[number] != NONE;) {
++            if (idom[number] == number) {
++                return false; // the entry
++            }
++            number = idom[number];
++            if (number == target) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++private:
++    static constexpr size_t NONE{~size_t{0}};
++    const IR::BlockList& order;
++    std::unordered_map<const IR::Block*, size_t> numbers;
++    std::unordered_map<const IR::Inst*, const IR::Block*> blocks;
++    std::vector<size_t> idom;
++};
++
++thread_local const IR::Program* g_program{};
++thread_local std::optional<Dominance> g_dominance;
++
+ std::optional<u32> TryGetConstant(IR::Value& value, Environment& env) {
+     const IR::Inst* inst = value.InstRecursive();
+     if (inst->GetOpcode() != IR::Opcode::GetCbufU32) {
+@@ -935,7 +1139,26 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
+             std::vector<u32> code;
+             int budget = 4096;
+             g_handle_failure = IR::Opcode::Void;
+-            if (!g_handle_programs || !BuildHandleProgram(inst.Arg(0), code, budget, block)) {
++            bool built{g_handle_programs && BuildHandleProgram(inst.Arg(0), code, budget, block)};
++            IR::Value index{};
++            // Only sampled textures: an array of storage images would have every element taken
++            // as written.
++            const bool sampled{!IsStorageImageOpcode(IndexedInstruction(inst)) &&
++                               inst.Flags<IR::TextureInstInfo>().type != TextureType::Buffer};
++            if (!built && g_handle_programs && sampled && host_info.support_handle_table_arrays &&
++                HandleTableSize() > 0) {
++                // Read from a table at an index each invocation reads for itself: a descriptor
++                // array of the table's entries, which the shader indexes with that index.
++                code.clear();
++                budget = 4096;
++                g_handle_index = IR::Value{};
++                g_handle_index_allowed = true;
++                built = BuildHandleProgram(inst.Arg(0), code, budget, block);
++                g_handle_index_allowed = false;
++                index = built ? g_handle_index : IR::Value{};
++                g_handle_index = IR::Value{};
++            }
++            if (!built) {
+                 // Not computable for a whole draw (a handle that changes in a loop): keep the
+                 // earlier search through loads, which at least gives the shader a texture.
+                 const std::optional<ConstBufferAddr> legacy{IR::BreadthFirstSearch(inst.Arg(0),
+@@ -946,14 +1169,33 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
+                     throw NotImplementedException("Failed to track bindless texture constant buffer (stopped at {}, budget {})",
+                                                   g_handle_failure, budget);
+                 }
++                static std::atomic<int> warnings{};
++                if (warnings.fetch_add(1, std::memory_order_relaxed) < 32) {
++                    LOG_WARNING(Shader, "Bindless {} handle not computable per draw (stopped at {}): "
++                                "taking cbuf{}+{:#x}, likely not the texture the shader reads",
++                                inst.GetOpcode(), g_handle_failure, legacy->index, legacy->offset);
++                }
+                 return TextureInst{.cbuf = *legacy, .inst = &inst, .block = block};
+             }
++            TrimTrailingTees(code);
+             auto& programs{*g_handle_programs};
+             auto it{std::ranges::find(programs, code)};
+             if (it == programs.end()) {
+                 programs.push_back(std::move(code));
+                 it = programs.end() - 1;
+             }
++            // The shader indexes the array with the index word, which must be defined wherever
++            // the texture instruction runs; where it isn't, every invocation takes the first
++            // element.
++            u32 count{1};
++            if (!index.IsEmpty() && g_program != nullptr) {
++                if (!g_dominance) {
++                    g_dominance.emplace(*g_program);
++                }
++                if (g_dominance->Dominates(index.InstRecursive(), &inst)) {
++                    count = HandleTableSize();
++                }
++            }
+             addr = ConstBufferAddr{
+                 .index = 0,
+                 .offset = 0,
+@@ -961,8 +1203,8 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
+                 .secondary_index = 0,
+                 .secondary_offset = 0,
+                 .secondary_shift_left = 0,
+-                .dynamic_offset = {},
+-                .count = 1,
++                .dynamic_offset = count > 1 ? IR::U32{index} : IR::U32{},
++                .count = count,
+                 .has_secondary = false,
+                 .handle_program = static_cast<u32>(it - programs.begin()),
+             };
+@@ -1169,6 +1411,12 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+     env.track_cache.clear();
+     TextureInstVector to_replace;
+     g_handle_programs = &program.info.handle_programs;
++    g_program = &program;
++    g_dominance.reset();
++    SCOPE_EXIT {
++        g_program = nullptr;
++        g_dominance.reset();
++    };
+     for (IR::Block* const block : program.post_order_blocks) {
+         env.track_cache.clear();
+         for (IR::Inst& inst : block->Instructions()) {
+@@ -1269,7 +1517,10 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+             break;
+         }
+         u32 index;
+-        u32 size_shift = cbuf.count > 1 ? DynamicDescriptorSizeShift(cbuf.dynamic_offset) : DESCRIPTOR_SIZE_SHIFT;
++        // The index of an array of handle program results is the element itself.
++        u32 size_shift = cbuf.count <= 1                ? DESCRIPTOR_SIZE_SHIFT
++                         : cbuf.handle_program != ~0U ? 0U
++                                                       : DynamicDescriptorSizeShift(cbuf.dynamic_offset);
+         u32 count = cbuf.count;
+         switch (inst->GetOpcode()) {
+         case IR::Opcode::ImageRead:
+@@ -1395,8 +1646,10 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+         if (count > 1) {
+             const auto insert_point{IR::Block::InstructionList::s_iterator_to(*inst)};
+             IR::IREmitter ir{*texture_inst.block, insert_point};
+-            const IR::U32 shift{ir.Imm32(size_shift)};
+-            inst->SetArg(0, ir.UMin(ir.ShiftRightLogical(cbuf.dynamic_offset, shift), ir.Imm32(count - 1)));
++            const IR::U32 element{size_shift != 0
++                                      ? IR::U32{ir.ShiftRightLogical(cbuf.dynamic_offset, ir.Imm32(size_shift))}
++                                      : cbuf.dynamic_offset};
++            inst->SetArg(0, ir.UMin(element, ir.Imm32(count - 1)));
+         } else {
+             inst->SetArg(0, IR::Value{});
+         }
 diff --git a/src/shader_recompiler/shader_info.h b/src/shader_recompiler/shader_info.h
-index 2ed83d011b..58d68cb05e 100644
+index 2ed83d011b..a89ccfab7e 100644
 --- a/src/shader_recompiler/shader_info.h
 +++ b/src/shader_recompiler/shader_info.h
-@@ -286,6 +286,7 @@ struct Info {
+@@ -232,7 +232,9 @@ struct TextureDescriptor {
+     u32 count;
+     u32 size_shift;
+     /// Index in Info::handle_programs when the handle is computed at draw time (read from a
+-    /// storage buffer), ~0 when it is the constant buffer word above.
++    /// storage buffer), ~0 when it is the constant buffer word above. With a count above 1 the
++    /// program computes the handle of each element (HandleOp::Index): a handle the shader reads
++    /// from a table at an index only each invocation knows, the shader indexing the array.
+     u32 handle_program{~0U};
+ 
+     auto operator<=>(const TextureDescriptor&) const = default;
+@@ -286,6 +288,7 @@ struct Info {
      bool uses_is_helper_invocation{};
      bool uses_subgroup_invocation_id{};
      bool uses_subgroup_shuffles{};
@@ -1359,6 +2033,56 @@ index 2ed83d011b..58d68cb05e 100644
      bool uses_quad_shuffles{};
      std::array<bool, 30> uses_patches{};
  
+@@ -299,6 +302,8 @@ struct Info {
+     bool loads_indexed_attributes{};
+ 
+     std::array<bool, 8> stores_frag_color{};
++    /// Components (bit 0 = R ... bit 3 = A) of each render target the fragment shader writes
++    std::array<u8, 8> frag_color_components{};
+     bool stores_sample_mask{};
+     bool stores_frag_depth{};
+ 
+@@ -406,13 +411,15 @@ enum class HandleOp : u32 {
+     Select, ///< condition, true value, false value
+     Tee,    ///< slot: keeps the top value in the slot (shared subexpressions)
+     Load,   ///< slot: the value kept there
++    Index,  ///< the element of the descriptor array being computed (see TextureDescriptor)
+ };
+ 
+ /// Runs a handle program; read_cbuf(index, offset) and read_storage(binding, offset) return the
+-/// words it reads. Returns nothing for a malformed program.
++/// words it reads, and element is the descriptor array element computed (HandleOp::Index).
++/// Returns nothing for a malformed program.
+ template <typename ReadCbuf, typename ReadStorage>
+ std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& read_cbuf,
+-                                         ReadStorage&& read_storage) {
++                                         ReadStorage&& read_storage, u32 element = 0) {
+     std::array<u32, 64> stack{};
+     std::array<u32, 256> slots{};
+     size_t size = 0;
+@@ -457,6 +464,10 @@ std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& r
+             push(slot < slots.size() ? slots[slot] : 0U);
+             continue;
+         }
++        if (op == HandleOp::Index) {
++            push(element);
++            continue;
++        }
+         if (op == HandleOp::Select) {
+             const u32 false_value = pop(), true_value = pop(), condition = pop();
+             push(condition != 0 ? true_value : false_value);
+diff --git a/src/tests/CMakeLists.txt b/src/tests/CMakeLists.txt
+index d910722226..9183f78fdb 100644
+--- a/src/tests/CMakeLists.txt
++++ b/src/tests/CMakeLists.txt
+@@ -95,6 +95,7 @@ add_executable(tests
+     video_core/ampere_matrix.cpp
+     video_core/spirv_software_matrix.cpp
+     video_core/spirv_builtin_capabilities.cpp
++    video_core/spirv_min_max_denorms.cpp
+     common/bit_field.cpp
+     common/cityhash.cpp
+     common/container_hash.cpp
 diff --git a/src/tests/qt_compatibility/CMakeLists.txt b/src/tests/qt_compatibility/CMakeLists.txt
 new file mode 100644
 index 0000000000..51e18c22fd
@@ -2106,11 +2830,485 @@ index 0000000000..8c7fafe94b
 +}
 +
 +#include "compatibility_report.moc"
+diff --git a/src/tests/video_core/buffer_cache_ports.cpp b/src/tests/video_core/buffer_cache_ports.cpp
+index 46db48933a..99e077e778 100644
+--- a/src/tests/video_core/buffer_cache_ports.cpp
++++ b/src/tests/video_core/buffer_cache_ports.cpp
+@@ -225,9 +225,6 @@ struct BufferCacheTestAccess {
+         channel.uniform_buffers[0][0] = {.device_addr = address, .size = size, .buffer_id = id};
+         cache.BindHostGraphicsUniformBuffer(0, 0, 0, true);
+     }
+-    static void NextFrame(Cache& cache) {
+-        cache.native_indirect_uniforms_this_frame.clear();
+-    }
+     static u32 CpuMarks(Cache& cache) {
+         return cache.memory_tracker.cpu_marks;
+     }
+@@ -540,7 +537,7 @@ TEST_CASE("Command page readers remain ordered during batch completion", "[buffe
+     REQUIRE(f.runtime.downloads == 1);
+ }
+ 
+-TEST_CASE("Native uniform banks upload directly without overwriting GPU-owned bytes",
++TEST_CASE("Native uniform banks mark only changed pages and keep GPU-owned bytes",
+           "[buffer_ports]") {
+     Fixture f;
+     f.memory->EnableNativeTiling();
+@@ -555,20 +552,26 @@ TEST_CASE("Native uniform banks upload directly without overwriting GPU-owned by
+     std::memset(f.bytes + 0x10000, 0x5a, 0x10000);
+     Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
+     REQUIRE(f.runtime.upload_bytes == 0x10000);
+-    REQUIRE(Access::CpuMarks(*f.cache) == 0);
++    REQUIRE(Access::CpuMarks(*f.cache) == 16);
+     REQUIRE(Access::Get(*f.cache, id).bytes[0xffff] == 0x5a);
++    const u32 uploads = f.runtime.uploads;
++    Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
++    REQUIRE(f.runtime.uploads == uploads);
++    REQUIRE(Access::CpuMarks(*f.cache) == 16);
++    // A write the tracker missed is found on the next bind, and only its page is marked.
++    std::memset(f.bytes + 0x13000, 0x77, 0x1000);
+     Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
+-    REQUIRE(f.runtime.uploads == 1);
+-    Access::NextFrame(*f.cache);
++    REQUIRE(Access::CpuMarks(*f.cache) == 17);
++    REQUIRE(f.runtime.upload_bytes == 0x11000);
++    REQUIRE(Access::Get(*f.cache, id).bytes[0x3000] == 0x77);
+     Access::Dirty(*f.cache, 0x21000, 0x1000);
+     std::memset(f.bytes + 0x10000, 0xa5, 0x10000);
+     Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
+-    REQUIRE(f.runtime.uploads == 1);
++    REQUIRE(f.runtime.upload_bytes == 0x11000);
+     REQUIRE(Access::Get(*f.cache, id).bytes[0x1000] == 0x5a);
+ }
+ 
+-TEST_CASE("Native uniform uploads stop at holes and keep unaligned bank boundaries",
+-          "[buffer_ports]") {
++TEST_CASE("Native uniform bank checks stop at holes", "[buffer_ports]") {
+     Fixture f;
+     f.memory->EnableNativeTiling();
+     Tegra::Control::ChannelState state{0};
+@@ -582,18 +585,16 @@ TEST_CASE("Native uniform uploads stop at holes and keep unaligned bank boundari
+     std::memset(f.bytes + 0x10000, 0x6b, 0x20000);
+     f.device.Unmap(0x22000, 0x1000);
+     Access::Uniform(*f.cache, channel, id, 0x20123, 0x10000);
+-    REQUIRE(f.runtime.upload_bytes == 0x1edd);
++    REQUIRE(Access::CpuMarks(*f.cache) == 2);
++    REQUIRE(f.runtime.upload_bytes == 0x2000);
+     const auto& data = Access::Get(*f.cache, id).bytes;
+-    REQUIRE(data[0x122] == 0);
+     REQUIRE(data[0x123] == 0x6b);
+     REQUIRE(data[0x1fff] == 0x6b);
+     REQUIRE(data[0x2000] == 0);
+     REQUIRE(data[0x3000] == 0);
+-    REQUIRE(Access::CpuMarks(*f.cache) == 0);
+     f.device.Map(0x22000, 0x22000, 0x1000, f.asid);
+-    Access::NextFrame(*f.cache);
+     Access::Uniform(*f.cache, channel, id, 0x20123, 0x10000);
+-    REQUIRE(f.runtime.upload_bytes == 0x11edd);
++    REQUIRE(Access::CpuMarks(*f.cache) == 17);
++    REQUIRE(data[0x2000] == 0x6b);
+     REQUIRE(data[0x10122] == 0x6b);
+-    REQUIRE(data[0x10123] == 0);
+ }
+diff --git a/src/tests/video_core/spirv_min_max_denorms.cpp b/src/tests/video_core/spirv_min_max_denorms.cpp
+new file mode 100644
+index 0000000000..d47d2be6f9
+--- /dev/null
++++ b/src/tests/video_core/spirv_min_max_denorms.cpp
+@@ -0,0 +1,155 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <vector>
++
++#include <catch2/catch_test_macros.hpp>
++#include <spirv/unified1/spirv.hpp11>
++
++#include "shader_recompiler/backend/spirv/emit_spirv.h"
++#include "shader_recompiler/environment.h"
++#include "shader_recompiler/frontend/ir/ir_emitter.h"
++#include "shader_recompiler/ir_opt/passes.h"
++
++namespace {
++namespace IR = Shader::IR;
++
++class TestEnvironment final : public Shader::Environment {
++public:
++    TestEnvironment() { stage = Shader::Stage::Compute; }
++    u64 ReadInstruction(u32) override { return 0; }
++    u32 ReadCbufValue(u32, u32) override { return 0; }
++    Shader::TextureType ReadTextureType(u32) override { return Shader::TextureType::Color2D; }
++    Shader::TexturePixelFormat ReadTexturePixelFormat(u32) override {
++        return Shader::TexturePixelFormat::A8B8G8R8_UNORM;
++    }
++    bool IsTexturePixelFormatInteger(u32) override { return false; }
++    u32 ReadViewportTransformState() override { return 1; }
++    u32 TextureBoundBuffer() const override { return 0; }
++    u32 LocalMemorySize() const override { return 0; }
++    u32 SharedMemorySize() const override { return 0; }
++    std::array<u32, 3> WorkgroupSize() const override { return {1, 1, 1}; }
++    bool HasHLEMacroState() const override { return false; }
++    std::optional<Shader::ReplaceConstant> GetReplaceConstBuffer(u32, u32) override {
++        return std::nullopt;
++    }
++    void Dump(u64, u64) override {}
++};
++
++struct Program {
++    Shader::ObjectPool<IR::Inst> pool;
++    IR::Block block{pool};
++    IR::Program program;
++    Shader::Profile profile{};
++
++    Program() {
++        program.stage = Shader::Stage::Compute;
++        program.workgroup_size = {1, 1, 1};
++        program.blocks = {&block};
++        program.post_order_blocks = {&block};
++        program.syntax_list = {{{.block = &block}, IR::AbstractSyntaxNode::Type::Block},
++                               {{}, IR::AbstractSyntaxNode::Type::Return}};
++        program.info.storage_buffers_descriptors = {{0, 0, 1, true}};
++        profile.supported_spirv = 0x00010300;
++        profile.support_float_controls = true;
++        profile.support_fp32_denorm_flush = true;
++        profile.support_fp32_denorm_preserve = true;
++    }
++
++    void Add(IR::Opcode opcode, IR::FmzMode mode, u32 offset = 0) {
++        IR::IREmitter ir{block};
++        // Bitcasts keep the operands live without introducing another floating-point mode.
++        const auto a = ir.BitCast<IR::F32>(ir.LocalInvocationIdX());
++        const auto b = ir.BitCast<IR::F32>(ir.LocalInvocationIdY());
++        const IR::FpControl control{.fmz_mode = mode};
++        IR::F32 result;
++        if (opcode == IR::Opcode::FPMin32) {
++            result = IR::F32{ir.FPMin(a, b, control)};
++        } else if (opcode == IR::Opcode::FPMax32) {
++            result = IR::F32{ir.FPMax(a, b, control)};
++        } else {
++            result = IR::F32{ir.FPAdd(a, b, control)};
++        }
++        block.AppendNewInst(IR::Opcode::WriteStorage32,
++                            {ir.Imm32(0), ir.Imm32(offset), ir.BitCast<IR::U32>(result)});
++    }
++
++    void Collect() {
++        TestEnvironment env;
++        Shader::Optimization::CollectShaderInfoPass(env, program);
++    }
++};
++
++bool HasMode(const std::vector<u32>& code, spv::ExecutionMode mode) {
++    for (size_t offset = 5; offset < code.size();) {
++        const u32 count = code[offset] >> 16;
++        REQUIRE(count > 0);
++        REQUIRE(offset + count <= code.size());
++        if ((code[offset] & 0xffff) == static_cast<u32>(spv::Op::OpExecutionMode) && count == 4 &&
++            code[offset + 2] == static_cast<u32>(mode) && code[offset + 3] == 32) {
++            return true;
++        }
++        offset += count;
++    }
++    return false;
++}
++
++void CheckModes(Program& fixture, bool flush, bool preserve) {
++    const auto code = Shader::Backend::SPIRV::EmitSPIRV(fixture.profile, fixture.program);
++    CHECK(HasMode(code, spv::ExecutionMode::DenormFlushToZero) == flush);
++    CHECK(HasMode(code, spv::ExecutionMode::DenormPreserve) == preserve);
++}
++} // namespace
++
++TEST_CASE("FP32 min and max retain their denormal controls through SPIR-V emission",
++          "[video_core][spirv][min_max_denorms]") {
++    for (const auto opcode : {IR::Opcode::FPMin32, IR::Opcode::FPMax32}) {
++        for (const auto mode : {IR::FmzMode::FTZ, IR::FmzMode::None, IR::FmzMode::DontCare}) {
++            CAPTURE(opcode, mode);
++            Program fixture;
++            fixture.Add(opcode, mode);
++            fixture.Collect();
++            CHECK(fixture.program.info.uses_fp32_denorms_flush == (mode == IR::FmzMode::FTZ));
++            CHECK(fixture.program.info.uses_fp32_denorms_preserve == (mode == IR::FmzMode::None));
++            CheckModes(fixture, mode == IR::FmzMode::FTZ, mode == IR::FmzMode::None);
++        }
++    }
++}
++
++TEST_CASE("Min max controls obey existing mixed denormal policy",
++          "[video_core][spirv][min_max_denorms]") {
++    for (const auto other : {IR::Opcode::FPMax32, IR::Opcode::FPAdd32}) {
++        Program fixture;
++        fixture.Add(IR::Opcode::FPMin32, IR::FmzMode::FTZ);
++        fixture.Add(other, IR::FmzMode::None, 4);
++        fixture.Collect();
++        CHECK(fixture.program.info.uses_fp32_denorms_flush);
++        CHECK(fixture.program.info.uses_fp32_denorms_preserve);
++        // The existing emitter declines to select a shader-wide mode when both are requested.
++        CheckModes(fixture, false, false);
++    }
++}
++
++TEST_CASE("Unsupported or broken float-control profiles suppress min max execution modes",
++          "[video_core][spirv][min_max_denorms]") {
++    for (const auto mode : {IR::FmzMode::FTZ, IR::FmzMode::None}) {
++        for (const bool all_controls_disabled : {false, true}) {
++            Program fixture;
++            fixture.Add(IR::Opcode::FPMin32, mode);
++            fixture.Collect();
++            CHECK(fixture.program.info.uses_fp32_denorms_flush == (mode == IR::FmzMode::FTZ));
++            CHECK(fixture.program.info.uses_fp32_denorms_preserve == (mode == IR::FmzMode::None));
++            fixture.profile.support_float_controls = !all_controls_disabled;
++            if (!all_controls_disabled) {
++                fixture.profile.support_fp32_denorm_flush = false;
++                fixture.profile.support_fp32_denorm_preserve = false;
++            }
++            CheckModes(fixture, false, false);
++        }
++    }
++    Program fixture;
++    fixture.Add(IR::Opcode::FPMax32, IR::FmzMode::FTZ);
++    fixture.Collect();
++    CHECK(fixture.program.info.uses_fp32_denorms_flush);
++    fixture.profile.has_broken_fp32_denorm_flush = true;
++    CheckModes(fixture, false, false);
++}
+diff --git a/src/tests/video_core/texture_handles.cpp b/src/tests/video_core/texture_handles.cpp
+index 8b3254fb7a..5b0aade135 100644
+--- a/src/tests/video_core/texture_handles.cpp
++++ b/src/tests/video_core/texture_handles.cpp
+@@ -4,11 +4,13 @@
+ #include <initializer_list>
+ #include <map>
+ #include <stdexcept>
++#include <vector>
+ #include <catch2/catch_test_macros.hpp>
+ 
+ #include "shader_recompiler/frontend/ir/ir_emitter.h"
+ #include "shader_recompiler/host_translate_info.h"
+ #include "shader_recompiler/ir_opt/passes.h"
++#include "video_core/shader_handle_program.h"
+ 
+ namespace {
+ namespace IR = Shader::IR;
+@@ -58,6 +60,7 @@ struct HandleProgram {
+     IR::Block* insertion_block{&block};
+     IR::Program program;
+     HandleEnvironment env;
++    bool handle_table_arrays{true};
+ 
+     HandleProgram() {
+         program.stage = Shader::Stage::Fragment;
+@@ -104,6 +107,7 @@ struct HandleProgram {
+ 
+     void Run() {
+         Shader::HostTranslateInfo host;
++        host.support_handle_table_arrays = handle_table_arrays;
+         host.ApplyDescriptorLimitPolicy();
+         Shader::Optimization::TexturePass(env, program, host);
+     }
+@@ -304,3 +308,176 @@ TEST_CASE("Failed Phi handle subtrees discard their cached values",
+         }
+     }
+ }
++
++namespace {
++struct HandleTestMemory {
++    std::map<GPUVAddr, u32> words;
++    template <typename T>
++    T Read(GPUVAddr address) const {
++        const auto word = [&](GPUVAddr at) -> u64 {
++            const auto it = words.find(at);
++            return it != words.end() ? it->second : 0U;
++        };
++        if constexpr (sizeof(T) == 8) {
++            return static_cast<T>(word(address) | (word(address + 4) << 32));
++        } else {
++            return static_cast<T>(word(address));
++        }
++    }
++};
++} // namespace
++
++TEST_CASE("Handle tables are read for every element at once", "[video_core][texture_handles]") {
++    constexpr GPUVAddr cbuf = 0x1000;
++    HandleTestMemory memory;
++    memory.words[cbuf + 0x10] = 0x2000; // the storage buffer address
++    memory.words[cbuf + 0x14] = 0;
++    memory.words[cbuf + 0x20] = 0x60; // the table entry size
++    for (u32 element = 0; element < 4; ++element) {
++        memory.words[0x2000 + 0x10 + element * 0x60] = 0x100 + element;
++    }
++    Shader::Info info;
++    info.storage_buffers_descriptors.push_back(
++        {.cbuf_index = 0, .cbuf_offset = 0x10, .count = 1, .is_written = false});
++    using Op = Shader::HandleOp;
++    // The word at Index * cbuf0[0x20] + 0x10 of the storage buffer.
++    info.handle_programs.push_back({static_cast<u32>(Op::Index), static_cast<u32>(Op::Cbuf), 0U,
++                                    0x20U, static_cast<u32>(Op::Mul),
++                                    static_cast<u32>(Op::Immediate), 0x10U,
++                                    static_cast<u32>(Op::Add), static_cast<u32>(Op::Storage), 0U});
++    u32 cbuf_reads{};
++    const auto cbuf_address = [&cbuf_reads](u32 index) -> GPUVAddr {
++        ++cbuf_reads;
++        return index == 0 ? cbuf : 0;
++    };
++    std::vector<u32> handles;
++    VideoCommon::EvaluateTextureHandles(info, 0, memory, cbuf_address, 4,
++                                        [&handles](u32 element, u32 handle) {
++                                            CHECK(element == handles.size());
++                                            handles.push_back(handle);
++                                        });
++    CHECK(handles == std::vector<u32>{0x100, 0x101, 0x102, 0x103});
++    // The entry size and the storage buffer address, once each for all the elements.
++    CHECK(cbuf_reads == 2);
++    for (u32 element = 0; element < 4; ++element) {
++        CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, element) ==
++              0x100 + element);
++    }
++}
++
++namespace {
++// A light loop's shadow map handle: each invocation reads a light index from its own list, at an
++// address only it knows, then the handle of that light from a table of 96-byte entries.
++struct LightTable {
++    Value light;
++    Value handle;
++
++    explicit LightTable(HandleProgram& shader) {
++        const Value list_offset{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R0}})};
++        light = shader.Emit(Opcode::LoadStorage32, {Value{0U}, list_offset});
++        const Value entry{shader.Emit(Opcode::IMul32, {light, Value{96U}})};
++        const Value handle_offset{shader.Add(entry, Value{16U})};
++        handle = shader.Emit(Opcode::LoadStorage32, {Value{1U}, handle_offset});
++    }
++};
++
++u32 EvaluateTableElement(const HandleProgram& shader, const Shader::TextureDescriptor& descriptor,
++                         u32 element) {
++    REQUIRE(descriptor.handle_program < shader.program.info.handle_programs.size());
++    const auto result{Shader::EvaluateHandleProgram(
++        shader.program.info.handle_programs[descriptor.handle_program],
++        [](u32, u32) -> u32 { throw std::logic_error("Unexpected evaluator cbuf read"); },
++        [](u32 binding, u32 offset) -> u32 {
++            REQUIRE(binding == 1);
++            return 0x1000 + offset;
++        },
++        element)};
++    REQUIRE(result.has_value());
++    return *result;
++}
++} // namespace
++
++TEST_CASE("A handle read from a table at a per-invocation index is a descriptor array",
++          "[video_core][texture_handles]") {
++    HandleProgram shader;
++    const LightTable table{shader};
++    auto& first{shader.Sample(table.handle)};
++    auto& second{shader.Sample(table.handle)};
++    shader.Run();
++
++    REQUIRE(shader.program.info.texture_descriptors.size() == 1);
++    const auto& descriptor{shader.Descriptor(first)};
++    CHECK(descriptor.count == 64);
++    CHECK(descriptor.size_shift == 0);
++    // Element k holds the handle of table entry k.
++    for (const u32 element : {0U, 1U, 63U}) {
++        CHECK(EvaluateTableElement(shader, descriptor, element) == 0x1000 + element * 96 + 16);
++    }
++    // Each instruction indexes the array with the light index it read, clamped to the array.
++    for (const IR::Inst* const sample : {&first, &second}) {
++        REQUIRE_FALSE(sample->Arg(0).IsEmpty());
++        const IR::Inst* const selection{sample->Arg(0).InstRecursive()};
++        REQUIRE(selection->GetOpcode() == Opcode::UMin32);
++        CHECK(selection->Arg(0).Resolve() == table.light.Resolve());
++        CHECK(selection->Arg(1).U32() == 63);
++    }
++}
++
++TEST_CASE("A table index not defined where the texture is read takes the first element",
++          "[video_core][texture_handles]") {
++    HandleProgram shader;
++    shader.insertion_block = &shader.left;
++    const LightTable table{shader};
++    shader.insertion_block = &shader.right;
++    const Value other{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R1}})};
++    auto& sample{shader.Sample(shader.Phi(table.handle, other))};
++    shader.Run();
++
++    const auto& descriptor{shader.Descriptor(sample)};
++    CHECK(descriptor.count == 1);
++    CHECK(EvaluateTableElement(shader, descriptor, 0) == 0x1000 + 16);
++    CHECK(sample.Arg(0).IsEmpty());
++}
++
++TEST_CASE("Hosts without handle table arrays keep the word the earlier search finds",
++          "[video_core][texture_handles]") {
++    for (const bool supported : {false, true}) {
++        CAPTURE(supported);
++        HandleProgram shader;
++        shader.handle_table_arrays = supported;
++        shader.env.cbuf_values = {{{0, 0x520}, 0xabc}};
++        // The table's address is a constant buffer word, the one the earlier search binds.
++        const Value list_offset{shader.Emit(Opcode::GetRegister, {Value{IR::Reg::R0}})};
++        const Value light{shader.Emit(Opcode::LoadStorage32, {Value{0U}, list_offset})};
++        const Value entry{shader.Emit(Opcode::IMul32, {light, Value{96U}})};
++        const Value table{shader.Emit(Opcode::GetCbufU32, {Value{0U}, Value{0x520U}})};
++        const Value handle{
++            shader.Emit(Opcode::LoadStorage32, {Value{1U}, shader.Add(entry, table)})};
++        auto& sample{shader.Sample(handle)};
++        shader.Run();
++
++        const auto& descriptor{shader.Descriptor(sample)};
++        CHECK(descriptor.count == (supported ? 64U : 1U));
++        CHECK((descriptor.handle_program != ~0U) == supported);
++        CHECK(descriptor.cbuf_offset == (supported ? 0U : 0x520U));
++    }
++}
++
++TEST_CASE("Handle tracking skips the floating-point math a reused register leads to",
++          "[video_core][texture_handles]") {
++    // The handle register holds a storage word on one path and a float result on the other: no
++    // constant buffer word behind the float math is the handle.
++    HandleProgram shader;
++    shader.insertion_block = &shader.left;
++    const Value handle{shader.Storage(0)};
++    shader.insertion_block = &shader.right;
++    const Value word{shader.Emit(Opcode::GetCbufU32, {Value{3U}, Value{0x10U}})};
++    const Value sum{
++        shader.Emit(Opcode::FPAdd32, {shader.Emit(Opcode::BitCastF32U32, {word}), Value{1.0f}})};
++    const Value reused{shader.Emit(Opcode::BitCastU32F32, {sum})};
++    auto& sample{shader.Sample(shader.Phi(handle, reused))};
++    shader.Run();
++
++    CHECK(shader.Descriptor(sample).handle_program != ~0U);
++    CHECK(shader.Evaluate(sample) == 0x1234);
++}
+diff --git a/src/tests/video_core/uniform_stream_reuse.cpp b/src/tests/video_core/uniform_stream_reuse.cpp
+index 6059b70eeb..bcfee7e35c 100644
+--- a/src/tests/video_core/uniform_stream_reuse.cpp
++++ b/src/tests/video_core/uniform_stream_reuse.cpp
+@@ -23,6 +23,10 @@ struct Memory {
+         Check(address + size <= bytes.size(), "read outside guest memory");
+         std::memcpy(destination, bytes.data() + address, size);
+     }
++    template <typename T>
++    T* GetPointer(u64 address) {
++        return address < bytes.size() ? reinterpret_cast<T*>(bytes.data() + address) : nullptr;
++    }
+ };
+ 
+ struct Runtime {
 diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
-index a248222d09..5fa5ffac2e 100644
+index a248222d09..2c1d173e96 100644
 --- a/src/video_core/buffer_cache/buffer_cache.h
 +++ b/src/video_core/buffer_cache/buffer_cache.h
-@@ -282,8 +282,13 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+@@ -112,7 +112,6 @@ void BufferCache<P>::TickFrame() {
+         return;
+     }
+     runtime.TickFrame(slot_buffers);
+-    native_indirect_uniforms_this_frame.clear();
+     if (frame_tick % 600 == 0 && !uploaded_buffer_ranges.empty()) {
+         for (const auto& [address, size] : uploaded_buffer_ranges) {
+             device_memory.HintCold(address, size);
+@@ -282,8 +281,13 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
      area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
                                             device_addr_end_aligned - device_addr_start_aligned);
      // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
@@ -2126,7 +3324,7 @@ index a248222d09..5fa5ffac2e 100644
      if (!area->preemtive) {
          if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
              Nx2DownloadTrace::Marked(device_addr_start_aligned,
-@@ -833,8 +838,9 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
+@@ -833,8 +837,9 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
          }
          ssbo_addr = holder + indirect_offset;
      }
@@ -2138,7 +3336,82 @@ index a248222d09..5fa5ffac2e 100644
      if (indirect_offset != ~0U) {
          TraceTablePointer(true, 0, ssbo_index, cbuf_index, cbuf_offset, indirect_offset, holder,
                            channel_state->compute_storage_buffers[ssbo_index]);
-@@ -2892,7 +2898,8 @@ void BufferCache<P>::TraceTablePointer(bool compute, size_t stage, size_t ssbo_i
+@@ -1355,26 +1360,62 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32
+     }();
+     // Native programs keep tables next to their code in a 64 KiB bank read with indirect offsets
+     // (Splatoon Raiders: the dialogue box corners in c1). Writes to that memory can go unnoticed by
+-    // the memory tracker, leaving stale host contents, so upload such a bank again once per frame.
++    // the memory tracker, leaving stale host contents, so check such a bank on every bind: games
++    // rewrite per-draw data between draws, and checking once per frame left it stale for a frame
++    // now and then (white flashes in Ocarina of Time, Eglantine 031e07436c).
+     if (has_host_buffer && (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
+         size != 0 && gpu_memory != nullptr && gpu_memory->UsesNativeTiling() &&
+-        (Nx2Perf::Verify() || !native_indirect_uniforms_this_frame.contains(device_addr)) &&
+-        !memory_tracker.IsRegionGpuModified(device_addr, size) &&
+-        native_indirect_uniforms_this_frame.insert(device_addr).second) {
++        !memory_tracker.IsRegionGpuModified(device_addr, size)) {
+         // The bank size is only an upper limit: stop at the end of the mapped memory.
+         u64 mapped_size = 0;
+         while (mapped_size < size &&
+                device_memory.template GetPointer<u8>(device_addr + mapped_size) != nullptr) {
+             mapped_size += Core::DEVICE_PAGESIZE - ((device_addr + mapped_size) & Core::DEVICE_PAGEMASK);
+         }
+-        const u64 upload_size = (std::min<u64>)(mapped_size, size);
+-        if (upload_size != 0) {
+-            std::array<BufferCopy, 1> copies{BufferCopy{
+-                .src_offset = 0,
+-                .dst_offset = buffer.Offset(device_addr),
+-                .size = upload_size,
+-            }};
+-            UploadMemory(buffer, upload_size, upload_size, copies);
++        const u64 check_size = (std::min<u64>)(mapped_size, size);
++        // Banks slide through larger buffers, a new address per draw: compare each page with
++        // its last contents and mark only the pages that changed.
++        if (native_indirect_page_snapshots.size() >= 16384) {
++            native_indirect_page_snapshots.clear();
++        }
++        const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
++        const DAddr end = device_addr + check_size;
++        for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
++            const u8* const guest = device_memory.template GetPointer<u8>(page);
++            if (guest == nullptr) {
++                continue;
++            }
++            auto [it, inserted] = native_indirect_page_snapshots.try_emplace(page);
++            const bool same =
++                !inserted && std::memcmp(it->second.data(), guest, Core::DEVICE_PAGESIZE) == 0;
++            // EDEN_NX2_MME_DMA_STATS: how many checked pages had changed.
++            if (static const bool stats = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr;
++                stats) {
++                static std::array<u64, 3> counts{};
++                static std::array<u64, 4> changed_state{};
++                ++counts[same ? 0 : (inserted ? 1 : 2)];
++                if (!same && !inserted) {
++                    // Did the tracker already know (CPU-modified), or was the page clean, and
++                    // was it GPU-modified?
++                    const bool known =
++                        memory_tracker.IsRegionCpuModified(page, Core::DEVICE_PAGESIZE);
++                    const bool gpu =
++                        memory_tracker.IsRegionGpuModified(page, Core::DEVICE_PAGESIZE);
++                    ++changed_state[(known ? 1 : 0) | (gpu ? 2 : 0)];
++                }
++                if (((counts[0] + counts[1] + counts[2]) & 0x3ffff) == 0) {
++                    LOG_INFO(HW_GPU,
++                             "Native bank pages checked: same {}, new {}, changed {} (tracker "
++                             "clean {}, CPU-modified {}, GPU {}, both {})",
++                             counts[0], counts[1], counts[2], changed_state[0],
++                             changed_state[1], changed_state[2], changed_state[3]);
++                }
++            }
++            if (same) {
++                continue;
++            }
++            std::memcpy(it->second.data(), guest, Core::DEVICE_PAGESIZE);
++            memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
+         }
+     }
+     const bool use_fast_buffer = needs_alignment_stream
+@@ -2892,7 +2933,8 @@ void BufferCache<P>::TraceTablePointer(bool compute, size_t stage, size_t ssbo_i
  
  template <class P>
  Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
@@ -2148,7 +3421,7 @@ index a248222d09..5fa5ffac2e 100644
      const GPUVAddr gpu_addr = gpu_memory->Read<u64>(ssbo_addr);
  
      if (gpu_addr == 0) {
-@@ -2913,8 +2920,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+@@ -2913,8 +2955,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
      };
      constexpr size_t ways = 4;
      thread_local std::array<std::array<CachedBinding, ways>, 512> binding_cache{};
@@ -2159,7 +3432,7 @@ index a248222d09..5fa5ffac2e 100644
      const size_t owner = gpu_memory->GetID() + 1;
      const u64 serial = gpu_memory->MapSerial();
      auto& set = binding_cache[((gpu_addr ^ next_qword ^ flags) * 0x9E3779B97F4A7C15ULL) >> 55];
-@@ -2934,10 +2941,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+@@ -2934,10 +2976,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
                  static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
              // A pointer read from a table in memory is the base of an object pool, read anywhere in
              // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
@@ -2176,7 +3449,7 @@ index a248222d09..5fa5ffac2e 100644
              }
              // A native (Switch 2) compute program's pointer is bare: the word after it is another
              // parameter (a dimension, stride or texture handle), not an NVN buffer size. Taking it
-@@ -2979,6 +2989,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+@@ -2979,6 +3024,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
          if (is_written) {
              binding_size = aligned_size;
          }
@@ -2191,10 +3464,23 @@ index a248222d09..5fa5ffac2e 100644
              .device_addr = *aligned_device_addr,
              .gpu_addr = aligned_gpu_addr,
 diff --git a/src/video_core/buffer_cache/buffer_cache_base.h b/src/video_core/buffer_cache/buffer_cache_base.h
-index e7971b444b..3107ad918e 100644
+index e7971b444b..c36a91e6a6 100644
 --- a/src/video_core/buffer_cache/buffer_cache_base.h
 +++ b/src/video_core/buffer_cache/buffer_cache_base.h
-@@ -583,7 +583,8 @@ private:
+@@ -444,8 +444,10 @@ public:
+     Common::SpinRecursiveMutex mutex;
+     Runtime& runtime;
+     bool any_buffer_uploaded = false;
+-    /// Indirectly read banks of native programs already uploaded this frame.
+-    std::unordered_set<DAddr> native_indirect_uniforms_this_frame;
++    /// The guest words of each page of native programs' indirectly read banks when last checked:
++    /// unchanged pages keep their tracking (marking them CPU-modified costs two mprotect calls
++    /// per page).
++    std::unordered_map<DAddr, std::array<u8, Core::DEVICE_PAGESIZE>> native_indirect_page_snapshots;
+ 
+ private:
+     template <typename Func>
+@@ -583,7 +585,8 @@ private:
  
      [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
                                                 bool native_pointer = false,
@@ -2204,6 +3490,150 @@ index e7971b444b..3107ad918e 100644
  
      void TraceTablePointer(bool compute, size_t stage, size_t ssbo_index, u32 cbuf_index,
                             u32 cbuf_offset, u32 indirect_offset, GPUVAddr holder,
+diff --git a/src/video_core/buffer_cache/uniform_stream_reuse.h b/src/video_core/buffer_cache/uniform_stream_reuse.h
+index 7ba31c4717..30a31b42e4 100644
+--- a/src/video_core/buffer_cache/uniform_stream_reuse.h
++++ b/src/video_core/buffer_cache/uniform_stream_reuse.h
+@@ -97,8 +97,17 @@ template <class Runtime, class DeviceMemory>
+     }
+     Reuse& reuse = UniformStreamReuseState<typename Runtime::StreamUniformRef>();
+     typename Reuse::Slot& slot = reuse.slots[stage][index];
+-    u8* const scratch = reuse.scratch.data();
+-    device_memory.ReadBlockUnsafe(device_addr, scratch, size);
++    // Within one device page the guest bytes are contiguous: use them in place instead of
++    // copying them to the scratch first.
++    constexpr u64 PageMask = (u64{1} << 12) - 1;
++    const u8* scratch = nullptr;
++    if ((device_addr & PageMask) + size <= PageMask + 1) {
++        scratch = device_memory.template GetPointer<u8>(device_addr);
++    }
++    if (scratch == nullptr) {
++        device_memory.ReadBlockUnsafe(device_addr, reuse.scratch.data(), size);
++        scratch = reuse.scratch.data();
++    }
+ 
+     const bool same_bytes =
+         slot.size == size && std::memcmp(slot.bytes.data(), scratch, size) == 0;
+@@ -106,15 +115,17 @@ template <class Runtime, class DeviceMemory>
+         runtime.RebindStreamUniform(slot.ref, size);
+         return true;
+     }
+-    const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
+-    std::memcpy(span.data(), scratch, size);
+-    slot.ref = runtime.LastStreamUniformRef();
+-    // After the allocation: the tick the stream region is tagged with is the one current now.
+-    slot.tick = runtime.CurrentTick();
++    // Upload the slot's copy: guest memory may change while this runs, and a later reuse must
++    // find exactly the bytes that were uploaded.
+     if (!same_bytes) {
+         slot.size = size;
+         std::memcpy(slot.bytes.data(), scratch, size);
+     }
++    const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
++    std::memcpy(span.data(), slot.bytes.data(), size);
++    slot.ref = runtime.LastStreamUniformRef();
++    // After the allocation: the tick the stream region is tagged with is the one current now.
++    slot.tick = runtime.CurrentTick();
+     return true;
+ }
+ 
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index 391226c9f2..9b2c49ff62 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -44,6 +44,35 @@ bool DmaPusher::IsMemoryWriter(const Engines::EngineInterface& engine, Engines::
+     }
+     return false;
+ }
++namespace {
++// Host methods that can write guest memory without noting it themselves.
++bool PullerMethodWritesMemory(u32 method) {
++    switch (static_cast<BufferMethods>(method)) {
++    case BufferMethods::BindObject:
++    case BufferMethods::Nop:
++    case BufferMethods::SemaphoreAddressHigh:
++    case BufferMethods::SemaphoreAddressLow:
++    case BufferMethods::SemaphoreSequencePayload:
++    case BufferMethods::SemaphoreOperation: // Releases note their own writes (Puller)
++    case BufferMethods::SemaphoreRelease:
++    case BufferMethods::NonStallInterrupt:
++    case BufferMethods::WrcacheFlush:
++    case BufferMethods::MemOpA:
++    case BufferMethods::MemOpB:
++    case BufferMethods::MemOpC:
++    case BufferMethods::MemOpD:
++    case BufferMethods::RefCnt:
++    case BufferMethods::SemaphoreAcquire: // Ampere: SEM_PAYLOAD_HI, like 0x17..0x19
++    case BufferMethods::SyncpointPayload:
++    case BufferMethods::SyncpointOperation:
++    case BufferMethods::WaitForIdle:
++    case BufferMethods::Yield:
++        return false;
++    default:
++        return !(method >= 0x17 && method <= 0x19);
++    }
++}
++} // namespace
+ 
+ DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
+     : system{system_}
+@@ -464,6 +493,9 @@ void DmaPusher::CallMethod(u32 argument) {
+             dma_state.subchannel,
+             dma_state.method_count,
+         });
++        if (PullerMethodWritesMemory(dma_state.method)) {
++            split.NoteMemoryBarrier(0x10000 | dma_state.method);
++        }
+     } else {
+         auto subchannel = subchannels[dma_state.subchannel];
+         if (subchannel == nullptr) {
+@@ -473,9 +505,16 @@ void DmaPusher::CallMethod(u32 argument) {
+         const auto engine_type = subchannel_type[dma_state.subchannel];
+         const bool writer = split.Active() &&
+                             IsMemoryWriter(*subchannel, engine_type, dma_state.method);
++        // Other engines' memory writes are not tracked by address (Maxwell3D::FrontDmaRead).
++        const bool untracked_writes = engine_type != Engines::EngineTypes::Maxwell3D &&
++                                      engine_type != Engines::EngineTypes::KeplerCompute &&
++                                      engine_type != Engines::EngineTypes::MaxwellDMA;
+         SCOPE_EXIT {
+             if (writer) {
+                 split.NoteWriter();
++            } else if (untracked_writes) {
++                split.NoteMemoryBarrier(0x20000 | (static_cast<u32>(engine_type) << 12) |
++                                        (dma_state.method & 0xfff));
+             }
+         };
+         if (split.Active()) {
+@@ -522,6 +561,12 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+     auto& split = VideoCommon::GpuSplit::Get();
+     if (dma_state.method < non_puller_methods) {
+         puller.CallMultiMethod(*this, dma_state.method, dma_state.subchannel, base_start, num_methods, dma_state.method_count);
++        for (u32 i = 0; i < num_methods; ++i) {
++            if (PullerMethodWritesMemory(dma_state.method + (dma_state.non_incrementing ? 0 : i))) {
++                split.NoteMemoryBarrier(0x10000 | dma_state.method);
++                break;
++            }
++        }
+     } else {
+         auto subchannel = subchannels[dma_state.subchannel];
+         if (subchannel == nullptr) {
+@@ -531,9 +576,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+         const auto engine_type = subchannel_type[dma_state.subchannel];
+         const bool writer = split.Active() &&
+                             IsMemoryWriter(*subchannel, engine_type, dma_state.method);
++        // Other engines' memory writes are not tracked by address (Maxwell3D::FrontDmaRead).
++        const bool untracked_writes = engine_type != Engines::EngineTypes::Maxwell3D &&
++                                      engine_type != Engines::EngineTypes::KeplerCompute &&
++                                      engine_type != Engines::EngineTypes::MaxwellDMA;
+         SCOPE_EXIT {
+             if (writer) {
+                 split.NoteWriter();
++            } else if (untracked_writes) {
++                split.NoteMemoryBarrier(0x20000 | (static_cast<u32>(engine_type) << 12) |
++                                        (dma_state.method & 0xfff));
+             }
+         };
+         if (split.Active()) {
 diff --git a/src/video_core/engines/kepler_compute.cpp b/src/video_core/engines/kepler_compute.cpp
 index 67d87a0abf..ca618680e5 100644
 --- a/src/video_core/engines/kepler_compute.cpp
@@ -2338,6 +3768,556 @@ index fb875798c8..e93994d024 100644
      void RememberDlssMotionVectors();
      bool TryFireEmblemUpscale(bool allow_history = true);
      void CaptureFireEmblemJitter();
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index 86fb6d24ac..e6e7a5a7b6 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -11,6 +11,8 @@
+ #include <limits>
+ #include <optional>
+ #include <string>
++#include <unordered_map>
++#include <unordered_set>
+ #include "common/assert.h"
+ #include "common/bit_util.h"
+ #include "common/scope_exit.h"
+@@ -1034,6 +1036,19 @@ struct Maxwell3D::FrontState {
+     /// then can it have a deferred instanced draw to issue at the end of a macro.
+     bool draw_pending{true};
+     bool skip_same{}; ///< SkipSameValueWrites() && FrontSkipSame(), read once
++    u32 dma_reads{};
++    /// Constant buffer words sent inline: value and the ring position after the upload.
++    struct ShadowWord {
++        u32 value;
++        u64 position;
++    };
++    std::unordered_map<GPUVAddr, ShadowWord> cb_shadow;
++    /// The inline-to-memory upload being sent writes [upload_begin, upload_end).
++    bool upload_tracked{};
++    GPUVAddr upload_begin{};
++    GPUVAddr upload_end{};
++    /// Pages that report_semaphore writes went to.
++    std::unordered_set<GPUVAddr> report_pages;
+ };
+ 
+ namespace {
+@@ -1183,6 +1198,88 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
+     } else {
+         split.Method(this, method, argument, is_last_call, nullptr);
+     }
++    if (execution_mask[method]) {
++        FrontNoteWrites(split, fs, method, 1, &argument);
++    }
++}
++
++void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
++                                u32 amount, const u32* values) {
++    constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
++    const auto covers = [method, amount](u32 index) {
++        return method <= index && index < method + amount;
++    };
++    const auto address = [&fs](u32 high, u32 low) {
++        return (GPUVAddr{fs.regs[high]} << 32) | fs.regs[low];
++    };
++    const auto note = [&split, this](GPUVAddr begin, GPUVAddr end) {
++        split.NoteMemoryWrite(&memory_manager, begin, end, true);
++    };
++    if (method >= cb_data && method < cb_data + 16) {
++        const GPUVAddr base = address(MAXWELL3D_REG_INDEX(const_buffer.address_high),
++                                      MAXWELL3D_REG_INDEX(const_buffer.address_low));
++        const u64 offset_end = fs.regs[MAXWELL3D_REG_INDEX(const_buffer.offset)];
++        const u64 bytes = u64{amount} * sizeof(u32);
++        if (offset_end < bytes) {
++            split.NoteMemoryBarrier(0x30001);
++            return;
++        }
++        const GPUVAddr begin = base + offset_end - bytes;
++        // In Replay the back writes the shadow RAM values, not these words: reads wait for it.
++        const bool replay = fs.control == Regs::ShadowRamControl::Replay;
++        split.NoteMemoryWrite(&memory_manager, begin, base + offset_end, replay);
++        if (replay) {
++            return;
++        }
++        // The words themselves, for MME DMA reads of them while the back has not written them.
++        if (fs.cb_shadow.size() >= 16384) {
++            const u64 done = split.Consumed();
++            std::erase_if(fs.cb_shadow, [done](const auto& entry) { return entry.second.position <= done; });
++            if (fs.cb_shadow.size() >= 16384) {
++                fs.cb_shadow.clear();
++            }
++        }
++        const u64 position = split.Position();
++        for (u32 i = 0; i < amount; ++i) {
++            fs.cb_shadow[begin + u64{i} * sizeof(u32)] = {values[i], position};
++        }
++        return;
++    }
++    if (covers(MAXWELL3D_REG_INDEX(launch_dma))) {
++        // Inline-to-memory: a pitch-linear upload writes its lines from the destination address;
++        // a block-linear one or a release on completion is not tracked.
++        const u32 launch = fs.regs[MAXWELL3D_REG_INDEX(launch_dma)];
++        const bool pitch_layout = (launch & 1) != 0;   // memory_layout: Pitch
++        const bool release = ((launch >> 4) & 3) == 2; // completion_type: Release
++        const u64 line_length = fs.regs[MAXWELL3D_REG_INDEX(upload.line_length_in)];
++        const u64 lines = fs.regs[MAXWELL3D_REG_INDEX(upload.line_count)];
++        const u64 pitch = fs.regs[MAXWELL3D_REG_INDEX(upload.dest.pitch)];
++        fs.upload_tracked = pitch_layout && !release && lines != 0;
++        if (fs.upload_tracked) {
++            fs.upload_begin = address(MAXWELL3D_REG_INDEX(upload.dest.address_high),
++                                      MAXWELL3D_REG_INDEX(upload.dest.address_low));
++            fs.upload_end = fs.upload_begin + (std::max)(pitch, line_length) * (lines - 1) + line_length;
++        } else {
++            split.NoteMemoryBarrier(0x30002);
++        }
++    }
++    if (covers(MAXWELL3D_REG_INDEX(inline_data))) {
++        if (fs.upload_tracked) {
++            note(fs.upload_begin, fs.upload_end);
++        } else {
++            split.NoteMemoryBarrier(0x30003);
++        }
++    }
++    if (covers(MAXWELL3D_REG_INDEX(report_semaphore.query))) {
++        // A release writes its payload, or a 16-byte report, at the semaphore address.
++        const GPUVAddr begin = address(MAXWELL3D_REG_INDEX(report_semaphore.address_high),
++                                       MAXWELL3D_REG_INDEX(report_semaphore.address_low));
++        note(begin, begin + 16);
++        if (fs.report_pages.size() < 4096) {
++            fs.report_pages.insert(begin >> 12);
++            fs.report_pages.insert((begin + 15) >> 12);
++        }
++    }
+ }
+ 
+ void Maxwell3D::FrontCallMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
+@@ -1288,6 +1385,7 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
+         }
+     }
+     split.MultiMethod(this, method, base_start, amount, methods_pending, nullptr);
++    FrontNoteWrites(split, fs, method, amount, base_start);
+ }
+ 
+ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split,
+@@ -1357,8 +1455,68 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+         memory_manager.ReadBlockUnsafe(source, diag_before.data(), read_bytes);
+     }
+     VideoCommon::Nx2Profile::CountDmaRead(macro);
+-    split.Drain(VideoCommon::DrainSite::MacroDmaRead);
+-    if (VideoCommon::QueryDma::TraceEnabled()) {
++    // Wait only for queued work that may write the words: compute, copies, untracked
++    // writes and overlapping inline constant buffer data. Ocarina of Time reads ~20,000 times a
++    // second; a full drain each time kept the two GPU threads waiting on each other. Every 4096th
++    // read still drains and checks for GPU-written data, which turns the precise reads off.
++    static bool precise_disabled{};
++    const bool precise = !precise_disabled &&
++                         !VideoCommon::QueryDma::TraceEnabled() &&
++                         !Tegra::Nx2CmdPageDiag::g_enabled &&
++                         fs.regs[MAXWELL3D_REG_INDEX(transform_feedback_enabled)] == 0 &&
++                         (++fs.dma_reads & 4095) != 0;
++    static thread_local std::vector<u32> shadow_words;
++    shadow_words.clear();
++    if (precise) {
++        const u64 target = split.ReadReadyPosition(&memory_manager, source, source + read_bytes);
++        const u64 consumed = split.Consumed();
++        // Constant buffer words sent inline after any other write to them are known here:
++        // read them without waiting for the back to store them.
++        if (target > consumed) {
++            const u64 opaque =
++                split.OpaqueReadyPosition(&memory_manager, source, source + read_bytes);
++            shadow_words.clear();
++            for (u32 i = 0; i < words; ++i) {
++                const auto it = fs.cb_shadow.find(source + u64{i} * sizeof(u32));
++                // Only words still queued: memory has the others, maybe rewritten by the CPU.
++                if (it == fs.cb_shadow.end() || it->second.position < opaque ||
++                    it->second.position <= consumed) {
++                    shadow_words.clear();
++                    break;
++                }
++                shadow_words.push_back(it->second.value);
++            }
++        }
++        const bool from_shadow = !shadow_words.empty();
++        // EDEN_NX2_MME_DMA_STATS: why precise reads wait (writer = compute or copy work).
++        if (static const bool stats = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr; stats) {
++            static std::array<u64, 4> causes{};
++            const u64 writer = split.WriterPosition();
++            const u64 barrier = split.MemoryBarrierPosition();
++            const size_t cause = target <= consumed || from_shadow ? 0
++                                 : target == writer ? 1
++                                 : target == barrier ? 2
++                                                     : 3;
++            ++causes[cause];
++            static std::unordered_map<u32, u64> sources;
++            if (cause == 2) {
++                ++sources[split.MemoryBarrierSource()];
++            }
++            if (((causes[0] + causes[1] + causes[2] + causes[3]) & 0xffff) == 0) {
++                LOG_INFO(HW_GPU, "MME DMA reads: no wait {}, writer {}, barrier {}, constant buffer {}",
++                         causes[0], causes[1], causes[2], causes[3]);
++                for (const auto& [source, count] : sources) {
++                    LOG_INFO(HW_GPU, "MME DMA read barrier source {:#x}: {}", source, count);
++                }
++            }
++        }
++        if (target > consumed && !from_shadow) {
++            split.WaitForPosition(target, VideoCommon::DrainSite::MacroDmaRead);
++        }
++    } else {
++        split.Drain(VideoCommon::DrainSite::MacroDmaRead);
++    }
++    if (!precise && VideoCommon::QueryDma::TraceEnabled()) {
+         split.Run(
+             [this, macro, method, source, read_bytes] {
+                 if (VideoCommon::QueryDma::HasPendingQueries(memory_manager, *rasterizer, source,
+@@ -1372,16 +1530,45 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+     if (VideoCommon::Nx2Profile::Enabled()) {
+         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
+     }
+-    if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
++    // The caches belong to the back, which may still be running after a precise wait.
++    if (!precise &&
++        memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
++        if (!precise_disabled) {
++            precise_disabled = true;
++            LOG_WARNING(HW_GPU, "Native MME DMA read of GPU-written memory at {:#x}: precise reads off",
++                        source);
++        }
+         split.Run(
+             [memory = &memory_manager, source, read_bytes] {
+                 memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+             },
+             VideoCommon::DrainSite::MacroDmaFlush);
+     }
++    // A read of a page reports were sent to writes out the reports the query cache still holds,
++    // waiting for their host results (Lichii #215), or the guest reads stale occlusion counts.
++    const bool reads_reports = [&] {
++        if (!shadow_words.empty() || words == 0) {
++            return false;
++        }
++        for (GPUVAddr page = source >> 12; page <= (source + read_bytes - 1) >> 12; ++page) {
++            if (fs.report_pages.contains(page)) {
++                return true;
++            }
++        }
++        return false;
++    }();
++    if (reads_reports) {
++        split.Run(
++            [this, source, read_bytes] {
++                VideoCommon::QueryDma::FlushPending(memory_manager, *rasterizer, source, read_bytes);
++            },
++            VideoCommon::DrainSite::MacroDmaFlush);
++    }
+     u32 changed{};
+     for (u32 i = 0; i < words; ++i) {
+-        const u32 word = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
++        const u32 word = !shadow_words.empty()
++                             ? shadow_words[i]
++                             : memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
+         if (method == 0x158) {
+             fs.parameters.push_back(word);
+         } else if (ram + i < native_data_ram.size()) {
+diff --git a/src/video_core/engines/maxwell_3d.h b/src/video_core/engines/maxwell_3d.h
+index 9247deff42..5df606151a 100644
+--- a/src/video_core/engines/maxwell_3d.h
++++ b/src/video_core/engines/maxwell_3d.h
+@@ -3402,6 +3402,8 @@ private:
+     void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
+     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
+                       u32 count);
++    void FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 amount,
++                         const u32* values);
+     void FrontVerify(VideoCommon::GpuSplit& split, FrontState& state);
+     void FinishFrontMacro(Core::System& system);
+     std::unique_ptr<FrontState> front;
+diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
+index 8fb6a43f47..7d175fbf0a 100644
+--- a/src/video_core/engines/puller.cpp
++++ b/src/video_core/engines/puller.cpp
+@@ -58,6 +58,43 @@ void OnBack(const Func& func) {
+     }
+ }
+ 
++// EDEN_NX2_MME_DMA_STATS: how semaphore acquires end and how long they hold the front.
++struct AcquireStats {
++    enum Kind : size_t { Fast, Own, Learned, AfterWait, AfterDrain, Suspended, Count };
++    std::array<u64, Count> counts{};
++    u64 wait_ns{};
++    u64 drain_ns{};
++    u64 suspended_ns{};
++    std::chrono::steady_clock::time_point last_log{std::chrono::steady_clock::now()};
++
++    static AcquireStats* Get() {
++        static const bool enabled = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr;
++        static AcquireStats stats;
++        return enabled ? &stats : nullptr;
++    }
++    void Note(Kind kind) {
++        ++counts[kind];
++        const auto now = std::chrono::steady_clock::now();
++        if (now - last_log < std::chrono::seconds{5}) {
++            return;
++        }
++        last_log = now;
++        LOG_INFO(HW_GPU,
++                 "Acquires (5 s): fast {}, own release {}, learned {}, met after wait {} ({} ms), "
++                 "met after drain {} ({} ms), suspended {} ({} ms)",
++                 counts[Fast], counts[Own], counts[Learned], counts[AfterWait], wait_ns / 1000000,
++                 counts[AfterDrain], drain_ns / 1000000, counts[Suspended], suspended_ns / 1000000);
++        counts = {};
++        wait_ns = drain_ns = suspended_ns = 0;
++    }
++};
++
++u64 NsSince(std::chrono::steady_clock::time_point start) {
++    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                std::chrono::steady_clock::now() - start)
++                                .count());
++}
++
+ void DrainBack() {
+     VideoCommon::GpuSplit::Get().Drain(VideoCommon::DrainSite::Acquire);
+ }
+@@ -130,6 +167,7 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
+     // counting those made the count odd ("suspended") at random, so submit-time snapshots were
+     // thrown away for about half of all entries (CommandList::snapshot_suspensions).
+     if (pending_acquire) {
++        if (auto* stats = AcquireStats::Get()) stats->suspended_ns += NsSince(pending_acquire->since);
+         pending_acquire.reset();
+         dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
+         Nx2SemaphoreWaiters::Get().Remove(this);
+@@ -211,6 +249,21 @@ void Puller::ProcessFenceActionMethod(DmaPusher& dma_pusher) {
+     }
+ }
+ 
++void Puller::NoteRelease(GPUVAddr address, u32 payload) {
++    auto& split = VideoCommon::GpuSplit::Get();
++    if (!split.Active()) {
++        return;
++    }
++    if (queued_releases.size() >= 1024) {
++        const u64 done = split.Consumed();
++        std::erase_if(queued_releases, [done](const auto& entry) { return entry.second.position <= done; });
++        if (queued_releases.size() >= 1024) {
++            queued_releases.clear();
++        }
++    }
++    queued_releases[address] = {payload, split.Position()};
++}
++
+ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+     const auto semaphoreOperationMask = 0xF;
+     const auto op = GpuSemaphoreOperation(regs.semaphore_trigger & semaphoreOperationMask);
+@@ -238,6 +291,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+         OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, properties, payload] {
+             rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload, properties, payload, 0);
+         });
++        const u64 size = properties == VideoCommon::QueryPropertiesFlags::IsAFence ? 4 : 16;
++        VideoCommon::GpuSplit::Get().NoteMemoryWrite(&dma_pusher.memory_manager, sequence_address,
++                                                     sequence_address + size);
++        NoteRelease(sequence_address, payload);
+     } else if (g_nx2_ampere) {
+         // Switch 2 waits on semaphores the CPU (or another channel) releases, e.g. once it has
+         // written the commands this channel runs next: suspend the channel until the value is
+@@ -255,8 +312,104 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+             return;
+         }
+         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
++        // A greater-or-equal acquire whose value is already in guest memory is met: releases only
++        // raise the value, and one still queued for the back (or held in its caches) is newer.
++        // Skip draining the back for it (~8% of the front in Ocarina of Time); later command
++        // fetches still wait for the work before it (NoteSync).
++        auto& split = VideoCommon::GpuSplit::Get();
++        if (op == GpuSemaphoreOperation::AcquireGequal && split.Active() &&
++            acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
++            if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Fast);
++            split.NoteSync();
++            return;
++        }
++        if (split.Active()) {
++            // This channel's own release, still queued, meets it once the back runs it, which is
++            // before anything sent after the acquire.
++            if (const auto it = queued_releases.find(acquire.address);
++                it != queued_releases.end() && it->second.position > split.Consumed() &&
++                acquire.Matches(it->second.payload)) {
++                if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Own);
++                split.NoteSync();
++                return;
++            }
++        }
++        if (split.Active()) {
++            // Only queued work that writes the semaphore (or untracked writes) can change it.
++            const u64 target = split.ReadReadyPosition(&dma_pusher.memory_manager, acquire.address,
++                                                       acquire.address + 4);
++            if (static const bool stats = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr; stats) {
++                static std::array<u64, 5> causes{};
++                const auto own = queued_releases.find(acquire.address);
++                const size_t cause = target <= split.Consumed()          ? 0
++                                     : target == split.WriterPosition() ? 1
++                                     : target == split.MemoryBarrierPosition() ? 2
++                                     : own != queued_releases.end()      ? 3
++                                                                         : 4;
++                ++causes[cause];
++                if (cause == 3 && causes[3] < 16) {
++                    LOG_INFO(HW_GPU, "Acquire op {} {:#x} at {:#x}: own release {:#x}",
++                             static_cast<u32>(op), acquire.value, acquire.address,
++                             own->second.payload);
++                }
++                if (((causes[0] + causes[1] + causes[2] + causes[3] + causes[4]) & 0x3fff) == 0) {
++                    LOG_INFO(HW_GPU,
++                             "Acquire waits: none {}, writer {}, barrier {} (source {:#x}), own "
++                             "release {}, other write {}",
++                             causes[0], causes[1], causes[2], split.MemoryBarrierSource(),
++                             causes[3], causes[4]);
++                }
++            }
++            // An address queued GPU work met 8 times in a row (compute completion, releases) is
++            // trusted to be met by the work before it; the back checks each skipped one and stops
++            // trusting the address if it was not.
++            // Any queued write the back makes before this point (compute, releases, reports).
++            const bool queued_writer = target > split.Consumed();
++            if (has_unmet_acquires.exchange(false, std::memory_order_acquire)) {
++                std::scoped_lock lock{unmet_mutex};
++                for (const GPUVAddr unmet : unmet_acquires) {
++                    gpu_met_acquires[unmet] = ~0U;
++                    LOG_WARNING(HW_GPU, "Acquire at {:#x} was not met by the GPU work before it",
++                                unmet);
++                }
++                unmet_acquires.clear();
++            }
++            if (queued_writer) {
++                const auto it = gpu_met_acquires.find(acquire.address);
++                if (it != gpu_met_acquires.end() && it->second >= 8 && it->second != ~0U) {
++                    split.Defer([this, memory = &dma_pusher.memory_manager, acquire_check = acquire] {
++                        if (!acquire_check.Matches(memory->Read<u32>(acquire_check.address))) {
++                            std::scoped_lock lock{unmet_mutex};
++                            unmet_acquires.push_back(acquire_check.address);
++                            has_unmet_acquires.store(true, std::memory_order_release);
++                        }
++                    });
++                    if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Learned);
++                    split.NoteSync();
++                    return;
++                }
++            }
++            const auto wait_start = std::chrono::steady_clock::now();
++            split.WaitForPosition(target, VideoCommon::DrainSite::Acquire);
++            if (auto* stats = AcquireStats::Get()) stats->wait_ns += NsSince(wait_start);
++            const bool met = acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address));
++            if (queued_writer) {
++                u32& count = gpu_met_acquires[acquire.address];
++                if (count != ~0U) {
++                    count = met ? count + 1 : 0;
++                }
++            }
++            if (met) {
++                if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterWait);
++                split.NoteSync();
++                return;
++            }
++        }
++        const auto drain_start = std::chrono::steady_clock::now();
+         DrainBack();
++        if (auto* stats = AcquireStats::Get()) stats->drain_ns += NsSince(drain_start);
+         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
++            if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterDrain);
+             return;
+         }
+         // Registered before the fences run, so a release among them that meets the value counts
+@@ -268,10 +421,13 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+         ReleaseFences(dma_pusher);
+         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+             pending_acquire = acquire;
++            pending_acquire->since = std::chrono::steady_clock::now();
++            if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Suspended);
+             dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
+             VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireWaits, 1);
+         } else {
+             waiters.Remove(this);
++            if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterDrain);
+         }
+     } else {
+         DrainBack();
+@@ -312,6 +468,8 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
+         rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload,
+                           VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
+     });
++    VideoCommon::GpuSplit::Get().NoteMemoryWrite(&dma_pusher.memory_manager, sequence_address,
++                                                 sequence_address + 4);
+ }
+ 
+ void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {
+@@ -341,8 +499,33 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
+             rasterizer->Query(address, VideoCommon::QueryType::Payload,
+                               VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
+         });
++        VideoCommon::GpuSplit::Get().NoteMemoryWrite(&dma_pusher.memory_manager, address,
++                                                     address + 4);
++        NoteRelease(address, payload);
+         return;
+     }
++    auto& split = VideoCommon::GpuSplit::Get();
++    if (operation <= 3 && operation != 1 && split.Active()) {
++        // This channel's own queued release meets it before anything sent after the acquire.
++        if (const auto it = queued_releases.find(address);
++            it != queued_releases.end() && it->second.position > split.Consumed()) {
++            const u32 released = it->second.payload;
++            if (operation == 0 ? released == payload
++                : operation == 2 ? released >= payload
++                                 : static_cast<s32>(released - payload) >= 0) {
++                split.NoteSync();
++                return;
++            }
++        }
++    }
++    if ((operation == 2 || operation == 3) && split.Active()) {
++        // A greater-or-equal value already in memory stays met: skip the back drain.
++        const u32 current = dma_pusher.memory_manager.Read<u32>(address);
++        if (operation == 2 ? current >= payload : static_cast<s32>(current - payload) >= 0) {
++            split.NoteSync();
++            return;
++        }
++    }
+     // Acquires: check once after flushing pending fences; never block the GPU thread on them.
+     DrainBack();
+     ReleaseFences(dma_pusher);
+diff --git a/src/video_core/engines/puller.h b/src/video_core/engines/puller.h
+index 2b9e2c5df3..463b6eda73 100644
+--- a/src/video_core/engines/puller.h
++++ b/src/video_core/engines/puller.h
+@@ -7,9 +7,12 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
++#include <mutex>
+ #include <chrono>
+ #include <cstddef>
+ #include <optional>
++#include <unordered_map>
+ #include <vector>
+ #include "common/bit_field.h"
+ #include "common/common_funcs.h"
+@@ -149,6 +152,19 @@ private:
+     [[nodiscard]] bool ExecuteMethodOnEngine(DmaPusher& dma_pusher, u32 method);
+ 
+     std::optional<PendingAcquire> pending_acquire;
++    /// Semaphore releases this channel queued for the split's back: payload and ring position.
++    struct QueuedRelease {
++        u32 payload;
++        u64 position;
++    };
++    std::unordered_map<GPUVAddr, QueuedRelease> queued_releases;
++    void NoteRelease(GPUVAddr address, u32 payload);
++    /// Acquires at an address that queued GPU work met each time: how often in a row, or ~0U
++    /// once the back found one unmet after skipping its wait.
++    std::unordered_map<GPUVAddr, u32> gpu_met_acquires;
++    std::mutex unmet_mutex;
++    std::vector<GPUVAddr> unmet_acquires;
++    std::atomic<bool> has_unmet_acquires{false};
+ 
+     /// Mapping of command subchannels to their bound engine ids
+     std::array<EngineID, 8> bound_engines{};
 diff --git a/src/video_core/fence_manager.h b/src/video_core/fence_manager.h
 index ccad4fc88b..b0b32eabb4 100644
 --- a/src/video_core/fence_manager.h
@@ -2359,8 +4339,34 @@ index ccad4fc88b..b0b32eabb4 100644
          if constexpr (!can_async_check) {
              TryReleasePendingFences<false>();
          }
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index 2ec20d6da2..e33dfe4781 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -109,10 +109,19 @@ struct GPU::Impl {
+ 
+     /// Synchronizes CPU writes with Host GPU memory.
+     void InvalidateGPUCache() {
+-        std::function<void(PAddr, size_t)> callback_writes([this](PAddr address, size_t size) {
+-            renderer->ReadRasterizer()->OnCacheInvalidation(address, size);
++        // Gathered first so the rasterizer takes each cache's lock once, not once per range: the
++        // CPU's write traps hold them too.
++        static thread_local std::vector<std::pair<PAddr, size_t>> ranges;
++        ranges.clear();
++        std::function<void(PAddr, size_t)> callback_writes([](PAddr address, size_t size) {
++            if (address != 0 && size != 0) {
++                ranges.emplace_back(address, size);
++            }
+         });
+         system.GatherGPUDirtyMemory(callback_writes);
++        if (!ranges.empty()) {
++            renderer->ReadRasterizer()->OnCacheInvalidations(ranges);
++        }
+     }
+ 
+     /// Signal the ending of command list.
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
-index 5adb071273..4dcfc5b921 100644
+index 5adb071273..65a119b91a 100644
 --- a/src/video_core/gpu_split.cpp
 +++ b/src/video_core/gpu_split.cpp
 @@ -20,6 +20,7 @@
@@ -2371,7 +4377,19 @@ index 5adb071273..4dcfc5b921 100644
  #include "common/thread.h"
  #include "core/core.h"
  #include "video_core/engines/engine_interface.h"
-@@ -247,7 +248,15 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
+@@ -140,6 +141,11 @@ void GpuSplit::Stop() {
+     ring.reset();
+     write_position = 0;
+     last_writer_position = 0;
++    last_barrier_position = 0;
++    write_blocks.clear();
++    opaque_blocks.clear();
++    latest_block_write = 0;
++    latest_opaque_write = 0;
+     last_sync_position = 0;
+     published_local = 0;
+     consumed_cache = 0;
+@@ -247,7 +253,15 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
  }
  
  void GpuSplit::Backoff(u32 spins, u64 target) {
@@ -2388,7 +4406,7 @@ index 5adb071273..4dcfc5b921 100644
          Pause();
          return;
      }
-@@ -411,7 +420,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
+@@ -411,7 +425,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
      on_back_thread = true;
      back_running.store(true, std::memory_order_release);
      Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
@@ -2397,7 +4415,7 @@ index 5adb071273..4dcfc5b921 100644
      system->RegisterHostThread();
  #ifdef _WIN32
      g_back_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
-@@ -423,12 +432,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
+@@ -423,12 +437,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
          if (available == read_position) {
              Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
              // The front usually sends more within microseconds: spin briefly before sleeping.
@@ -2414,11 +4432,206 @@ index 5adb071273..4dcfc5b921 100644
              if (available == read_position && idle_hook != nullptr) {
                  hook_requested.store(false, std::memory_order_seq_cst);
                  idle_hook(idle_argument);
+diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
+index 2e9250ff53..7b8381fe56 100644
+--- a/src/video_core/gpu_split.h
++++ b/src/video_core/gpu_split.h
+@@ -3,6 +3,7 @@
+ 
+ #pragma once
+ 
++#include <algorithm>
+ #include <array>
+ #include <atomic>
+ #include <cstring>
+@@ -10,6 +11,8 @@
+ #include <memory>
+ #include <thread>
+ #include <type_traits>
++#include <unordered_map>
++#include <vector>
+ 
+ #include "common/common_types.h"
+ 
+@@ -175,6 +178,71 @@ public:
+     /// of it was still queued.
+     bool WaitForSync();
+ 
++    /// Work that may write guest memory at addresses the front does not track was just sent.
++    /// `source` names the sender for EDEN_NX2_MME_DMA_STATS.
++    void NoteMemoryBarrier(u32 source = 0) {
++        last_barrier_position = write_position;
++        last_barrier_source = source;
++    }
++    [[nodiscard]] u32 MemoryBarrierSource() const {
++        return last_barrier_source;
++    }
++    /// Where the last untracked memory write (or compute and copy work) was sent.
++    [[nodiscard]] u64 MemoryBarrierPosition() const {
++        return std::max(last_barrier_position, last_writer_position);
++    }
++    [[nodiscard]] u64 WriterPosition() const {
++        return last_writer_position;
++    }
++    [[nodiscard]] u64 Position() const {
++        return write_position;
++    }
++    /// How far the back has executed.
++    [[nodiscard]] u64 Consumed() {
++        consumed_cache = consumed.load(std::memory_order_acquire);
++        return consumed_cache;
++    }
++    /// Waits until the back executed everything sent before `target`.
++    void WaitForPosition(u64 target, DrainSite site) {
++        WaitFor(std::min(target, write_position), site);
++    }
++
++    /// Work just sent writes [begin, end) of the GPU address space `space` (a memory manager).
++    /// `opaque`: the front does not know the data written.
++    void NoteMemoryWrite(const void* space, u64 begin, u64 end, bool opaque = true) {
++        if (end <= begin) {
++            return;
++        }
++        if (((end - 1) >> WriteBlockShift) - (begin >> WriteBlockShift) >= MaxWriteBlocks) {
++            NoteMemoryBarrier(0x40001);
++            return;
++        }
++        if (write_blocks.size() >= 8192 && Consumed() >= latest_block_write) {
++            write_blocks.clear();
++            opaque_blocks.clear();
++        }
++        if (write_blocks.size() >= 65536) {
++            write_blocks.clear();
++            opaque_blocks.clear();
++            NoteMemoryBarrier(0x40000);
++        }
++        NoteBlocks(write_blocks, space, begin, end);
++        latest_block_write = write_position;
++        if (opaque) {
++            NoteBlocks(opaque_blocks, space, begin, end);
++            latest_opaque_write = write_position;
++        }
++    }
++    /// The position the back must reach before [begin, end) of `space` can be read: the last
++    /// untracked write, or the last queued write that overlaps it.
++    [[nodiscard]] u64 ReadReadyPosition(const void* space, u64 begin, u64 end) {
++        return ReadyPosition(write_blocks, latest_block_write, space, begin, end);
++    }
++    /// As ReadReadyPosition, for writes whose data the front does not know.
++    [[nodiscard]] u64 OpaqueReadyPosition(const void* space, u64 begin, u64 end) {
++        return ReadyPosition(opaque_blocks, latest_opaque_write, space, begin, end);
++    }
++
+ private:
+     friend struct GpuSplitTestAccess;
+ 
+@@ -246,6 +314,42 @@ private:
+     // Front side.
+     u64 write_position{};
+     u64 last_writer_position{};
++    u64 last_barrier_position{};
++    u32 last_barrier_source{};
++    // Queued tracked writes: the ring position after the last write to each 64-byte block.
++    static constexpr u64 WriteBlockShift = 6;
++    static constexpr u64 MaxWriteBlocks = 1024;
++    static u64 WriteBlockKey(const void* space, u64 block) {
++        // Aliasing only makes a read wait for an unrelated write.
++        return block ^ (static_cast<u64>(reinterpret_cast<uintptr_t>(space)) << 40);
++    }
++    std::unordered_map<u64, u64> write_blocks;
++    std::unordered_map<u64, u64> opaque_blocks;
++    u64 latest_block_write{};
++    u64 latest_opaque_write{};
++    void NoteBlocks(std::unordered_map<u64, u64>& blocks, const void* space, u64 begin, u64 end) {
++        for (u64 block = begin >> WriteBlockShift; block <= (end - 1) >> WriteBlockShift; ++block) {
++            blocks[WriteBlockKey(space, block)] = write_position;
++        }
++    }
++    u64 ReadyPosition(const std::unordered_map<u64, u64>& blocks, u64 latest, const void* space,
++                      u64 begin, u64 end) {
++        u64 target = MemoryBarrierPosition();
++        if (end <= begin || blocks.empty() || latest <= target) {
++            return target;
++        }
++        const u64 first = begin >> WriteBlockShift;
++        const u64 last = (end - 1) >> WriteBlockShift;
++        if (last - first >= MaxWriteBlocks) {
++            return std::max(target, latest);
++        }
++        for (u64 block = first; block <= last; ++block) {
++            if (const auto it = blocks.find(WriteBlockKey(space, block)); it != blocks.end()) {
++                target = std::max(target, it->second);
++            }
++        }
++        return target;
++    }
+     u64 last_sync_position{};
+     u64 published_local{};
+     u64 consumed_cache{};
 diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
-index 7f3756953b..aa6142b278 100644
+index 7f3756953b..5238f36c96 100644
 --- a/src/video_core/gpu_thread.cpp
 +++ b/src/video_core/gpu_thread.cpp
-@@ -52,7 +52,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+@@ -4,6 +4,7 @@
+ // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <array>
+ #include <chrono>
+ #include <thread>
+ 
+@@ -18,6 +19,7 @@
+ #include "video_core/dma_pusher.h"
+ #include "video_core/gpu.h"
+ #include "video_core/gpu_thread.h"
++#include "video_core/nx2.h"
+ #include "video_core/gpu_split.h"
+ #include "video_core/nx2_profile.h"
+ #include "video_core/host1x/host1x.h"
+@@ -38,6 +40,42 @@ void SignalCommand(SynchState& state, u64 fence, bool block) {
+     }
+ }
+ 
++// EDEN_NX2_MME_DMA_STATS: where the GPU thread's time goes while channels are suspended.
++struct ThreadStats {
++    enum Kind : size_t { PendingEmpty, Idle, Count };
++    std::array<u64, Count> ns{};
++    std::chrono::steady_clock::time_point last_log{std::chrono::steady_clock::now()};
++
++    struct Timer {
++        Timer(ThreadStats* stats_, Kind kind_)
++            : stats{stats_}, kind{kind_}, start{std::chrono::steady_clock::now()} {}
++        ~Timer() {
++            if (stats) {
++                stats->ns[kind] += static_cast<u64>(
++                    std::chrono::duration_cast<std::chrono::nanoseconds>(
++                        std::chrono::steady_clock::now() - start)
++                        .count());
++            }
++        }
++        ThreadStats* stats;
++        Kind kind;
++        std::chrono::steady_clock::time_point start;
++    };
++
++    void MaybeLog(bool pending) {
++        const auto now = std::chrono::steady_clock::now();
++        if (now - last_log < std::chrono::seconds{5}) {
++            return;
++        }
++        last_log = now;
++        LOG_INFO(HW_GPU,
++                 "GPU thread (5 s): {} ms waiting for commands with channels suspended, {} ms "
++                 "idle with none suspended (suspended now: {})",
++                 ns[PendingEmpty] / 1000000, ns[Idle] / 1000000, pending);
++        ns = {};
++    }
++};
++
+ } // Anonymous namespace
+ 
+ ThreadManager::ThreadManager(Core::System& system_)
+@@ -52,7 +90,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
          const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuCommand};
          Common::SetCurrentThreadName("GPU");
          Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
@@ -2427,6 +4640,133 @@ index 7f3756953b..aa6142b278 100644
          system.RegisterHostThread();
  
          auto current_context = context.Acquire();
+@@ -61,11 +99,17 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+         auto last_progress = std::chrono::steady_clock::now();
+         namespace Profile = VideoCommon::Nx2Profile;
+         auto& split = VideoCommon::GpuSplit::Get();
++        ThreadStats* const thread_stats =
++            std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr ? new ThreadStats{} : nullptr;
+         while (!stop_token.stop_requested()) {
++            if (thread_stats) {
++                thread_stats->MaybeLog(scheduler.HasPendingChannels());
++            }
+             Profile::Report();
+             split.MaybeStart(system);
+             if (scheduler.HasPendingChannels()) {
+                 // Suspended channels wait on semaphores the CPU releases: poll them meanwhile.
++                const u64 seen_latch = Tegra::Nx2SemaphoreWaiters::Get().LatchEpoch();
+                 {
+                     Profile::Scope scope{Profile::Zone::ResumePending};
+                     scheduler.ResumePending(system.GPU());
+@@ -75,16 +119,21 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+                     // millisecond before sleeping, or every wait also waits out a host sleep
+                     // (title 1 waits ~25 times a second).
+                     Profile::Scope scope{Profile::Zone::PendingSleep};
++                    const ThreadStats::Timer timer{thread_stats, ThreadStats::PendingEmpty};
+                     if (std::chrono::steady_clock::now() - last_progress <
+                         std::chrono::microseconds{500}) {
+                         std::this_thread::yield();
+                     } else {
+-                        std::this_thread::sleep_for(std::chrono::milliseconds{1});
++                        // A GPU release that meets a suspended acquire wakes this at once;
++                        // CPU releases are still found by polling.
++                        Tegra::Nx2SemaphoreWaiters::Get().WaitForLatch(
++                            seen_latch, std::chrono::milliseconds{1});
+                     }
+                     continue;
+                 }
+             } else {
+                 Profile::Scope scope{Profile::Zone::Idle};
++                const ThreadStats::Timer timer{thread_stats, ThreadStats::Idle};
+                 state.queue.PopWait(next, stop_token);
+             }
+             if (stop_token.stop_requested()) {
+diff --git a/src/video_core/macro.cpp b/src/video_core/macro.cpp
+index b6bca447a6..c1c29f4edc 100644
+--- a/src/video_core/macro.cpp
++++ b/src/video_core/macro.cpp
+@@ -1435,8 +1435,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
+                         }
+                     }
+                     // Accurate GPU mode holds report and semaphore writes in the query cache until a
+-                    // fence: write them out, or occlusion predicates read stale values. The split only
+-                    // runs with immediate payload writes, and the query cache belongs to its back.
++                    // fence: write them out, or occlusion predicates read stale values.
+                     const bool owns_caches = !VideoCommon::GpuSplit::Get().Active() ||
+                                              VideoCommon::GpuSplit::OnBackThread();
+                     if (owns_caches && VideoCommon::QueryDma::TraceEnabled() &&
+@@ -1445,8 +1444,9 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
+                         VideoCommon::QueryDma::Trace(memory, maxwell3d.Rasterizer(), method, address,
+                                                      source, read_bytes);
+                     }
+-                    if (!VideoCommon::GpuSplit::Get().Active()) {
+-                        memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
++                    if (owns_caches) {
++                        VideoCommon::QueryDma::FlushPending(memory, maxwell3d.Rasterizer(), source,
++                                                            read_bytes);
+                     }
+                     if (memory.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
+                         memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+diff --git a/src/video_core/nx2.h b/src/video_core/nx2.h
+index fc0cfd0487..74f09eb3db 100644
+--- a/src/video_core/nx2.h
++++ b/src/video_core/nx2.h
+@@ -6,6 +6,8 @@
+ #include <algorithm>
+ #include <array>
+ #include <atomic>
++#include <chrono>
++#include <condition_variable>
+ #include <functional>
+ #include <map>
+ #include <mutex>
+@@ -371,12 +373,33 @@ public:
+         if (count.load(std::memory_order_acquire) == 0) {
+             return;
+         }
+-        std::scoped_lock lk{mutex};
+-        for (auto& w : waiters) {
+-            if (w.address == device_address && !w.latched && Matches(w, value)) {
+-                w.latched = true;
++        bool latched = false;
++        {
++            std::scoped_lock lk{mutex};
++            for (auto& w : waiters) {
++                if (w.address == device_address && !w.latched && Matches(w, value)) {
++                    w.latched = true;
++                    latched = true;
++                }
++            }
++            if (latched) {
++                ++latch_epoch;
+             }
+         }
++        if (latched) {
++            latch_cv.notify_all();
++        }
++    }
++
++    [[nodiscard]] u64 LatchEpoch() {
++        std::scoped_lock lk{mutex};
++        return latch_epoch;
++    }
++
++    /// Sleeps until a waiter latches after `seen` (LatchEpoch) or `timeout` passes.
++    void WaitForLatch(u64 seen, std::chrono::microseconds timeout) {
++        std::unique_lock lk{mutex};
++        latch_cv.wait_for(lk, timeout, [&] { return latch_epoch != seen; });
+     }
+ 
+ private:
+@@ -402,6 +425,8 @@ private:
+     }
+ 
+     std::mutex mutex;
++    std::condition_variable latch_cv;
++    u64 latch_epoch{};
+     std::vector<Waiter> waiters;
+     std::atomic<size_t> count{};
+ };
 diff --git a/src/video_core/oot_network.h b/src/video_core/oot_network.h
 new file mode 100644
 index 0000000000..a09df8144d
@@ -2548,8 +4888,61 @@ index 1cd92dcfe2..83b1da6552 100644
      auto [cont_addr, base] = gen_caching_indexing(cpu_addr);
      {
          std::scoped_lock lock(cache_mutex);
+diff --git a/src/video_core/query_cache/query_cache_base.h b/src/video_core/query_cache/query_cache_base.h
+index 5a60e42986..5adcdbcf96 100644
+--- a/src/video_core/query_cache/query_cache_base.h
++++ b/src/video_core/query_cache/query_cache_base.h
+@@ -63,14 +63,19 @@ public:
+     }
+ 
+     void FlushRegion(VAddr addr, std::size_t size) {
++        if (SemiFlushRegion(addr, size)) {
++            RequestGuestHostSync();
++        }
++    }
++
++    /// Writes out the finalized reports in the region. True when some still wait for host results.
++    bool SemiFlushRegion(VAddr addr, std::size_t size) {
+         bool result = false;
+         IterateCache<false>(addr, size, [this, &result](QueryLocation location) {
+             result |= SemiFlushQueryDirty(location);
+             return result;
+         });
+-        if (result) {
+-            RequestGuestHostSync();
+-        }
++        return result;
+     }
+ 
+     static u64 BuildMask(std::span<const QueryType> types) {
+diff --git a/src/video_core/query_dma.h b/src/video_core/query_dma.h
+index fdcc22341d..c236cca622 100644
+--- a/src/video_core/query_dma.h
++++ b/src/video_core/query_dma.h
+@@ -43,6 +43,21 @@ inline bool HasPendingQueries(const Tegra::MemoryManager& memory,
+     return false;
+ }
+ 
++/// Writes the reports in [source, source + size) to guest memory, waiting for pending host
++/// results. Runs where the rasterizer's caches are owned.
++inline void FlushPending(const Tegra::MemoryManager& memory,
++                         VideoCore::RasterizerInterface& rasterizer, GPUVAddr source, size_t size) {
++    constexpr GPUVAddr page_size = 0x1000;
++    const GPUVAddr end = source + size;
++    for (GPUVAddr begin = source; begin < end;) {
++        const GPUVAddr page_end = (std::min)((begin & ~(page_size - 1)) + page_size, end);
++        if (const auto device = memory.GpuToCpuAddress(begin)) {
++            rasterizer.FlushQueryResults(*device, page_end - begin);
++        }
++        begin = page_end;
++    }
++}
++
+ /// Logs a read of pending reports with the words it reads, and the same words once the next
+ /// fence has popped and the results have landed.
+ inline void Trace(const Tegra::MemoryManager& memory, VideoCore::RasterizerInterface& rasterizer,
 diff --git a/src/video_core/rasterizer_interface.h b/src/video_core/rasterizer_interface.h
-index 9cebc4f29f..9d47dfcad1 100644
+index 9cebc4f29f..34516b2517 100644
 --- a/src/video_core/rasterizer_interface.h
 +++ b/src/video_core/rasterizer_interface.h
 @@ -34,6 +34,10 @@ struct TICEntry;
@@ -2574,7 +4967,33 @@ index 9cebc4f29f..9d47dfcad1 100644
  class RasterizerInterface {
  public:
      virtual ~RasterizerInterface() = default;
-@@ -236,6 +244,12 @@ public:
+@@ -91,6 +99,11 @@ public:
+     /// Release all pending fences.
+     virtual void ReleaseFences(bool force = true) = 0;
+ 
++    /// Writes the region's query reports to guest memory, waiting for pending host results.
++    virtual void FlushQueryResults(DAddr addr, u64 size) {
++        FlushRegion(addr, size, VideoCommon::CacheType::QueryCache);
++    }
++
+     /// Notify rasterizer that all caches should be flushed to Switch memory
+     virtual void FlushAll() = 0;
+ 
+@@ -153,6 +166,13 @@ public:
+     /// Notify rasterizer that any caches of the specified region are desync with guest
+     virtual void OnCacheInvalidation(PAddr addr, u64 size) = 0;
+ 
++    /// OnCacheInvalidation for each range, taking each cache's lock once.
++    virtual void OnCacheInvalidations(std::span<const std::pair<PAddr, size_t>> ranges) {
++        for (const auto& [addr, size] : ranges) {
++            OnCacheInvalidation(addr, size);
++        }
++    }
++
+     virtual bool TryCacheInvalidation(DAddr addr, u64 size) {
+         if (MustFlushRegion(addr, size, VideoCommon::CacheType::BufferCache)) return false;
+         OnCacheInvalidation(addr, size);
+@@ -236,6 +256,12 @@ public:
          return std::nullopt;
      }
  
@@ -2631,6 +5050,53 @@ index 46f8276074..2dc357e52e 100644
  
  private:
      /// Updates the framebuffer layout of the contained render window handle.
+diff --git a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
+index 197c27043a..752eaf85ad 100644
+--- a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
++++ b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
+@@ -107,7 +107,8 @@ void ComputePipeline::Configure() {
+     const bool via_header_index{qmd.linked_tsc != 0};
+     const auto read_handle{[&](const auto& desc, u32 index) {
+         if (desc.handle_program != ~0U) {
+-            // Read by the shader from a storage buffer: computed for this dispatch.
++            // Read by the shader from a storage buffer: computed for this dispatch (for an
++            // array, for each element).
+             return TexturePair(VideoCommon::EvaluateTextureHandle(
+                                    info, desc.handle_program, *gpu_memory,
+                                    [&](u32 cbuf) -> GPUVAddr {
+@@ -116,7 +117,8 @@ void ComputePipeline::Configure() {
+                                                        1) != 0
+                                                   ? cbufs[cbuf].Address()
+                                                   : GPUVAddr{};
+-                                   }),
++                                   },
++                                   index),
+                                via_header_index);
+         }
+         ASSERT(((qmd.const_buffer_enable_mask >> desc.cbuf_index) & 1) != 0);
+diff --git a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
+index 9574e631f3..46a000078e 100644
+--- a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
++++ b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
+@@ -311,14 +311,16 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+         const auto& cbufs{maxwell3d->state.shader_stages[stage].const_buffers};
+         const auto read_handle{[&](const auto& desc, u32 index) {
+             if (desc.handle_program != ~0U) {
+-                // Read by the shader from a storage buffer: computed for this draw.
++                // Read by the shader from a storage buffer: computed for this draw (for an
++                // array, for each element).
+                 return TexturePair(VideoCommon::EvaluateTextureHandle(
+                                        info, desc.handle_program, *gpu_memory,
+                                        [&](u32 cbuf) -> GPUVAddr {
+                                            return cbuf < cbufs.size() && cbufs[cbuf].enabled
+                                                       ? cbufs[cbuf].address
+                                                       : GPUVAddr{};
+-                                       }),
++                                       },
++                                       index),
+                                    via_header_index);
+             }
+             ASSERT(cbufs[desc.cbuf_index].enabled);
 diff --git a/src/video_core/renderer_opengl/renderer_opengl.cpp b/src/video_core/renderer_opengl/renderer_opengl.cpp
 index f9ec32e652..9e88820286 100644
 --- a/src/video_core/renderer_opengl/renderer_opengl.cpp
@@ -2648,6 +5114,48 @@ index f9ec32e652..9e88820286 100644
      LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
      LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
      LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
+diff --git a/src/video_core/renderer_vulkan/pipeline_helper.h b/src/video_core/renderer_vulkan/pipeline_helper.h
+index 9755a5bf26..46a372af01 100644
+--- a/src/video_core/renderer_vulkan/pipeline_helper.h
++++ b/src/video_core/renderer_vulkan/pipeline_helper.h
+@@ -356,6 +356,22 @@ public:
+     std::array<f32, 4> words{};
+ };
+ 
++/// Whether a depth-compare sample of image_view is undefined and its handle garbage: its format
++/// has no depth comparison on this device (what the sample returns then differs between vendors)
++/// and it is an integer or block-compressed color texture, or its handle was read from memory (a
++/// handle program). A single-channel color texture with a cbuf handle may be one a game compares
++/// on purpose, and keeps its view.
++[[nodiscard]] inline bool IsUncomparable(const ImageView& image_view, bool read_from_memory) {
++    if (image_view.SupportsDepthComparison()) {
++        return false;
++    }
++    const VideoCore::Surface::PixelFormat format{image_view.format};
++    return read_from_memory || VideoCore::Surface::IsPixelFormatInteger(format) ||
++           VideoCore::Surface::IsPixelFormatASTC(format) ||
++           VideoCore::Surface::IsPixelFormatBCn(format) ||
++           VideoCore::Surface::IsPixelFormatETC2(format);
++}
++
+ inline void PushImageDescriptors(TextureCache& texture_cache,
+                                  GuestDescriptorQueue& guest_descriptor_queue,
+                                  const Shader::Info& info, RescalingPushConstant& rescaling,
+@@ -368,8 +384,13 @@ inline void PushImageDescriptors(TextureCache& texture_cache,
+     for (const auto& desc : info.texture_descriptors) {
+         bool is_rescaled{};
+         for (u32 index = 0; index < desc.count; ++index) {
+-            const VideoCommon::ImageViewId image_view_id{(views++)->id};
++            VideoCommon::ImageViewId image_view_id{(views++)->id};
+             const VideoCommon::SamplerId sampler_id{*(samplers++)};
++            if (desc.is_depth && image_view_id != VideoCommon::NULL_IMAGE_VIEW_ID &&
++                IsUncomparable(texture_cache.GetImageView(image_view_id),
++                               desc.handle_program != ~0U)) {
++                image_view_id = VideoCommon::NULL_IMAGE_VIEW_ID;
++            }
+             ImageView& image_view{texture_cache.GetImageView(image_view_id)};
+             VkImageView vk_image_view{image_view.Handle(desc.type)};
+             if (vk_image_view == VK_NULL_HANDLE) {
 diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 index 3ffc6246bd..4dbd14cc4e 100644
 --- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
@@ -2704,7 +5212,7 @@ index f7bc117c35..024c9c65ca 100644
      void BindBuffer(const Buffer& buffer, u32 offset, u32 size) {
          const VkBuffer handle = buffer.Handle();
 diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
-index fa48503830..634deb2b47 100644
+index fa48503830..8c88882970 100644
 --- a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
 +++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
 @@ -6,6 +6,7 @@
@@ -2782,6 +5290,75 @@ index fa48503830..634deb2b47 100644
      guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
  
      buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
+@@ -365,18 +391,16 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+     const auto& qmd{kepler_compute.launch_description};
+     const auto& cbufs{qmd.const_buffer_config};
+     const bool via_header_index{qmd.linked_tsc != 0};
++    const auto cbuf_address{[&](u32 cbuf) -> GPUVAddr {
++        return cbuf < cbufs.size() && ((qmd.const_buffer_enable_mask >> cbuf) & 1) != 0
++                   ? cbufs[cbuf].Address()
++                   : GPUVAddr{};
++    }};
+     const auto read_handle{[&](const auto& desc, u32 index) {
+         if (desc.handle_program != ~0U) {
+             // Read by the shader from a storage buffer: computed for this dispatch.
+-            return TexturePair(VideoCommon::EvaluateTextureHandle(
+-                                   info, desc.handle_program, gpu_memory,
+-                                   [&](u32 cbuf) -> GPUVAddr {
+-                                       return cbuf < cbufs.size() &&
+-                                                      ((qmd.const_buffer_enable_mask >> cbuf) &
+-                                                       1) != 0
+-                                                  ? cbufs[cbuf].Address()
+-                                                  : GPUVAddr{};
+-                                   }),
++            return TexturePair(VideoCommon::EvaluateTextureHandle(info, desc.handle_program,
++                                                                  gpu_memory, cbuf_address, index),
+                                via_header_index);
+         }
+         ASSERT(((qmd.const_buffer_enable_mask >> desc.cbuf_index) & 1) != 0);
+@@ -413,7 +437,34 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+     for (const auto& desc : info.image_buffer_descriptors) {
+         add_image(desc, false);
+     }
++    u32 texture{};
+     for (const auto& desc : info.texture_descriptors) {
++        if (desc.count > 1 && desc.handle_program != ~0U) {
++            // A table of handles the shader indexes, read in one go; elements repeating a
++            // sampler share its lookup.
++            const size_t first{views.size()};
++            u32 last_sampler_index{~0U};
++            VideoCommon::SamplerId sampler{};
++            VideoCommon::EvaluateTextureHandles(
++                info, desc.handle_program, gpu_memory, cbuf_address, desc.count, [&](u32, u32 raw) {
++                    const auto handle{TexturePair(raw, via_header_index)};
++                    views.push_back({handle.first});
++                    if (handle.second != last_sampler_index) {
++                        sampler = texture_cache.GetSamplerId(handle.second, true);
++                        last_sampler_index = handle.second;
++                    }
++                    samplers.push_back(sampler);
++                });
++            if (VideoCommon::HandleTableNotes::Wanted()) [[unlikely]] {
++                std::vector<u32> tics(desc.count);
++                for (u32 index = 0; index < desc.count; ++index) {
++                    tics[index] = views[first + index].index;
++                }
++                VideoCommon::HandleTableNotes::Note(shader_hash, texture, tics);
++            }
++            ++texture;
++            continue;
++        }
+         for (u32 index = 0; index < desc.count; ++index) {
+             const auto handle{read_handle(desc, index)};
+             views.push_back({handle.first});
+@@ -421,6 +472,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+             VideoCommon::SamplerId sampler = texture_cache.GetSamplerId(handle.second, true);
+             samplers.push_back(sampler);
+         }
++        ++texture;
+     }
+     for (const auto& desc : info.image_descriptors) {
+         add_image(desc, desc.is_written);
 diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.h b/src/video_core/renderer_vulkan/vk_compute_pipeline.h
 index d28660665a..e64be4fb9d 100644
 --- a/src/video_core/renderer_vulkan/vk_compute_pipeline.h
@@ -2806,10 +5383,89 @@ index d28660665a..e64be4fb9d 100644
      boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
      std::vector<SampledImage> sampled_images;
 diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
-index 0cdc7521bf..abcb69bce4 100644
+index 0cdc7521bf..314fa78210 100644
 --- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
 +++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
-@@ -752,7 +752,9 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+@@ -306,6 +306,12 @@ GraphicsPipeline::GraphicsPipeline(
+         num_descriptor_entries += NumDescriptorEntries(*info);
+     }
+     fragment_has_color0_output = stage_infos[NUM_STAGES - 1].stores_frag_color[0];
++    // The guest leaves render target components the fragment shader doesn't output untouched,
++    // while Vulkan writes undefined values to them (AMD writes garbage), so they are masked out.
++    for (size_t rt = 0; rt < Maxwell::NumRenderTargets; ++rt) {
++        color_output_mask |= u32{stage_infos[NUM_STAGES - 1].frag_color_components[rt]}
++                             << (rt * 4);
++    }
+     const auto any_written = [](const auto& descriptors) {
+         return std::ranges::any_of(descriptors, [](const auto& desc) { return desc.is_written; });
+     };
+@@ -433,16 +439,14 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+             }
+         }
+         const auto& cbufs{maxwell3d->state.shader_stages[stage].const_buffers};
++        const auto cbuf_address{[&cbufs](u32 cbuf) -> GPUVAddr {
++            return cbuf < cbufs.size() && cbufs[cbuf].enabled ? cbufs[cbuf].address : GPUVAddr{};
++        }};
+         const auto read_handle{[&](const auto& desc, u32 index) {
+             if (desc.handle_program != ~0U) {
+                 // Read by the shader from a storage buffer: computed for this draw.
+                 return TexturePair(VideoCommon::EvaluateTextureHandle(
+-                                       info, desc.handle_program, *gpu_memory,
+-                                       [&](u32 cbuf) -> GPUVAddr {
+-                                           return cbuf < cbufs.size() && cbufs[cbuf].enabled
+-                                                      ? cbufs[cbuf].address
+-                                                      : GPUVAddr{};
+-                                       }),
++                                       info, desc.handle_program, *gpu_memory, cbuf_address, index),
+                                    via_header_index);
+             }
+             ASSERT(cbufs[desc.cbuf_index].enabled);
+@@ -485,7 +489,36 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+                 add_image(desc, false);
+             }
+         }
++        u32 texture{};
+         for (const auto& desc : info.texture_descriptors) {
++            if (desc.count > 1 && desc.handle_program != ~0U) {
++                // A table of handles the shader indexes (one shadow map per light, say), read
++                // in one go; elements repeating a sampler share its lookup.
++                const size_t first{views.size()};
++                u32 last_sampler_index{~0U};
++                VideoCommon::SamplerId sampler{};
++                VideoCommon::EvaluateTextureHandles(
++                    info, desc.handle_program, *gpu_memory, cbuf_address, desc.count,
++                    [&](u32, u32 raw) {
++                        const auto handle{TexturePair(raw, via_header_index)};
++                        views.push_back({handle.first});
++                        if (handle.second != last_sampler_index) {
++                            sampler = texture_cache.GetSamplerId(handle.second, false);
++                            last_sampler_index = handle.second;
++                        }
++                        samplers.push_back(sampler);
++                    });
++                if (VideoCommon::HandleTableNotes::Wanted()) [[unlikely]] {
++                    std::vector<u32> tics(desc.count);
++                    for (u32 index = 0; index < desc.count; ++index) {
++                        tics[index] = views[first + index].index;
++                    }
++                    VideoCommon::HandleTableNotes::Note(key.unique_hashes[stage + 1], texture,
++                                                        tics);
++                }
++                ++texture;
++                continue;
++            }
+             for (u32 index = 0; index < desc.count; ++index) {
+                 const auto handle{read_handle(desc, index)};
+                 views.push_back({handle.first});
+@@ -493,6 +526,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+                 VideoCommon::SamplerId sampler{texture_cache.GetSamplerId(handle.second, false)};
+                 samplers.push_back(sampler);
+             }
++            ++texture;
+         }
+         if constexpr (Spec::has_images) {
+             for (const auto& desc : info.image_descriptors) {
+@@ -752,7 +786,9 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
          // Wait for the pipeline to be built
          scheduler.Record([this](vk::CommandBuffer) {
              const auto begin = std::chrono::steady_clock::now();
@@ -2820,7 +5476,15 @@ index 0cdc7521bf..abcb69bce4 100644
              hold_time_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                         std::chrono::steady_clock::now() - begin)
                                         .count(),
-@@ -1220,7 +1222,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+@@ -1092,6 +1128,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+         for (size_t i = 0; i < mask_table.size(); ++i) {
+             write_mask |= mask[i] ? mask_table[i] : 0;
+         }
++        write_mask &= ColorOutputMask(index);
+         cb_attachments.push_back({
+             .blendEnable = blend.enable != 0,
+             .srcColorBlendFactor = MaxwellToVK::BlendFactor(blend.SourceRGBFactor()),
+@@ -1220,7 +1257,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
          .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
          .pDynamicStates = dynamic_states.data(),
      };
@@ -2829,7 +5493,7 @@ index 0cdc7521bf..abcb69bce4 100644
          .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
          .pNext = nullptr,
          .requiredSubgroupSize = GuestWarpSize,
-@@ -1230,17 +1232,24 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+@@ -1230,17 +1267,24 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
          if (!spv_modules[stage]) {
              continue;
          }
@@ -2865,8 +5529,37 @@ index 0cdc7521bf..abcb69bce4 100644
      }
      VkPipelineCreateFlags flags{};
      if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.h b/src/video_core/renderer_vulkan/vk_graphics_pipeline.h
+index 6e02abfa38..b09e4341c4 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.h
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.h
+@@ -117,6 +117,16 @@ public:
+         return fragment_has_color0_output;
+     }
+ 
++    /// Color components of a render target the fragment shader writes, as VkColorComponentFlags
++    VkColorComponentFlags ColorOutputMask(size_t render_target) const noexcept {
++        return (color_output_mask >> (render_target * 4)) & 0xF;
++    }
++
++    /// Color components the fragment shader writes, 4 bits per render target
++    u32 ColorOutputMask() const noexcept {
++        return color_output_mask;
++    }
++
+     bool UsesExtendedDynamicState() const noexcept {
+         return key.state.extended_dynamic_state != 0;
+     }
+@@ -217,6 +227,7 @@ private:
+     std::vector<SampledImage> sampled_images;
+     u32 num_textures{};
+     bool fragment_has_color0_output{};
++    u32 color_output_mask{};
+     bool writes_storage{};
+ 
+     vk::DescriptorSetLayout descriptor_set_layout;
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
-index 095bd4c1e6..cbb04734c9 100644
+index 095bd4c1e6..17bf880cf6 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 @@ -457,6 +457,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
@@ -2877,7 +5570,30 @@ index 095bd4c1e6..cbb04734c9 100644
        serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background),
        background_pipelines{64, 16 * 1024 * 1024, device.HasBrokenParallelShaderCompiling()} {
      const auto& float_control{device.FloatControlProperties()};
-@@ -1638,11 +1639,15 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+@@ -599,9 +600,22 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+         .support_conditional_barrier = device.SupportsConditionalBarriers(),
+         .single_lane_geometry_subgroups = !profile.SupportsSubgroupStage(Shader::Stage::Geometry),
+         .support_byte_addressed_r16 = true,
++        .support_handle_table_arrays = true,
+     };
+     host_info.ApplyDescriptorLimitPolicy();
+ 
++    {
++        // The descriptor arrays of bindless handle tables (HandleTableSize in texture_pass.cpp).
++        const char* const table = std::getenv("LICHII_BINDLESS_TABLE");
++        LOG_INFO(Render_Vulkan,
++                 "Bindless handle tables: LICHII_BINDLESS_TABLE {}, sampled image arrays "
++                 "indexed per invocation {}, up to {} sampled images per stage",
++                 table != nullptr && table[0] != '\0' ? table : "default (64)",
++                 device.IsSampledImageArrayNonUniformIndexingSupported() ? "supported"
++                                                                         : "unsupported",
++                 device.GetMaxPerStageDescriptorSampledImages());
++    }
++
+     if (device.GetMaxVertexInputAttributes() < Maxwell::NumVertexAttributes) {
+         LOG_WARNING(Render_Vulkan, "maxVertexInputAttributes is too low: {} < {}",
+                     device.GetMaxVertexInputAttributes(), Maxwell::NumVertexAttributes);
+@@ -1638,11 +1652,15 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
          const auto name{fmt::format("Shader {:016x}", key.unique_hash)};
          spv_module.SetObjectNameEXT(name.c_str());
      }
@@ -2910,10 +5626,18 @@ index 08f00f2436..80f25dbec1 100644
      DynamicFeatures dynamic_features;
      PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
-index 628dd72d97..25be766421 100644
+index 628dd72d97..7e18f7207a 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
-@@ -432,6 +432,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <chrono>
++#include <condition_variable>
+ #include <memory>
+ #include <limits>
+ #include <cstdio>
+@@ -432,6 +433,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
          TraceRenderState(is_indexed, "no-pipeline", nullptr);
          return;
      }
@@ -2923,7 +5647,16 @@ index 628dd72d97..25be766421 100644
      // Task/mesh pipelines: the draw's vertex count is the number of task workgroups.
      mesh_draw = pipeline->IsMeshPipeline();
      // EDEN_NX2_NO_MESH=1: skip task/mesh draws as before they were supported (A/B comparisons).
-@@ -933,6 +936,18 @@ void RasterizerVulkan::DrawIndirect() {
+@@ -510,7 +514,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
+ 
+     {
+         Profile::Scope scope{Profile::Zone::DynamicState};
+-        UpdateDynamicStates();
++        UpdateDynamicStates(pipeline);
+     }
+ 
+     query_cache.NotifySegment(true);
+@@ -933,6 +937,18 @@ void RasterizerVulkan::DrawIndirect() {
      buffer_cache.SetDrawIndirect(nullptr);
  }
  
@@ -2942,8 +5675,116 @@ index 628dd72d97..25be766421 100644
  void RasterizerVulkan::TraceDrawFailure(std::string_view reason) {
      if (!Common::DkbFrameTrace::Enabled()) {
          return;
+@@ -1094,7 +1110,7 @@ void RasterizerVulkan::DrawTexture() {
+     texture_cache.SynchronizeDescriptors(false);
+     texture_cache.UpdateRenderTargets(false);
+ 
+-    UpdateDynamicStates();
++    UpdateDynamicStates(nullptr);
+ 
+     query_cache.NotifySegment(true);
+     query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64, maxwell3d->regs.zpass_pixel_count_enable);
+@@ -1707,6 +1723,22 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
+     pipeline_cache.InvalidateRegion(addr, size);
+ }
+ 
++void RasterizerVulkan::OnCacheInvalidations(std::span<const std::pair<DAddr, size_t>> ranges) {
++    {
++        std::scoped_lock lock{texture_cache.mutex};
++        for (const auto& [addr, size] : ranges) {
++            texture_cache.WriteMemory(addr, size);
++        }
++    }
++    {
++        std::scoped_lock lock{buffer_cache.mutex};
++        for (const auto& [addr, size] : ranges) {
++            buffer_cache.WriteMemory(addr, size);
++        }
++    }
++    pipeline_cache.InvalidateRegions(ranges);
++}
++
+ bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {
+     if (addr == 0 || size == 0) return true;
+     {
+@@ -1767,6 +1799,27 @@ void RasterizerVulkan::ReleaseFences(bool force) {
+     fence_manager.WaitPendingFences(force);
+ }
+ 
++void RasterizerVulkan::FlushQueryResults(DAddr addr, u64 size) {
++    if (addr == 0 || size == 0 || !query_cache.SemiFlushRegion(addr, size)) {
++        return;
++    }
++    // Below High GPU accuracy a fence runs its own callback at once, so wait for an operation
++    // queued behind the pending report writes instead. On the split's back the fence's
++    // submission may be deferred, and the fencing thread would wait for this thread to submit it.
++    std::mutex wait_mutex;
++    std::condition_variable wait_cv;
++    bool written{};
++    fence_manager.SyncOperation([&] {
++        std::scoped_lock lock{wait_mutex};
++        written = true;
++        wait_cv.notify_all();
++    });
++    fence_manager.SignalFence([] {});
++    scheduler.FlushDeferred();
++    std::unique_lock lock{wait_mutex};
++    wait_cv.wait(lock, [&written] { return written; });
++}
++
+ void RasterizerVulkan::FlushAndInvalidateRegion(DAddr addr, u64 size,
+                                                 VideoCommon::CacheType which) {
+     if (Settings::IsGPULevelHigh()) {
+@@ -2331,7 +2384,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
+     return DmaBufferImageCopy<true>(copy_info, buffer_operand, image_operand);
+ }
+ 
+-void RasterizerVulkan::UpdateDynamicStates() {
++void RasterizerVulkan::UpdateDynamicStates(const GraphicsPipeline* pipeline) {
+     auto& regs = maxwell3d->regs;
+     auto& flags = maxwell3d->dirty.flags;
+     const auto topology = maxwell3d->draw_manager.draw_state.topology;
+@@ -2403,7 +2456,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
+     }
+ 
+     if (device.IsExtExtendedDynamicState3BlendingSupported()) {
+-        UpdateBlending(regs);
++        UpdateBlending(regs, pipeline);
+     } else if (device.IsExtColorWriteEnableSupported()) {
+         UpdateColorWriteEnable(regs);
+     }
+@@ -3039,12 +3092,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
+     scheduler.Record([op](vk::CommandBuffer cmdbuf) { cmdbuf.SetLogicOpEXT(op); });
+ }
+ 
+-void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
+-    if (!state_tracker.TouchBlending()) {
++void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs,
++                                      const GraphicsPipeline* pipeline) {
++    // The write mask also excludes components the fragment shader doesn't output, so it has to be
++    // recorded again whenever the bound pipeline outputs a different set of components.
++    const u32 color_output_mask = pipeline ? pipeline->ColorOutputMask() : ~0U;
++    const bool color_output_changed = color_output_mask != last_color_output_mask;
++    if (!state_tracker.TouchBlending() && !color_output_changed) {
+         return;
+     }
+ 
+-    if (state_tracker.TouchColorMask()) {
++    if (state_tracker.TouchColorMask() || color_output_changed) {
++        last_color_output_mask = color_output_mask;
+         std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> setup_masks{};
+         for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
+             const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
+@@ -3061,6 +3120,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
+             if (mask.A) {
+                 current |= VK_COLOR_COMPONENT_A_BIT;
+             }
++            current &= (color_output_mask >> (index * 4)) & 0xF;
+         }
+         scheduler.Record([setup_masks](vk::CommandBuffer cmdbuf) {
+             cmdbuf.SetColorWriteMaskEXT(0, setup_masks);
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.h b/src/video_core/renderer_vulkan/vk_rasterizer.h
-index c33b0ed3b3..0b23dccc14 100644
+index c33b0ed3b3..ac338326f3 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.h
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.h
 @@ -18,6 +18,7 @@
@@ -2954,7 +5795,23 @@ index c33b0ed3b3..0b23dccc14 100644
  #include "video_core/rasterizer_interface.h"
  #include "video_core/renderer_vulkan/blit_image.h"
  #include "video_core/renderer_vulkan/vk_buffer_cache.h"
-@@ -153,6 +154,9 @@ public:
+@@ -117,6 +118,7 @@ public:
+     void PrepareRegionWrite(DAddr addr, u64 size, VideoCommon::CacheType which) override;
+     void InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) override;
+     void OnCacheInvalidation(DAddr addr, u64 size) override;
++    void OnCacheInvalidations(std::span<const std::pair<DAddr, size_t>> ranges) override;
+     bool TryCacheInvalidation(DAddr addr, u64 size) override;
+     bool OnCPUWrite(DAddr addr, u64 size) override;
+     void InvalidateGPUCache() override;
+@@ -127,6 +129,7 @@ public:
+     void SignalSyncPoint(u32 value) override;
+     void SignalReference() override;
+     void ReleaseFences(bool force = true) override;
++    void FlushQueryResults(DAddr addr, u64 size) override;
+     void FlushAndInvalidateRegion(
+         DAddr addr, u64 size, VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
+     void WaitForIdle() override;
+@@ -153,6 +156,9 @@ public:
                                     const Tegra::Texture::TICEntry* depth,
                                     std::array<f32, 2> jitter,
                                     std::array<f32, 2> motion_scale, bool use_history = true) override;
@@ -2964,7 +5821,7 @@ index c33b0ed3b3..0b23dccc14 100644
      Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() override;
      void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
                                    std::span<const u8> memory) override;
-@@ -186,6 +190,8 @@ private:
+@@ -186,6 +192,8 @@ private:
      void CaptureIndirectTrace();
      void CollectIndirectTrace();
      void TraceDrawFailure(std::string_view reason);
@@ -2973,11 +5830,33 @@ index c33b0ed3b3..0b23dccc14 100644
      bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
  
      void FlushWork();
-@@ -276,6 +282,7 @@ private:
+@@ -196,7 +204,9 @@ private:
+     /// the GPU makes them now (BufferCache::Nx2CopyListPages).
+     void SubmitNx2ListCopies();
+ 
+-    void UpdateDynamicStates();
++    /// Records the dynamic state of the draw being prepared with `pipeline` (null for
++    /// DrawTexture's blit).
++    void UpdateDynamicStates(const GraphicsPipeline* pipeline);
+ 
+     void HandleTransformFeedback();
+ 
+@@ -228,7 +238,7 @@ private:
+     void UpdateStencilOp(Tegra::Engines::Maxwell3D::Regs& regs);
+     void UpdateStencilTestEnable(Tegra::Engines::Maxwell3D::Regs& regs);
+     void UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs);
+-    void UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs);
++    void UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs, const GraphicsPipeline* pipeline);
+     void UpdateColorWriteEnable(Tegra::Engines::Maxwell3D::Regs& regs);
+ 
+     void UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs);
+@@ -276,6 +286,9 @@ private:
      u32 render_trace_clears = 0;
      bool pending_native_work{};
      bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
 +    VideoCommon::OotNetwork::BypassState oot_network_bypass;
++    /// Fragment output components the dynamic color write mask was last recorded with
++    u32 last_color_output_mask{};
  
      struct IndirectTrace {
          vk::Buffer readback;
@@ -3009,11 +5888,311 @@ index 96938b9e0f..610fad4a77 100644
      if (kepler_compute->IsNativeMode() && shader->lowered_native &&
          kepler_compute->ProcessGameDlss(program_id, shader->lowered_native->native_program_key)) {
          throw FireEmblemUpscale::DispatchReplaced{};
+diff --git a/src/video_core/shader_handle_program.h b/src/video_core/shader_handle_program.h
+index cfdc47afd7..5621a8e522 100644
+--- a/src/video_core/shader_handle_program.h
++++ b/src/video_core/shader_handle_program.h
+@@ -3,40 +3,154 @@
+ 
+ #pragma once
+ 
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <mutex>
++#include <span>
++#include <string>
++#include <unordered_map>
++#include <utility>
++#include <vector>
++
+ #include "common/common_types.h"
++#include "common/logging.h"
+ #include "shader_recompiler/shader_info.h"
+ #include "video_core/memory_manager.h"
+ 
+ namespace VideoCommon {
+ 
++/// The address of storage buffer `binding` of a shader as its descriptor in a constant buffer gives
++/// it; 0 when it has none.
++template <typename Memory, typename CbufAddress>
++GPUVAddr StorageBufferBase(const Shader::Info& info, u32 binding, Memory& gpu_memory,
++                           CbufAddress& cbuf_address) {
++    if (binding >= info.storage_buffers_descriptors.size()) {
++        return 0;
++    }
++    const auto& descriptor{info.storage_buffers_descriptors[binding]};
++    const GPUVAddr cbuf{cbuf_address(descriptor.cbuf_index)};
++    if (cbuf == 0) {
++        return 0;
++    }
++    GPUVAddr base{gpu_memory.template Read<u64>(cbuf + descriptor.cbuf_offset)};
++    if (base != 0 && descriptor.indirect_offset != ~0U) {
++        base = gpu_memory.template Read<u64>(base + descriptor.indirect_offset);
++    }
++    return base;
++}
++
+ /// The texture handle a shader reads from a storage buffer, computed from the current constant
+ /// buffer and storage buffer words (Shader::Info::handle_programs). cbuf_address(index) is the
+-/// bound constant buffer's address, 0 when none is bound.
+-template <typename CbufAddress>
+-u32 EvaluateTextureHandle(const Shader::Info& info, u32 program, Tegra::MemoryManager& gpu_memory,
+-                          CbufAddress&& cbuf_address) {
++/// bound constant buffer's address, 0 when none is bound. element is the descriptor array
++/// element, for a program computing one handle per element.
++template <typename Memory, typename CbufAddress>
++u32 EvaluateTextureHandle(const Shader::Info& info, u32 program, Memory& gpu_memory,
++                          CbufAddress&& cbuf_address, u32 element = 0) {
+     return Shader::EvaluateHandleProgram(
+                info.handle_programs[program],
+                [&](u32 index, u32 offset) -> u32 {
+                    const GPUVAddr base{cbuf_address(index)};
+-                   return base != 0 ? gpu_memory.Read<u32>(base + offset) : 0U;
++                   return base != 0 ? gpu_memory.template Read<u32>(base + offset) : 0U;
+                },
+                [&](u32 binding, u32 offset) -> u32 {
+-                   if (binding >= info.storage_buffers_descriptors.size()) {
+-                       return 0U;
+-                   }
+-                   const auto& descriptor{info.storage_buffers_descriptors[binding]};
+-                   const GPUVAddr cbuf{cbuf_address(descriptor.cbuf_index)};
+-                   if (cbuf == 0) {
+-                       return 0U;
+-                   }
+-                   GPUVAddr base{gpu_memory.Read<u64>(cbuf + descriptor.cbuf_offset)};
+-                   if (base != 0 && descriptor.indirect_offset != ~0U) {
+-                       base = gpu_memory.Read<u64>(base + descriptor.indirect_offset);
+-                   }
+-                   return base != 0 ? gpu_memory.Read<u32>(base + offset) : 0U;
+-               })
++                   const GPUVAddr base{StorageBufferBase(info, binding, gpu_memory, cbuf_address)};
++                   return base != 0 ? gpu_memory.template Read<u32>(base + offset) : 0U;
++               },
++               element)
+         .value_or(0U);
+ }
+ 
++/// The handles of elements 0 to count - 1 of a descriptor array of handle program results, as
++/// EvaluateTextureHandle computes each, passed to output(element, handle). The constant buffer
++/// words and storage buffer addresses the program reads are read once for all the elements.
++template <typename Memory, typename CbufAddress, typename Output>
++void EvaluateTextureHandles(const Shader::Info& info, u32 program, Memory& gpu_memory,
++                            CbufAddress&& cbuf_address, u32 count, Output&& output) {
++    struct CbufWord {
++        u32 index;
++        u32 offset;
++        u32 value;
++    };
++    std::array<CbufWord, 16> words;
++    size_t num_words{};
++    std::array<GPUVAddr, Shader::Info::MAX_SSBOS> bases;
++    u32 known_bases{};
++    const auto read_cbuf = [&](u32 index, u32 offset) -> u32 {
++        for (size_t word = 0; word < num_words; ++word) {
++            if (words[word].index == index && words[word].offset == offset) {
++                return words[word].value;
++            }
++        }
++        const GPUVAddr base{cbuf_address(index)};
++        const u32 value{base != 0 ? gpu_memory.template Read<u32>(base + offset) : 0U};
++        if (num_words < words.size()) {
++            words[num_words++] = {index, offset, value};
++        }
++        return value;
++    };
++    const auto read_storage = [&](u32 binding, u32 offset) -> u32 {
++        if (binding >= bases.size()) {
++            return 0U;
++        }
++        if ((known_bases & (1U << binding)) == 0) {
++            bases[binding] = StorageBufferBase(info, binding, gpu_memory, cbuf_address);
++            known_bases |= 1U << binding;
++        }
++        return bases[binding] != 0 ? gpu_memory.template Read<u32>(bases[binding] + offset) : 0U;
++    };
++    for (u32 element = 0; element < count; ++element) {
++        output(element, Shader::EvaluateHandleProgram(info.handle_programs[program], read_cbuf,
++                                                      read_storage, element)
++                            .value_or(0U));
++    }
++}
++
++/// Logs what the elements of a descriptor array of handle program results (a table of per-light
++/// shadow maps, say) hold, whenever that changes, for the first lines: how many distinct textures
++/// and which, by TIC index with the first element holding each.
++class HandleTableNotes {
++public:
++    [[nodiscard]] static bool Wanted() noexcept {
++        return lines.load(std::memory_order_relaxed) < MAX_LINES;
++    }
++
++    static void Note(u64 shader, u32 texture, std::span<const u32> tics) {
++        std::vector<std::pair<u32, u32>> distinct;
++        for (u32 element = 0; element < tics.size(); ++element) {
++            if (std::ranges::none_of(distinct, [&](const auto& entry) {
++                    return entry.first == tics[element];
++                })) {
++                distinct.emplace_back(tics[element], element);
++            }
++        }
++        std::vector<u32> signature(distinct.size());
++        std::ranges::transform(distinct, signature.begin(), &std::pair<u32, u32>::first);
++        {
++            std::scoped_lock lock{mutex};
++            auto& last{seen[shader ^ (u64{texture} << 56)]};
++            if (last == signature) {
++                return;
++            }
++            last = std::move(signature);
++        }
++        if (lines.fetch_add(1, std::memory_order_relaxed) >= MAX_LINES) {
++            return;
++        }
++        std::string list;
++        for (size_t i = 0; i < distinct.size() && i < 16; ++i) {
++            list += fmt::format(" tic{}@{}", distinct[i].first, distinct[i].second);
++        }
++        LOG_INFO(Render_Vulkan, "Handle table: shader {:016x} texture {}: {} elements, {} distinct:{}{}",
++                 shader, texture, tics.size(), distinct.size(), list,
++                 distinct.size() > 16 ? " ..." : "");
++    }
++
++private:
++    static constexpr int MAX_LINES = 64;
++    inline static std::atomic<int> lines{};
++    inline static std::mutex mutex;
++    inline static std::unordered_map<u64, std::vector<u32>> seen;
++};
++
+ } // namespace VideoCommon
 diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
-index 8ca5df2337..00b5bbd704 100644
+index 8ca5df2337..c3d964e5ea 100644
 --- a/src/video_core/texture_cache/texture_cache.h
 +++ b/src/video_core/texture_cache/texture_cache.h
-@@ -259,8 +259,16 @@ template <class P>
+@@ -137,9 +137,51 @@ void TextureCache<P>::RunGarbageCollector() {
+     bool evict_old_costly = false;
+     u64 ticks_to_destroy = 0;
+     size_t num_iterations = 0;
++    // Images that must be downloaded before eviction are downloaded together with one GPU wait,
++    // instead of one wait per image. They stay registered until then; `pending_freed` is the
++    // memory their deletion will free.
++    using Map = decltype(runtime.DownloadStagingBuffer(size_t{}));
++    using Copies = decltype(FullDownloadCopies(std::declval<const ImageInfo&>()));
++    struct PendingDownload {
++        ImageId image_id;
++        Map map;
++        Copies copies;
++    };
++    boost::container::small_vector<PendingDownload, 16> pending;
++    size_t pending_bytes = 0;
++    u64 pending_freed = 0;
++    const auto used_memory = [&] {
++        return total_used_memory - (std::min)(total_used_memory, pending_freed);
++    };
++    const auto Evict = [this](ImageId image_id) {
++        auto& image = slot_images[image_id];
++        if (True(image.flags & ImageFlagBits::Tracked)) {
++            UntrackImage(image, image_id);
++        }
++        ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
++        UnregisterImage(image_id);
++        DeleteImage(image_id, image.scale_tick > frame_tick + 5);
++    };
++    const auto FlushPending = [&] {
++        if (pending.empty()) {
++            return;
++        }
++        runtime.Finish();
++        ++gc_download_waits;
++        for (PendingDownload& entry : pending) {
++            Image& image = slot_images[entry.image_id];
++            SwizzleImage(*gpu_memory, image.gpu_addr, image.info, entry.copies,
++                         entry.map.mapped_span, swizzle_data_buffer);
++            ++gc_download_deletes;
++            Evict(entry.image_id);
++        }
++        pending.clear();
++        pending_bytes = 0;
++        pending_freed = 0;
++    };
+     const auto Configure = [&](bool allow_aggressive) {
+-        high_priority_mode = total_used_memory >= expected_memory;
+-        aggressive_mode = allow_aggressive && total_used_memory >= critical_memory;
++        high_priority_mode = used_memory() >= expected_memory;
++        aggressive_mode = allow_aggressive && used_memory() >= critical_memory;
+         ticks_to_destroy = aggressive_mode ? 10ULL : high_priority_mode ? 25ULL : 50ULL;
+         // EDEN_NX2_TC_MIN_AGE=<frames>: never evict images used more recently (thrash tests).
+         static const u64 min_age = [] {
+@@ -149,11 +191,15 @@ void TextureCache<P>::RunGarbageCollector() {
+         ticks_to_destroy = (std::max)(ticks_to_destroy, min_age);
+         num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
+     };
+-    const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,
+-                          &evict_old_costly](ImageId image_id) {
++    const auto Cleanup = [&](ImageId image_id) {
+         if (num_iterations == 0) {
+             return true;
+         }
++        if (std::ranges::any_of(pending, [image_id](const PendingDownload& entry) {
++                return entry.image_id == image_id;
++            })) {
++            return false;
++        }
+         --num_iterations;
+         auto& image = slot_images[image_id];
+         if (True(image.flags & ImageFlagBits::IsDecoding)) {
+@@ -165,23 +211,25 @@ void TextureCache<P>::RunGarbageCollector() {
+             return false;
+         }
+         if (must_download) {
++            // As DownloadMemory: a batch is capped so the staging memory held at once stays bounded.
++            constexpr size_t MaxBatchBytes = 64_MiB;
++            if (!pending.empty() && pending_bytes + image.unswizzled_size_bytes > MaxBatchBytes) {
++                FlushPending();
++            }
+             auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
+-            const auto copies = FullDownloadCopies(image.info);
++            auto copies = FullDownloadCopies(image.info);
+             image.DownloadMemory(map, copies);
+-            runtime.Finish();
+-            SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, map.mapped_span, swizzle_data_buffer);
+-            ++gc_download_deletes;
+-        }
+-        if (True(image.flags & ImageFlagBits::Tracked)) {
+-            UntrackImage(image, image_id);
++            pending_bytes += image.unswizzled_size_bytes;
++            pending_freed += (image.HasScaled() ? GetScaledImageSizeBytes(image) : 0) +
++                             ImageMemoryBytes(image);
++            pending.push_back(PendingDownload{image_id, map, std::move(copies)});
++        } else {
++            Evict(image_id);
+         }
+-        ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
+-        UnregisterImage(image_id);
+-        DeleteImage(image_id, image.scale_tick > frame_tick + 5);
+-        if (aggressive_mode && total_used_memory < critical_memory) {
++        if (aggressive_mode && used_memory() < critical_memory) {
+             num_iterations >>= 2;
+             aggressive_mode = false;
+-        } else if (high_priority_mode && total_used_memory < expected_memory) {
++        } else if (high_priority_mode && used_memory() < expected_memory) {
+             num_iterations >>= 1;
+             high_priority_mode = false;
+         }
+@@ -249,18 +297,27 @@ void TextureCache<P>::RunGarbageCollector() {
+         evict_old_costly = false;
+     }
+     Collect();
+-    if (total_used_memory >= critical_memory) {
++    if (used_memory() >= critical_memory) {
+         Configure(true);
+         Collect();
+     }
++    FlushPending();
+ }
+ 
+ template <class P>
  void TextureCache<P>::ApplyThresholdOverrides(bool log) {
      // On every GPU: past what a frame needs, more device memory only keeps the textures of earlier
      // scenes (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
@@ -3032,6 +6211,81 @@ index 8ca5df2337..00b5bbd704 100644
      expected_memory =
          (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
      minimum_memory =
+@@ -426,9 +483,9 @@ void TextureCache<P>::TickFrame() {
+         if constexpr (requires { runtime.LogMemoryStatistics(); }) {
+             runtime.LogMemoryStatistics();
+         }
+-        LOG_INFO(HW_GPU, "Texture cache last 600 frames: created {} images, deleted {} (collector {}, {} costly, {} downloaded), {} async decodes, ASTC {} opaque / {} alpha",
++        LOG_INFO(HW_GPU, "Texture cache last 600 frames: created {} images, deleted {} (collector {}, {} costly, {} downloaded in {} GPU waits), {} async decodes, ASTC {} opaque / {} alpha",
+                  images_created, images_deleted, gc_deletes + gc_costly_deletes, gc_costly_deletes,
+-                 gc_download_deletes,
++                 gc_download_deletes, gc_download_waits,
+                  async_decodes_queued, astc_opaque_images, astc_alpha_images);
+         LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} uploads from guest memory, {} MiB (largest {} MiB, {} by layer)",
+                  images_uploaded, uploaded_bytes >> 20, largest_upload >> 20, layer_uploads);
+@@ -447,7 +504,8 @@ void TextureCache<P>::TickFrame() {
+         created_shapes.clear();
+         // The per-image and per-shape tallies only feed debug lines: skip them while those are off.
+         debug_stats = Common::Log::IsLevelEnabled(Common::Log::Class::HW_GPU, Common::Log::Level::Debug);
+-        gc_deletes = gc_costly_deletes = gc_download_deletes = async_decodes_queued = 0;
++        gc_deletes = gc_costly_deletes = gc_download_deletes = gc_download_waits = 0;
++        async_decodes_queued = 0;
+         images_created = images_deleted = 0;
+     }
+     if (total_used_memory > minimum_memory) {
+@@ -508,8 +566,16 @@ void TextureCache<P>::FillImageViews(std::span<ImageViewInOut> views, bool compu
+         if (blacklist) {
+             has_blacklisted = false;
+         }
++        const ImageViewInOut* previous{};
+         for (ImageViewInOut& view : views) {
+-            view.id = VisitImageView(view.index, compute);
++            // An element repeating the one before (a handle table holding one shadow map in
++            // many elements, say) is the same view: visiting it again only prepares it again.
++            // Not once this pass has deleted image views (scaling an image down below does):
++            // that view may have gone with them.
++            view.id = previous != nullptr && previous->index == view.index && !has_deleted_images
++                          ? previous->id
++                          : VisitImageView(view.index, compute);
++            previous = &view;
+             if (blacklist) {
+                 if (view.blacklist && view.id != NULL_IMAGE_VIEW_ID) {
+                     const ImageViewBase& image_view = slot_image_views[view.id];
+diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
+index 87d0d7971f..84fbad4b49 100644
+--- a/src/video_core/texture_cache/texture_cache_base.h
++++ b/src/video_core/texture_cache/texture_cache_base.h
+@@ -125,7 +125,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+     // Periodic statistics (TickFrame).
+     u64 gc_deletes{};
+     u64 gc_costly_deletes{};
+-    u64 gc_download_deletes{}; ///< Evictions that downloaded the image first (a full GPU wait)
++    u64 gc_download_deletes{}; ///< Evictions that downloaded the image first
++    u64 gc_download_waits{};   ///< GPU waits those downloads took
+     u64 async_decodes_queued{};
+     u64 images_created{};
+     u64 images_uploaded{};   ///< Image contents uploaded from guest memory (last 600 frames)
+diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
+index d28dd131eb..34f972d73d 100644
+--- a/src/video_core/vulkan_common/vulkan_device.cpp
++++ b/src/video_core/vulkan_common/vulkan_device.cpp
+@@ -641,8 +641,14 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+             has_broken_cube_compatibility = true;
+         }
+ 
+-        // AMD drivers (2026+) have broken float16 math on DKCR
+-        if (features.shader_float16_int8.shaderFloat16) {
++        // AMD drivers (2026+) have broken float16 math on DKCR. EDEN_AMD_FP16=1 keeps it for
++        // comparison runs: RDNA runs packed float16 at twice the float32 rate.
++        const char* const amd_fp16 = std::getenv("EDEN_AMD_FP16");
++        const bool keep_amd_fp16 = amd_fp16 != nullptr && amd_fp16[0] == '1';
++        if (features.shader_float16_int8.shaderFloat16 && keep_amd_fp16) {
++            LOG_WARNING(Render_Vulkan,
++                        "EDEN_AMD_FP16=1: keeping float16 on the AMD driver (experimental)");
++        } else if (features.shader_float16_int8.shaderFloat16) {
+             LOG_WARNING(Render_Vulkan,
+                         "AMD drivers (2026+) have broken float16 math");
+             features.shader_float16_int8.shaderFloat16 = false;
 diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
 index 93a89d124b..ccf068ebdc 100644
 --- a/src/video_core/vulkan_common/vulkan_device.h
@@ -4402,3 +7656,15 @@ index 0000000000..ac99ca8513
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/tools/shader-sweep/main.cpp b/tools/shader-sweep/main.cpp
+index 1a88462651..97409e42f8 100644
+--- a/tools/shader-sweep/main.cpp
++++ b/tools/shader-sweep/main.cpp
+@@ -730,6 +730,7 @@ int main(int argc, char** argv) {
+         host.support_conditional_barrier = true;
+         host.support_viewport_index_layer = true;
+         host.support_geometry_shader_passthrough = true;
++        host.support_handle_table_arrays = true;
+         host.ApplyDescriptorLimitPolicy();
+         auto program = Shader::Maxwell::TranslateProgram(inst_pool, block_pool, env, cfg, host);
+         Shader::Maxwell::ConvertLegacyToGeneric(program, runtime);
