@@ -1750,18 +1750,26 @@ private:
         // only after this present returns: while a channel stays suspended on one, wait for the
         // previous frame's fence instead and let the game prepare frame N+1 meanwhile (waiting
         // for this frame there cost 8-56 ms of every 34-105 ms frame, or never finished).
-        // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one.
+        // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one,
+        // =2 for the previous frame only, even while the GPU is behind (see below).
         static const int frames_ahead_setting = [] {
             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
-            return value == nullptr ? -1 : value[0] == '1' ? 1 : 0;
+            const int setting =
+                value == nullptr ? -1 : value[0] == '2' ? 2 : value[0] == '1' ? 1 : 0;
+            if (setting == 2) {
+                LOG_INFO(Service, "EDEN_NX2_FRAMES_AHEAD=2: presents wait for the previous frame "
+                                  "only, also while the GPU is behind");
+            }
+            return setting;
         }();
+        const bool ahead_while_gpu_behind = frames_ahead_setting == 2;
         // Donkey Kong Bananza's channels wait on each other every frame, so it always ran a frame
         // ahead, where it rewrote memory the GPU thread hadn't read yet (misread commands, then
         // a freeze or crash; rubberbanding while moving). Title 1 runs ahead without either.
         constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
         // Ocarina waited ~12 ms a frame on its previous frame's fence here (#161).
         constexpr u64 OcarinaOfTimeProgramId = 0x0400486024DEC000ULL;
-        int frames_ahead = frames_ahead_setting;
+        int frames_ahead = ahead_while_gpu_behind ? 1 : frames_ahead_setting;
         const u64 app_program_id = system.GetApplicationProcessProgramID();
         if (frames_ahead == -1 && app_program_id == DonkeyKongBananzaProgramId) {
             frames_ahead = 0;
@@ -1779,8 +1787,11 @@ private:
             // were at most a frame behind, rewrote command lists Eden had not read yet (misread
             // commands, then crashes, with a slow GPU). Wait for this frame too then. Not when a
             // suspended channel brought us here: this frame can't finish before the present
-            // returns.
-            const bool gpu_behind = frames_ahead == 1 && m_previous_fence_id < 192 &&
+            // returns. With EDEN_NX2_FRAMES_AHEAD=2 the game prepares the next frame while the
+            // GPU runs this one even then (as before), which keeps a slow GPU busy instead of
+            // idle while the game prepares each frame.
+            const bool gpu_behind = frames_ahead == 1 && !ahead_while_gpu_behind &&
+                                    m_previous_fence_id < 192 &&
                                     !system.Host1x().GetSyncpointManager().IsReadyGuest(
                                         m_previous_fence_id, m_previous_fence_value);
             WaitForFrame(m_previous_fence_id, m_previous_fence_value);

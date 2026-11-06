@@ -47,6 +47,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               can be missing for a few frames; logs like perf-trace.bat
  ab-9-amd-fp16.bat            keeps float16 shader math on AMD (EDEN_AMD_FP16=1); official builds
                               turn it off for a driver bug in another game, so look for wrong colors
+ ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
+                              even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
+                              GPU does not idle between frames; logs like perf-trace.bat
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1)
