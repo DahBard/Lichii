@@ -249,6 +249,16 @@ void Puller::ProcessFenceActionMethod(DmaPusher& dma_pusher) {
     }
 }
 
+bool Puller::StableSemaphore(DmaPusher& dma_pusher, GPUVAddr address) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    if (split.TrackedWritePosition(&dma_pusher.memory_manager, address, address + 4) >
+        split.Consumed()) {
+        return false;
+    }
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
+    return device && !Nx2IsGpuWritten(*device);
+}
+
 void Puller::NoteRelease(GPUVAddr address, u32 payload) {
     auto& split = VideoCommon::GpuSplit::Get();
     if (!split.Active()) {
@@ -312,12 +322,13 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
-        // A greater-or-equal acquire whose value is already in guest memory is met: releases only
-        // raise the value, and one still queued for the back (or held in its caches) is newer.
-        // Skip draining the back for it (~8% of the front in Ocarina of Time); later command
+        // A greater-or-equal acquire whose value is already in guest memory is met, unless a
+        // queued write (a release that lowers it) or GPU-written data not yet downloaded may change
+        // it. Skip draining the back for it (~8% of the front in Ocarina of Time); later command
         // fetches still wait for the work before it (NoteSync).
         auto& split = VideoCommon::GpuSplit::Get();
         if (op == GpuSemaphoreOperation::AcquireGequal && split.Active() &&
+            StableSemaphore(dma_pusher, acquire.address) &&
             acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
             if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Fast);
             split.NoteSync();
@@ -518,8 +529,8 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
             }
         }
     }
-    if ((operation == 2 || operation == 3) && split.Active()) {
-        // A greater-or-equal value already in memory stays met: skip the back drain.
+    if ((operation == 2 || operation == 3) && split.Active() && StableSemaphore(dma_pusher, address)) {
+        // A greater-or-equal value already in memory with no queued write to it: skip the drain.
         const u32 current = dma_pusher.memory_manager.Read<u32>(address);
         if (operation == 2 ? current >= payload : static_cast<s32>(current - payload) >= 0) {
             split.NoteSync();

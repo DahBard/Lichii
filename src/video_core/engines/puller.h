@@ -158,6 +158,8 @@ private:
         u64 position;
     };
     std::unordered_map<GPUVAddr, QueuedRelease> queued_releases;
+    /// Whether no queued write or undownloaded GPU write can change the semaphore at `address`.
+    bool StableSemaphore(DmaPusher& dma_pusher, GPUVAddr address);
     void NoteRelease(GPUVAddr address, u32 payload);
     /// Acquires at an address that queued GPU work met each time: how often in a row, or ~0U
     /// once the back found one unmet after skipping its wait.
