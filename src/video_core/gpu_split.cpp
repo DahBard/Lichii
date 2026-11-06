@@ -20,6 +20,7 @@
 #include "common/dkb_cpu_trace.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "common/spin_wait.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "video_core/engines/engine_interface.h"
@@ -247,7 +248,15 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
 }
 
 void GpuSplit::Backoff(u32 spins, u64 target) {
-    if (spins < 16384) {
+    if (Common::SpinWait::UsesWaitpkg()) {
+        if (spins == 0) {
+            // The same spin as below, with the core idling until the back stores `consumed`.
+            Common::SpinUntil(&consumed, 16384, [this, target] {
+                return consumed.load(std::memory_order_acquire) >= target;
+            });
+            return;
+        }
+    } else if (spins < 16384) {
         Pause();
         return;
     }
@@ -411,7 +420,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     on_back_thread = true;
     back_running.store(true, std::memory_order_release);
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
-    Common::SetCurrentThreadToPerformanceCores();
+    Common::SetCurrentThreadToFastestCores();
     system->RegisterHostThread();
 #ifdef _WIN32
     g_back_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
@@ -423,12 +432,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
         if (available == read_position) {
             Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
             // The front usually sends more within microseconds: spin briefly before sleeping.
-            for (u32 spins = 0; spins < 8192 && available == read_position &&
-                                !hook_requested.load(std::memory_order_relaxed);
-                 ++spins) {
-                Pause();
+            Common::SpinUntil(&published, 8192, [&] {
                 available = published.load(std::memory_order_acquire);
-            }
+                return available != read_position ||
+                       hook_requested.load(std::memory_order_relaxed);
+            });
             if (available == read_position && idle_hook != nullptr) {
                 hook_requested.store(false, std::memory_order_seq_cst);
                 idle_hook(idle_argument);

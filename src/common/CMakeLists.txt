@@ -102,6 +102,8 @@ add_library(
     scm_rev.h
     scope_exit.h
     spin_recursive_mutex.h
+    spin_wait.cpp
+    spin_wait.h
     scratch_buffer.h
     settings.cpp
     settings.h
@@ -163,7 +165,9 @@ set_source_files_properties(zbic_compression.cpp PROPERTIES
 
 if(WIN32)
     target_sources(common PRIVATE windows/timer_resolution.cpp
-        windows/timer_resolution.h)
+        windows/timer_resolution.h
+        windows/hybrid_cpu.cpp
+        windows/hybrid_cpu.h)
     target_link_libraries(common PRIVATE ntdll)
 endif()
 

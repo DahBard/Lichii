@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+
+#include "common/spin_wait.h"
+
+#ifdef ARCHITECTURE_x86_64
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+#include <immintrin.h>
+#include "common/cpu_features.h"
+#endif
+
+namespace Common::SpinWait {
+
+#ifdef ARCHITECTURE_x86_64
+
+u64 Now() {
+    return static_cast<u64>(__rdtsc());
+}
+
+void Pause() {
+    _mm_pause();
+}
+
+namespace {
+
+u64 MeasurePauseTicks() {
+    // Skylake-derived Intel cores take ~140 cycles per PAUSE, AMD's far fewer: the spin budgets
+    // in pauses were tuned on one of them, so they are kept as time on this CPU.
+    u64 best = ~u64{0};
+    for (int trial = 0; trial < 5; ++trial) {
+        const u64 start = Now();
+        for (int i = 0; i < 256; ++i) {
+            _mm_pause();
+        }
+        best = (std::min)(best, Now() - start);
+    }
+    return std::clamp<u64>(best / 256, 1, 1000);
+}
+
+} // Anonymous namespace
+
+u64 PauseTicks() {
+    static const u64 ticks = MeasurePauseTicks();
+    return ticks;
+}
+
+u64 TicksPerMicrosecond() {
+    static const u64 ticks = (std::max)(g_cpu_caps.tsc_frequency / 1'000'000, u64{1});
+    return ticks;
+}
+
+bool UsesWaitpkg() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_WAITPKG_SPIN");
+        if (value != nullptr && value[0] == '0') {
+            return false;
+        }
+        return g_cpu_caps.waitpkg && g_cpu_caps.invariant_tsc &&
+               g_cpu_caps.tsc_frequency >= 100'000'000;
+    }();
+    return enabled;
+}
+
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((target("waitpkg")))
+#endif
+void Monitor(const void* address) {
+    _umonitor(const_cast<void*>(address));
+}
+
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((target("waitpkg")))
+#endif
+void WaitUntil(u64 deadline) {
+    // Control bit 0 set: C0.1, the state with the faster wakeup.
+    _umwait(1, deadline);
+}
+
+#else
+
+u64 Now() {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
+}
+
+void Pause() {
+#if defined(__aarch64__)
+    asm volatile("yield");
+#else
+    std::this_thread::yield();
+#endif
+}
+
+u64 PauseTicks() {
+    return 1;
+}
+
+u64 TicksPerMicrosecond() {
+    return 1000;
+}
+
+bool UsesWaitpkg() {
+    return false;
+}
+
+void Monitor(const void*) {}
+
+void WaitUntil(u64) {}
+
+#endif
+
+} // namespace Common::SpinWait

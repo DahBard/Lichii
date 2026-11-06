@@ -9,6 +9,7 @@
 #include <thread>
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/spin_wait.h"
 #include "core/core.h"
 #include "core/debugger/debugger.h"
 #include "core/hle/kernel/k_process.h"
@@ -243,7 +244,12 @@ void PhysicalCore::Idle(KernelCore& kernel) {
 #endif
     }
     const auto spin = std::chrono::microseconds{spin_us};
-    if (spin.count() > 0) {
+    if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
+        // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
+        Common::SpinUntilFor(&m_is_interrupted, spin, [this] {
+            return m_is_interrupted.load(std::memory_order_acquire);
+        });
+    } else if (spin.count() > 0) {
         const auto deadline = std::chrono::steady_clock::now() + spin;
         while (!m_is_interrupted.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline) {

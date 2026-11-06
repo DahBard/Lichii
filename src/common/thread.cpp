@@ -5,7 +5,9 @@
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <string>
 #include <thread>
 
@@ -22,6 +24,7 @@
 #elif defined(_WIN32)
 #include <windows.h>
 #include "common/string_util.h"
+#include "common/windows/hybrid_cpu.h"
 #include "common/windows/timer_resolution.h"
 #else
 #if defined(__FreeBSD__)
@@ -503,13 +506,24 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
 #endif
 }
 
+#ifdef _WIN32
+namespace {
+// The name core placement logs (MinGW builds have no other record of it).
+thread_local std::array<char, 32> t_thread_name{};
+} // Anonymous namespace
+#endif
+
 void SetCurrentThreadName(const char* name) {
-#ifdef _MSC_VER
-    // Sets the debugger-visible name of the current thread.
-    if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)
-        pf(GetCurrentThread(), UTF8ToUTF16W(name).data()); // Windows 10+
-    else
-        ; // No-op
+#ifdef _WIN32
+    // Sets the debugger-visible name of the current thread (Windows 10+), MinGW builds included.
+    using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+    static const auto set_description = reinterpret_cast<SetThreadDescriptionFn>(
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"KernelBase.dll"),
+                                               "SetThreadDescription")));
+    if (set_description != nullptr) {
+        set_description(GetCurrentThread(), UTF8ToUTF16W(name).c_str());
+    }
+    std::strncpy(t_thread_name.data(), name, t_thread_name.size() - 1);
 #elif  defined(__APPLE__)
     pthread_setname_np(name);
 #elif defined(__HAIKU__)
@@ -529,11 +543,6 @@ void SetCurrentThreadName(const char* name) {
         buf[len] = '\0';
         pthread_setname_np(pthread_self(), buf);
     }
-#elif defined(_WIN32)
-    // MinGW with the POSIX threading model does not support pthread_setname_np
-    // See for reference
-    // https://gitlab.freedesktop.org/mesa/mesa/-/blame/main/src/util/u_thread.c?ref_type=heads#L75
-    (void)name;
 #else
     pthread_setname_np(pthread_self(), name);
 #endif
@@ -546,6 +555,24 @@ void SetCurrentThreadToPerformanceCores() {
         return;
     }
     SetCurrentThreadCoreGroup(CoreGroup::Performance);
+#elif defined(_WIN32)
+    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Performance, t_thread_name.data());
+#endif
+}
+
+void SetCurrentThreadToFastestCores() {
+#if defined(_WIN32)
+    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Fastest, t_thread_name.data());
+#else
+    SetCurrentThreadToPerformanceCores();
+#endif
+}
+
+void SetCurrentThreadToWaitingCores() {
+#if defined(_WIN32)
+    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Waiting, t_thread_name.data());
+#else
+    SetCurrentThreadToPerformanceCores();
 #endif
 }
 
@@ -556,6 +583,8 @@ void SetCurrentThreadToEfficiencyCores() {
         return;
     }
     SetCurrentThreadCoreGroup(CoreGroup::Efficiency);
+#elif defined(_WIN32)
+    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Background, t_thread_name.data());
 #endif
 }
 
@@ -563,6 +592,8 @@ void SetCurrentThreadToBackgroundWork() {
 #if defined(__ANDROID__)
     ADPF::AddCurrentThread(ADPF::Session::Background);
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
+#elif defined(_WIN32)
+    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Background, t_thread_name.data());
 #endif
 }
 
@@ -570,6 +601,8 @@ void SetCurrentThreadToAllCores() {
 #if defined(__ANDROID__)
     ADPF::RemoveCurrentThread();
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
+#elif defined(_WIN32)
+    Windows::SetCurrentThreadCoreRole(Windows::CoreRole::Any, t_thread_name.data());
 #endif
 }
 

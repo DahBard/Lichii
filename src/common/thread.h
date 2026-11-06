@@ -108,6 +108,12 @@ enum class ThreadPlacement : u32 {
 void SetCurrentThreadPriority(ThreadPriority new_priority);
 void SetCurrentThreadName(const char* name);
 void SetCurrentThreadToPerformanceCores();
+/// The threads that bound the frame time; on a hybrid x86 CPU under Windows, P-cores only.
+/// Elsewhere the same as SetCurrentThreadToPerformanceCores.
+void SetCurrentThreadToFastestCores();
+/// Threads that wait without sleeping (spinning or UMWAIT); on a hybrid x86 CPU under Windows,
+/// E-cores. Elsewhere the same as SetCurrentThreadToPerformanceCores.
+void SetCurrentThreadToWaitingCores();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
