@@ -28,6 +28,10 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
    settings; "Game" brings the game's network back).
 
+The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
+CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
+comes from the compiler (only the pgo builds show it) or from the source.
+
 A/B launchers (this build with one change switched off or on; compare the same scene each time):
  ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
  ab-2-no-core-placement.bat   Windows places every thread (LICHII_CPU_POLICY=off)
