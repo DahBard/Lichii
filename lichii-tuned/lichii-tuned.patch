@@ -1,9 +1,9 @@
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..9401f79cb6
+index 0000000000..f7ce66abaf
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,30 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -13,18 +13,22 @@ index 0000000000..9401f79cb6
 + * Compiled by clang with Lichii's PGO profile, for x86-64-v3 (AVX2, BMI2, FMA) and tuned
 +   for Arrow Lake. It runs on any CPU with AVX2 (Intel Haswell / AMD Zen and newer).
 + * Hybrid CPU core placement (Windows): the GPU command threads (GPU, GPUBack, VulkanWorker)
-+   run on the P-cores, the emulated CPU cores on P- and E-cores, pipeline builds and core
-+   timing on E-cores, and no emulator thread on the two 2.5 GHz low-power E-cores.
++   run on the P-cores, the emulated CPU cores and the low-priority pipeline builds on P- and
++   E-cores, core timing on an E-core, and no emulator thread on the two 2.5 GHz low-power
++   E-cores.
 + * Intel WAITPKG waits: the GPU threads and idle emulated cores wait for each other with
 +   UMWAIT (the core idles until the other thread writes) instead of spinning on PAUSE, which
 +   leaves more of a laptop CPU's power budget to the busy cores.
 +
-+A/B launchers (this build with one change switched off; compare the same scene each time):
++A/B launchers (this build with one change switched off or on; compare the same scene each time):
 + ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
 + ab-2-no-core-placement.bat   Windows places every thread (LICHII_CPU_POLICY=off)
 + ab-3-soft-placement.bat      only keeps threads off the low-power E-cores (LICHII_CPU_POLICY=soft)
-+ ab-4-strict-placement.bat    emulated CPU cores on P-cores too (LICHII_CPU_POLICY=strict)
++ ab-4-strict-placement.bat    emulated CPU cores on P-cores too, pipeline builds on E-cores only
++                              (LICHII_CPU_POLICY=strict)
 + ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
++ ab-6-big-texture-cache.bat   lets the texture cache keep up to 9 GiB of the 16 GB card before it
++                              evicts (default 5 GiB), so revisited areas re-upload less over OCuLink
 + perf-trace.bat               default settings plus per-second GPU thread zones and frame timing
 +                              in the log (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1)
 +
@@ -62,12 +66,12 @@ index 0000000000..1ab5862c59
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-4-strict-placement.bat b/dist/lichii-tuned/ab-4-strict-placement.bat
 new file mode 100644
-index 0000000000..735408678a
+index 0000000000..2eb5017606
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-4-strict-placement.bat
 @@ -0,0 +1,4 @@
 +@echo off
-+rem Emulated CPU cores on P-cores too.
++rem Emulated CPU cores on P-cores too; pipeline builds on E-cores only.
 +set LICHII_CPU_POLICY=strict
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-5-no-umwait.bat b/dist/lichii-tuned/ab-5-no-umwait.bat
@@ -79,6 +83,16 @@ index 0000000000..9595b829a8
 +@echo off
 +rem PAUSE spinning instead of UMWAIT waits.
 +set LICHII_WAITPKG_SPIN=0
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-6-big-texture-cache.bat b/dist/lichii-tuned/ab-6-big-texture-cache.bat
+new file mode 100644
+index 0000000000..d8128b8a7b
+--- /dev/null
++++ b/dist/lichii-tuned/ab-6-big-texture-cache.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Texture cache keeps up to 9 GiB before evicting (default 5 GiB).
++set EDEN_NX2_TC_CRITICAL_MIB=9216&& set EDEN_NX2_TC_EXPECTED_MIB=8448
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
 new file mode 100644
@@ -503,10 +517,10 @@ index 4a36295931..6843bc561b 100644
  void SetCurrentThreadToAllCores();
 diff --git a/src/common/windows/hybrid_cpu.cpp b/src/common/windows/hybrid_cpu.cpp
 new file mode 100644
-index 0000000000..46cff506b8
+index 0000000000..0c88b1d221
 --- /dev/null
 +++ b/src/common/windows/hybrid_cpu.cpp
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,226 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +#include <windows.h>
@@ -530,10 +544,11 @@ index 0000000000..46cff506b8
 +
 +// LICHII_CPU_POLICY:
 +//  off    - Windows places every thread.
-+//  soft   - keep off a low-power island (Meteor/Arrow Lake-H SoC-tile E-cores) and run pipeline
-+//           builds on E-cores.
++//  soft   - keep every thread off a low-power island (Meteor/Arrow Lake-H SoC-tile E-cores).
 +//  auto   - soft, plus the GPU command threads on P-cores and core timing on E-cores (default).
-+//  strict - auto, plus the guest CPU cores on P-cores.
++//           Pipeline builds keep every other core: they run at low priority, and a draw can be
++//           waiting for one.
++//  strict - auto, plus the guest CPU cores on P-cores and pipeline builds on E-cores.
 +enum class Policy { Off, Soft, Auto, Strict };
 +
 +Policy ReadPolicy() {
@@ -702,7 +717,7 @@ index 0000000000..46cff506b8
 +    case CoreRole::Waiting:
 +        return placed ? &topology.efficient : &topology.shared;
 +    case CoreRole::Background:
-+        return &topology.efficient;
++        return strict ? &topology.efficient : &topology.shared;
 +    }
 +    return nullptr;
 +}
@@ -734,7 +749,7 @@ index 0000000000..46cff506b8
 +} // namespace Common::Windows
 diff --git a/src/common/windows/hybrid_cpu.h b/src/common/windows/hybrid_cpu.h
 new file mode 100644
-index 0000000000..b960cd7a8f
+index 0000000000..6ba3b63a1a
 --- /dev/null
 +++ b/src/common/windows/hybrid_cpu.h
 @@ -0,0 +1,20 @@
@@ -750,7 +765,7 @@ index 0000000000..b960cd7a8f
 +    Fastest,     ///< Threads that bound the frame time (GPU command threads): P-cores.
 +    Performance, ///< Busy, latency-sensitive threads (guest cores): P- and E-cores.
 +    Waiting,     ///< Threads that wait without sleeping (core timing): E-cores.
-+    Background,  ///< Throughput work (pipeline builds): E-cores.
++    Background,  ///< Low-priority throughput work (pipeline builds): any core but the island.
 +};
 +
 +/// Restricts the calling thread to the CPU sets of its role. Does nothing on CPUs with a single
