@@ -68,7 +68,7 @@ jobs:
           install: >-
             git make autoconf libtool automake-wrapper patch jq pactoys ninja
           pacboy: >-
-            toolchain:p clang:p lld:p cmake:p python-pip:p
+            toolchain:p clang:p lld:p llvm:p cmake:p python-pip:p
             qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
             openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
             vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
@@ -99,6 +99,7 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
+          command -v llvm-ar llvm-ranlib clang ld.lld || true
           profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
           linker="-fuse-ld=lld"
@@ -180,8 +181,9 @@ jobs:
           find . -name '*.dll' | while read -r dll; do
             deps "$dll"
           done
-          if [ -d "$GITHUB_WORKSPACE/lichii-tuned/package" ]; then
-            cp -r "$GITHUB_WORKSPACE"/lichii-tuned/package/. .
+          # README and A/B launchers (added by the patch).
+          if [ -d "$GITHUB_WORKSPACE/dist/lichii-tuned" ]; then
+            cp "$GITHUB_WORKSPACE"/dist/lichii-tuned/* .
           fi
 
       - name: Upload
