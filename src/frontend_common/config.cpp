@@ -152,7 +152,8 @@ void Config::SetUpIni() {
         // configuration as well. Whatever is changed afterwards is kept.
         BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
         constexpr s64 TunedDefaultsVersion = 1;
-        if (ReadIntegerSetting(std::string("lichii_tuned_defaults"), 0) < TunedDefaultsVersion) {
+        // Read without a default: with one, a key without a default flag reads as that default.
+        if (ReadIntegerSetting(std::string("lichii_tuned_defaults")) < TunedDefaultsVersion) {
             seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
             seed(Settings::values.use_asynchronous_shaders, ToString(true));
             seed(Settings::values.use_reactive_flushing, ToString(false));
