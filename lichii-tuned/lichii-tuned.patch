@@ -1,9 +1,80 @@
+diff --git a/.github/workflows/build-check.yml b/.github/workflows/build-check.yml
+index 34ea64f6c4..c8daa6611b 100644
+--- a/.github/workflows/build-check.yml
++++ b/.github/workflows/build-check.yml
+@@ -101,3 +101,6 @@ jobs:
+         run: |
+           python3 tools/nx2/test_thread_worker_wake.py
+           python3 -I tools/nx2/thread_worker_wake.py --cxx g++-13
++
++      - name: Test Linux switch discovery
++        run: CXX=g++-13 python3 tools/nx2/test_switches.py
+diff --git a/.github/workflows/release-binaries.yml b/.github/workflows/release-binaries.yml
+index 2c331727de..f4fbaf01c2 100644
+--- a/.github/workflows/release-binaries.yml
++++ b/.github/workflows/release-binaries.yml
+@@ -411,9 +411,8 @@ jobs:
+             .sccache
+           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+ 
+-      # Plain tar.gz with the two programs. GitHub artifacts drop the executable bit, so a tar is
+-      # what keeps it. This one is not self-contained: it needs Qt 6 and the usual libraries
+-      # installed on the system.
++      # Plain tar.gz with the two programs and switch defaults. GitHub artifacts drop executable
++      # bits, so a tar preserves them. This needs Qt 6 and the usual system libraries installed.
+       - name: Package Linux tar.gz
+         if: startsWith(matrix.platform, 'linux')
+         shell: bash
+@@ -423,7 +422,7 @@ jobs:
+           test -x build/release/bin/eden-cli
+           strip build/release/bin/lichii build/release/bin/eden-cli
+           tar -czf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" \
+-            -C build/release/bin lichii eden-cli
++            -C build/release/bin lichii eden-cli nx2_switches.txt
+           ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
+ 
+       # A self-contained AppImage: linuxdeploy bundles every library the two programs need except
+@@ -457,6 +456,8 @@ jobs:
+           export LDAI_OUTPUT="lichii-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
+           export OUTPUT="$LDAI_OUTPUT"
+           export ARCH="$arch"
++          mkdir -p AppDir/usr/bin
++          cp build/release/bin/nx2_switches.txt AppDir/usr/bin/
+           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
+             --executable build/release/bin/lichii \
+             --executable build/release/bin/eden-cli \
+diff --git a/README.md b/README.md
+index 0502b3f38e..48e0ad1f2c 100644
+--- a/README.md
++++ b/README.md
+@@ -16,6 +16,8 @@ Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator wri
+ 
+ This is an independent fork, not an official release of those upstream projects. Lichii is not affiliated with Nintendo.
+ 
++Visit the [official Lichii website](https://lichii.zortos.me) to find games and compare community compatibility reports.
++
+ ## Downloads and setup
+ 
+ Published builds belong on this fork's [releases page](https://github.com/zortos293/Eglantine/releases). The repository still uses its historical Eglantine name; the desktop application is now Lichii.
+@@ -30,6 +32,12 @@ The rebrand intentionally retains the existing Eden/Eglantine data directories a
+ 
+ Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
+ 
++Browse [community compatibility reports](https://lichii.zortos.me/reports) for results with each player's build and setup.
++
++Desktop reporting requires a build containing [PR #303](https://github.com/zortos293/Lichii/pull/303) and is not available in build 88. In builds that include it, play and stop a Switch 2 game, then right-click that game and choose **Submit compatibility report**. Only the latest session in the current Lichii process is eligible.
++
++Confirm the matching website catalog entry and review the editable machine, game, setup, and enabled add-on details prefilled where available. Check the public preview and give explicit consent before submitting. Nothing uploads automatically, and the native v1 reporter does not read or upload logs or files.
++
+ When [reporting an issue](https://github.com/zortos293/Eglantine/issues), include:
+ 
+ - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..70fa85d22a
+index 0000000000..59f892abd1
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,50 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -19,6 +90,17 @@ index 0000000000..70fa85d22a
 + * Intel WAITPKG waits: the GPU threads and idle emulated cores wait for each other with
 +   UMWAIT (the core idles until the other thread writes) instead of spinning on PAUSE, which
 +   leaves more of a laptop CPU's power budget to the busy cores.
++ * The texture cache keeps up to 60% of the VRAM budget (about 9 GB of a 16 GB card) before
++   it evicts, instead of 5 GB, so scenes you return to are not decoded and uploaded again.
++ * Ocarina of Time fixes from open Lichii pull requests: a setting to skip the game's
++   anti-aliasing network (#319; AMD GPUs run its tensor math in software), AMD drivers no
++   longer stall on those shaders (#300), white flashes at GPU accuracy Low (#337), fog white
++   haze (#292), leaf holes from split warps (#329), held draws build their pipeline at once
++   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259).
++ * Recommended speed settings, applied once on first start (change them freely afterwards):
++   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
++   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
++   settings; "Game" brings the game's network back).
 +
 +A/B launchers (this build with one change switched off or on; compare the same scene each time):
 + ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
@@ -27,8 +109,9 @@ index 0000000000..70fa85d22a
 + ab-4-strict-placement.bat    emulated CPU cores on P-cores too, pipeline builds on E-cores only
 +                              (LICHII_CPU_POLICY=strict)
 + ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
-+ ab-6-big-texture-cache.bat   lets the texture cache keep up to 9 GiB of the 16 GB card before it
-+                              evicts (default 5 GiB), so revisited areas re-upload less over OCuLink
++ ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
++ ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
++                              over OCuLink, but some flicker was reported
 + perf-trace.bat               default settings plus per-second GPU thread zones and frame timing
 +                              in the log (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1)
 +
@@ -92,15 +175,25 @@ index 0000000000..9595b829a8
 +rem PAUSE spinning instead of UMWAIT waits.
 +set LICHII_WAITPKG_SPIN=0
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-6-big-texture-cache.bat b/dist/lichii-tuned/ab-6-big-texture-cache.bat
+diff --git a/dist/lichii-tuned/ab-6-official-texture-cache.bat b/dist/lichii-tuned/ab-6-official-texture-cache.bat
 new file mode 100644
-index 0000000000..d8128b8a7b
+index 0000000000..2fe932a4ba
 --- /dev/null
-+++ b/dist/lichii-tuned/ab-6-big-texture-cache.bat
++++ b/dist/lichii-tuned/ab-6-official-texture-cache.bat
 @@ -0,0 +1,4 @@
 +@echo off
-+rem Texture cache keeps up to 9 GiB before evicting (default 5 GiB).
-+set EDEN_NX2_TC_CRITICAL_MIB=9216&& set EDEN_NX2_TC_EXPECTED_MIB=8448
++rem Texture cache collects from 5 GiB as in official Lichii (this build: 60% of the VRAM budget).
++set EDEN_NX2_TC_CRITICAL_MIB=5120&& set EDEN_NX2_TC_EXPECTED_MIB=4352
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-7-preflush.bat b/dist/lichii-tuned/ab-7-preflush.bat
+new file mode 100644
+index 0000000000..eadd6f13a3
+--- /dev/null
++++ b/dist/lichii-tuned/ab-7-preflush.bat
+@@ -0,0 +1,4 @@
++@echo off
++rem Preflush GPU readbacks (fewer readback stalls, may flicker).
++set EDEN_NX2_PREFLUSH=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
 new file mode 100644
@@ -112,6 +205,144 @@ index 0000000000..cf4b3183de
 +rem Logs GPU thread zones and frame timing every second.
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
+diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
+index 5c75012803..4b2d0bb14c 100644
+--- a/dist/nx2_switches.txt
++++ b/dist/nx2_switches.txt
+@@ -4,6 +4,9 @@
+ # Between files, the user copy (%APPDATA%\eden\nx2_switches.txt, or
+ # $XDG_CONFIG_HOME/eden/nx2_switches.txt) wins over this one, so editing this file is never
+ # needed: copy the lines you want into your own and restart.
++# Beside-application files accept EDEN_NX2_* and the emulator's diagnostic switches only.
++# Host environment settings, including library paths such as EDEN_STREAMLINE_DIR, must be
++# set in the real environment or the user configuration file at an absolute config location.
+ #
+ # Restart the emulator after editing.
+ 
+diff --git a/docs/compatibility-report.md b/docs/compatibility-report.md
+new file mode 100644
+index 0000000000..9757bcb3bd
+--- /dev/null
++++ b/docs/compatibility-report.md
+@@ -0,0 +1,50 @@
++# Opt-in desktop compatibility reports
++
++After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Lichii process. Starting another game clears that session, and closing Lichii discards it. This feature does not store play history.
++
++Search the website catalog, select the exact game, and press **Confirm game**. Search is explicit and supports catalog pages. A Nintendo title ID is never used as a catalog ID. The search box uses control metadata or the loader's known title, including NUP package titles. Missing title metadata leaves the search blank rather than using a filename.
++
++Review the editable experience and setup tabs, then the public JSON preview. Build, CPU, OS, RAM, title version, active renderer identity and launch settings are prefilled when available. Vulkan supplies the selected physical device model and its driver name/version using the existing vendor-specific version formatter. OpenGL supplies the active context's renderer and complete implementation/version string, not a guessed standalone driver version. Missing values remain Unknown. Prefills are not performance measurements. Compatibility and progress require the player's judgment. Settings changed during gameplay must be corrected by the player.
++
++Both attestations start unchecked and reset after an edit or submission attempt. The player must affirm them and press **Submit report**. There is no account or embedded secret. Names, handles, report text, hardware and settings are public. The service sees the client's IP address and uses it for rate limiting. Logs and files are never read or uploaded by this feature.
++
++**Clear draft** clears editable content and catalog confirmation. Cancel aborts an outstanding search or stops waiting for a submission. Cancellation cannot retract data already received by the server. After an uncertain response, an explicit retry of an unchanged draft uses the same UUID and body. There are no automatic retries. Closing the dialog discards that identity, so check for an accepted report before starting another draft.
++
++## Implementation boundary
++
++`MainWindow::BootGame` captures one allowlisted value snapshot after successful core loading and before starting the emulation thread. `OnEmulationStopped` enables the context action for that snapshot's exact local program ID. Application changes invalidate it. The dialog receives copied values, not a core object, filesystem object, settings serializer or log path.
++
++Each graphics backend copies its device identity during construction while its selected device/context is available. The session then copies those strings before teardown; it performs no GL calls, adapter enumeration or log reading. The null backend leaves the identity empty. No session performance measurements are collected by the reporting feature.
++
++Mods and updates use the add-on catalog's enabled entries at launch. Only their display names and version/type labels enter the draft, never their locations or file contents. Disabled entries and DLC are excluded. These are configured enabled entries, not proof that every patch applied successfully. Summaries longer than the API's 500-character limit are explicitly marked as truncated for review.
++
++NUP packages select their embedded update internally, outside that catalog. Their effective game version comes from the loaded package's display-version metadata and is included as **Loaded NUP package** in the updates field. This does not guess whether a base-only package contains a separate update.
++
++`CompatibilityReporting::Dialog` owns the catalog confirmation, consent state, payload validation and asynchronous network requests. Its normal constructor creates a dedicated network manager. Requests disable cookie loading/saving, credential reuse, caching and redirects, and have a 20-second deadline and 256 KiB response bound. Only an explicit Search or Submit starts a request. Server errors are shown as local messages and known field names, never arbitrary HTML. Receipt links must match the approved HTTPS origin and report UUID path.
++
++A separate controller/view design was considered. The dialog-owned implementation avoids a second mutable representation of one fixed-purpose form. The tests inject a network manager through a private construction seam and exercise the same widgets and state transitions as production, without emulator startup.
++
++The native v1 wire contract is [the website API reference](https://github.com/zortos293/Lichii-Website/blob/57ad91b89e80b5be040892c7e0983d69c887e307/docs/desktop-api.md). It has no private-log consent or upload fields. The two required attestations concern public disclosure and safe report contents.
++
++## Verification without a game
++
++Build the standalone Qt test target with clang and Ninja:
++
++```sh
++cmake -S src/tests/qt_compatibility -B build/compatibility-report -G Ninja \
++  -DCMAKE_CXX_COMPILER=clang++
++cmake --build build/compatibility-report --parallel 4
++ctest --test-dir build/compatibility-report --output-on-failure
++```
++
++The target also joins the normal Qt build when `YUZU_TESTS` is enabled. It uses the production Qt string-conversion definitions. Tests cover consent gates, catalog confirmation and pagination, stale responses, cancellation, double submission, exact allowed fields, retry identity, field errors, rate limits, malformed/oversized responses and unsafe receipt URLs. A loopback HTTP fixture checks actual Qt transport and ensures a seeded cookie is not sent. Neither fake transport nor loopback tests can send a production report.
++
++For a synthetic dialog using only fake transport:
++
++```sh
++build/compatibility-report/compatibility_report_tests --preview
++QT_QPA_PLATFORM=offscreen build/compatibility-report/compatibility_report_tests \
++  --screenshot /tmp/compatibility-report.png
++```
++
++The preview preloads synthetic experience text for visual inspection. Real dialogs do not preselect a compatibility rating or populate progress and details. Do not submit synthetic fixtures to the live website to test connectivity.
+diff --git a/docs/nx2/oot-network-bypass.md b/docs/nx2/oot-network-bypass.md
+new file mode 100644
+index 0000000000..73fd295350
+--- /dev/null
++++ b/docs/nx2/oot-network-bypass.md
+@@ -0,0 +1,62 @@
++# Ocarina of Time: bypassing the game's anti-aliasing network
++
++The Legend of Zelda: Ocarina of Time (`0400486024DEC000`) runs a tensor network on its tonemapped
++image followed by an output pass that sharpens hard. The "Ocarina of Time anti-aliasing" setting
++(`oot_anti_aliasing`: Game / No sharpening) can skip both and show the tonemapped image instead.
++
++## What the game does
++
++Found with sampled frame dumps (`capture_frame` with `sampled`), a trace of the texture handles in
++the compute passes' constant buffer 0, and pixel statistics, in Kokiri Forest, docked, at 1x with
++the built-in Max Resolution patch.
++
++- The 3D renders at the output size (2560x1440 docked), with no jitter and no motion vectors.
++- The tonemap pass (fragment shader `bded5ce917183214` outdoors, `3ac011bd2d772994` outdoors at
++  another time of day, `6cb06edf14be1d79` indoors) renders a B10G11R11 image.
++- The game then runs, on that **tonemapped** image: a prepass (`8475d671e6967428`), a heavy
++  dispatch (shader `d9ee412f00ce399a`), the network (`42593194bb0b2b32`) and an output pass
++  (`da6df3e54c716df2`) that writes the B10G11R11 image the rest of the frame uses (texture handle
++  at cb0+0xd0). Keys are native program keys.
++- The network keeps no history: it is a single-frame spatial smoother (mean |Laplacian| of green
++  0.0042 -> 0.0037). The output pass then sharpens hard: 2.2x the input's edge contrast, with
++  overshoot up to 1.72 on bright edges. That is the halo users see.
++- Only the HUD and a plain copy for presentation follow the output pass.
++
++## What No sharpening does
++
++`ShaderCache::GetComputePipeline` asks `KeplerCompute::BypassOotNetwork` about every native compute
++dispatch (`DispatchReplaced` skips it):
++
++- the prepass and the network are skipped;
++- the output pass is replaced by an `AccelerateSurfaceCopy` of the tonemapped image into the output
++  pass's own target (point filter, same size; format, size and block-linear layout from the output
++  pass's texture descriptor at cb0+0xd0).
++
++The images are learned at run time, not hard-coded: the tonemapped image is render target 0 of the
++latest draw whose pipeline has a tonemap fragment shader
++(`RasterizerVulkan::TrackOotTonemappedImage`), and the output is whatever the output pass's handle
++selects. Nothing is replaced until the tonemapped image has been seen. The prepass and the network
++are skipped only while the output pass is being replaced: if the output descriptor is not the
++expected B10G11R11 block-linear image or the copy fails, the next frame runs the whole network
++natively again. The state lives in the rasterizer (`OotNetwork::BypassState`) because the tonemap
++pass draws on the 3D engine and the network's passes do not all run on the same compute engine.
++
++The game's constants (shader hashes, program keys, the cb0 offset) are in
++`src/video_core/oot_network.h`.
++
++## Results (Ryzen 7 9800X3D, RTX 5090, Kokiri Forest, 1x)
++
++| Mode | fps | Image |
++|---|---|---|
++| Game | ~41 | sharpened, halos |
++| No sharpening | ~50 | clean; edges aliased as rendered, pairs with resolution scaling |
++
++## Caveats
++
++- Hashes, keys and the offset are specific to the game's main with build id
++  `E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348`; a game update needs them re-checked. With other
++  keys the bypass does nothing.
++- B10G11R11 has little precision in dark tones: without the network's smoothing some banding
++  shows in deep shadows.
++- The heavy dispatch between the prepass and the network still runs; its result goes unused.
++- Vulkan only: other backends never learn the tonemapped image, so the setting has no effect there.
 diff --git a/externals/cmake-modules/UseLTO.cmake b/externals/cmake-modules/UseLTO.cmake
 index b364ef22d8..35ef3d9fce 100644
 --- a/externals/cmake-modules/UseLTO.cmake
@@ -274,6 +505,53 @@ index 0000000000..cfe86ce094
 +void Flush();
 +
 +} // namespace Common::PgoTraining
+diff --git a/src/common/settings.cpp b/src/common/settings.cpp
+index c63943a9d3..cbf65c849d 100644
+--- a/src/common/settings.cpp
++++ b/src/common/settings.cpp
+@@ -46,6 +46,7 @@ SETTING(std::string, false);
+ SETTING(u16, false);
+ SWITCHABLE(AnisotropyMode, true);
+ SWITCHABLE(AntiAliasing, false);
++SWITCHABLE(OotAntiAliasing, false);
+ SWITCHABLE(AspectRatio, true);
+ SWITCHABLE(AstcDecodeMode, true);
+ SWITCHABLE(AstcRecompression, true);
+diff --git a/src/common/settings.h b/src/common/settings.h
+index e5f5029dc9..1b9c98481a 100644
+--- a/src/common/settings.h
++++ b/src/common/settings.h
+@@ -64,6 +64,7 @@ SETTING(std::string, false);
+ SETTING(u16, false);
+ SWITCHABLE(AnisotropyMode, true);
+ SWITCHABLE(AntiAliasing, false);
++SWITCHABLE(OotAntiAliasing, false);
+ SWITCHABLE(AspectRatio, true);
+ SWITCHABLE(AstcDecodeMode, true);
+ SWITCHABLE(AstcRecompression, true);
+@@ -399,6 +400,10 @@ struct Values {
+                                                   Specialization::Default,
+                                                   true,
+                                                   true};
++    // The Legend of Zelda: Ocarina of Time's own anti-aliasing network and its sharpening output
++    // pass, or the tonemapped image as the game renders it (video_core/oot_network.h).
++    SwitchableSetting<OotAntiAliasing> oot_anti_aliasing{linkage, OotAntiAliasing::Game,
++                                                         "oot_anti_aliasing", Category::Renderer};
+ 
+     SwitchableSetting<std::string> post_shader_chain{linkage,
+                                                      std::string(),
+diff --git a/src/common/settings_enums.h b/src/common/settings_enums.h
+index 133b503f72..f8573f5c20 100644
+--- a/src/common/settings_enums.h
++++ b/src/common/settings_enums.h
+@@ -148,6 +148,7 @@ ENUM(NvdecEmulation, Off, Cpu, Gpu);
+ ENUM(ResolutionSetup, Res1_4X, Res1_2X, Res3_4X, Res1X, Res5_4X, Res3_2X, Res2X, Res3X, Res4X, Res5X, Res6X, Res7X, Res8X);
+ ENUM(ScalingFilter, NearestNeighbor, Bilinear, Bicubic, Gaussian, Lanczos, ScaleForce, Fsr, Area, ZeroTangent, BSpline, Mitchell, Spline1, Mmpx, Sgsr, SgsrEdge, Fsr3);
+ ENUM(AntiAliasing, None, Fxaa, Smaa);
++ENUM(OotAntiAliasing, Game, NoSharpening);
+ ENUM(AspectRatio, R16_9, R4_3, R21_9, R16_10, Stretch);
+ ENUM(ConsoleMode, Handheld, Docked);
+ ENUM(AppletMode, HLE, LLE, Disabled);
 diff --git a/src/common/spin_wait.cpp b/src/common/spin_wait.cpp
 new file mode 100644
 index 0000000000..dfa56aa209
@@ -921,6 +1199,21 @@ index dfc3f6f2a6..aab922f349 100644
              on_thread_init();
              has_started = true;
  
+diff --git a/src/core/file_sys/patch_manager.cpp b/src/core/file_sys/patch_manager.cpp
+index 860288787a..eed7084498 100644
+--- a/src/core/file_sys/patch_manager.cpp
++++ b/src/core/file_sys/patch_manager.cpp
+@@ -74,7 +74,9 @@ constexpr std::array<u8, 4> DYNAMIC_FPS_CALL{0x4F, 0x7D, 0xD5, 0x94};
+ constexpr std::array<u8, 120> DYNAMIC_FPS_ROUTINE{
+     0x28, 0x18, 0x20, 0x1E, 0xCA, 0x92, 0x00, 0xB0, 0x4A, 0x01, 0x38, 0x91, 0x2B, 0xE0, 0x3B,
+     0xD5, 0x4C, 0x01, 0x40, 0xF9, 0x4B, 0x01, 0x00, 0xF9, 0xCC, 0x02, 0x00, 0xB4, 0x6B, 0x01,
+-    0x0C, 0xCB, 0x0D, 0xE0, 0x3B, 0xD5, 0x8E, 0x02, 0x80, 0xD2, 0xAE, 0x09, 0xCE, 0x9A, 0x7F,
++    // Local: the original routine caps the measured delta at CNTFRQ / 20 (50 ms). Use /10
++    // (100 ms) so Ocarina keeps real speed down to 10 fps with EDEN_NX2_FRAMES_AHEAD=0.
++    0x0C, 0xCB, 0x0D, 0xE0, 0x3B, 0xD5, 0x4E, 0x01, 0x80, 0xD2, 0xAE, 0x09, 0xCE, 0x9A, 0x7F,
+     0x01, 0x0E, 0xEB, 0xCB, 0x81, 0x8B, 0x9A, 0x4C, 0x05, 0x40, 0xF9, 0x4C, 0x00, 0x00, 0xB5,
+     0xEC, 0x03, 0x0B, 0xAA, 0x6E, 0x01, 0x0C, 0xCB, 0x8C, 0x0D, 0x8E, 0x8B, 0x4C, 0x05, 0x00,
+     0xF9, 0x82, 0x01, 0x23, 0x9E, 0xA3, 0x01, 0x23, 0x9E, 0x42, 0x18, 0x23, 0x1E, 0x42, 0x08,
 diff --git a/src/core/hle/kernel/physical_core.cpp b/src/core/hle/kernel/physical_core.cpp
 index 4fb59fb62a..2fd5856b4b 100644
 --- a/src/core/hle/kernel/physical_core.cpp
@@ -967,6 +1260,1104 @@ index fd7233cf93..357ae0a1d0 100644
      Common::ADPF::SetTargetWorkDuration(std::chrono::nanoseconds{this->GetFramePeriodNs()});
  
      for (auto& [display_id, manager] : m_vsync_managers) {
+diff --git a/src/frontend_common/config.cpp b/src/frontend_common/config.cpp
+index 698385ed1e..60a6f84536 100644
+--- a/src/frontend_common/config.cpp
++++ b/src/frontend_common/config.cpp
+@@ -134,12 +134,12 @@ void Config::SetUpIni() {
+     }
+ 
+ #ifndef __ANDROID__
++    const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
++        WriteStringSetting(setting.GetLabel(), value);
++        WriteBooleanSetting(setting.GetLabel() + "\\default", false);
++    };
+     if (new_global_config) {
+         BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
+-        const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
+-            WriteStringSetting(setting.GetLabel(), value);
+-            WriteBooleanSetting(setting.GetLabel() + "\\default", false);
+-        };
+         seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+         seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
+         seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
+@@ -147,6 +147,24 @@ void Config::SetUpIni() {
+         seed(Settings::values.use_asynchronous_shaders, ToString(true));
+         EndGroup();
+     }
++    if (global) {
++        // lichii-tuned: the speed settings it recommends, applied once to an existing
++        // configuration as well. Whatever is changed afterwards is kept.
++        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
++        constexpr s64 TunedDefaultsVersion = 1;
++        if (ReadIntegerSetting(std::string("lichii_tuned_defaults"), 0) < TunedDefaultsVersion) {
++            seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
++            seed(Settings::values.use_asynchronous_shaders, ToString(true));
++            seed(Settings::values.use_reactive_flushing, ToString(false));
++            seed(Settings::values.async_presentation, ToString(true));
++            seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
++            seed(Settings::values.oot_anti_aliasing,
++                 ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
++            WriteIntegerSetting(std::string("lichii_tuned_defaults"), TunedDefaultsVersion);
++            LOG_INFO(Config, "lichii-tuned: applied the recommended speed settings");
++        }
++        EndGroup();
++    }
+ #endif
+ }
+ 
+diff --git a/src/qt_common/config/shared_translation.cpp b/src/qt_common/config/shared_translation.cpp
+index a720754316..b687d6d64e 100644
+--- a/src/qt_common/config/shared_translation.cpp
++++ b/src/qt_common/config/shared_translation.cpp
+@@ -165,6 +165,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
+            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "
+               "can produce a more stable picture in lower resolutions."));
++    INSERT(Settings, oot_anti_aliasing, tr("Ocarina of Time anti-aliasing:"),
++           tr("The Legend of Zelda: Ocarina of Time only.\nGame: the game's own anti-aliasing "
++              "network, which sharpens heavily.\nNo sharpening: the image as the game renders it, "
++              "without the network (faster; pairs well with a higher resolution).\nTakes effect "
++              "when the game starts."));
+     INSERT(Settings, post_shader_chain, QString(), QString());
+     INSERT(Settings, post_shader_preset, QString(), QString());
+     INSERT(Settings, post_shader_enabled, tr("Enable post-processing effects"),
+@@ -536,6 +541,11 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
+                               PAIR(AntiAliasing, Fxaa, tr("FXAA")),
+                               PAIR(AntiAliasing, Smaa, tr("SMAA")),
+                           }});
++    translations->insert({Settings::EnumMetadata<Settings::OotAntiAliasing>::Index(),
++                          {
++                              PAIR(OotAntiAliasing, Game, tr("Game")),
++                              PAIR(OotAntiAliasing, NoSharpening, tr("No sharpening")),
++                          }});
+     translations->insert({Settings::EnumMetadata<Settings::AspectRatio>::Index(),
+                           {
+                               PAIR(AspectRatio, R16_9, tr("Default (16:9)")),
+diff --git a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
+index ac2d77c671..f161be942d 100644
+--- a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
++++ b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
+@@ -516,6 +516,7 @@ void VisitUsages(Info& info, IR::Inst& inst) {
+         info.uses_rescaling_uniform = true;
+         break;
+     case IR::Opcode::TensorMulAdd:
++        info.uses_software_matrix = true;
+         info.uses_subgroup_shuffles = true;
+         info.uses_fp32_denorms_preserve = true;
+         info.uses_subgroup_invocation_id = true;
+diff --git a/src/shader_recompiler/shader_info.h b/src/shader_recompiler/shader_info.h
+index 2ed83d011b..58d68cb05e 100644
+--- a/src/shader_recompiler/shader_info.h
++++ b/src/shader_recompiler/shader_info.h
+@@ -286,6 +286,7 @@ struct Info {
+     bool uses_is_helper_invocation{};
+     bool uses_subgroup_invocation_id{};
+     bool uses_subgroup_shuffles{};
++    bool uses_software_matrix{};
+     bool uses_quad_shuffles{};
+     std::array<bool, 30> uses_patches{};
+ 
+diff --git a/src/tests/qt_compatibility/CMakeLists.txt b/src/tests/qt_compatibility/CMakeLists.txt
+new file mode 100644
+index 0000000000..51e18c22fd
+--- /dev/null
++++ b/src/tests/qt_compatibility/CMakeLists.txt
+@@ -0,0 +1,27 @@
++cmake_minimum_required(VERSION 3.16)
++
++if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
++    project(compatibility_report_tests LANGUAGES CXX)
++    enable_testing()
++endif()
++
++set(CMAKE_AUTOMOC ON)
++find_package(Qt6 REQUIRED COMPONENTS Widgets Network Test)
++add_executable(compatibility_report_tests
++    compatibility_report.cpp
++    ../../yuzu/compatibility_report.cpp
++    ../../yuzu/compatibility_report.h
++)
++target_compile_features(compatibility_report_tests PRIVATE cxx_std_20)
++target_compile_definitions(compatibility_report_tests PRIVATE
++    QT_USE_QSTRINGBUILDER
++    QT_NO_CAST_FROM_ASCII
++    QT_NO_CAST_TO_ASCII
++    QT_NO_NARROWING_CONVERSIONS_IN_CONNECT
++    QT_NO_PROCESS_COMBINED_ARGUMENT_START
++    QT_NO_URL_CAST_FROM_STRING
++)
++target_include_directories(compatibility_report_tests PRIVATE ../..)
++target_link_libraries(compatibility_report_tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Test)
++add_test(NAME compatibility_report COMMAND compatibility_report_tests)
++set_tests_properties(compatibility_report PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+diff --git a/src/tests/qt_compatibility/compatibility_report.cpp b/src/tests/qt_compatibility/compatibility_report.cpp
+new file mode 100644
+index 0000000000..8c7fafe94b
+--- /dev/null
++++ b/src/tests/qt_compatibility/compatibility_report.cpp
+@@ -0,0 +1,708 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "yuzu/compatibility_report.h"
++
++#include <algorithm>
++#include <cstring>
++#include <memory>
++#include <QApplication>
++#include <QCheckBox>
++#include <QComboBox>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QLabel>
++#include <QLineEdit>
++#include <QNetworkAccessManager>
++#include <QNetworkCookie>
++#include <QNetworkCookieJar>
++#include <QNetworkReply>
++#include <QPlainTextEdit>
++#include <QPushButton>
++#include <QScrollBar>
++#include <QTabWidget>
++#include <QTcpServer>
++#include <QTcpSocket>
++#include <QTest>
++#include <QTextCursor>
++#include <QTranslator>
++#include <QUrlQuery>
++
++namespace CompatibilityReporting {
++
++class FakeReply final : public QNetworkReply {
++public:
++    FakeReply(const QNetworkRequest& request, QObject* parent) : QNetworkReply(parent) {
++        setRequest(request);
++        setUrl(request.url());
++        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
++    }
++
++    void abort() override {
++        aborted = true;
++        setError(OperationCanceledError, QStringLiteral("Cancelled"));
++        emit finished();
++    }
++
++    void Complete(int status, QByteArray bytes, QByteArray retry_after = {}) {
++        data = std::move(bytes);
++        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
++        setRawHeader("Retry-After", retry_after);
++        emit readyRead();
++        setFinished(true);
++        emit finished();
++    }
++
++    qint64 bytesAvailable() const override {
++        return data.size() - offset + QNetworkReply::bytesAvailable();
++    }
++
++    bool aborted{};
++
++protected:
++    qint64 readData(char* output, qint64 maximum) override {
++        const auto count = std::min(maximum, qint64(data.size() - offset));
++        if (count <= 0) {
++            return -1;
++        }
++        std::memcpy(output, data.constData() + offset, size_t(count));
++        offset += count;
++        return count;
++    }
++
++private:
++    QByteArray data;
++    qint64 offset{};
++};
++
++class FakeNetwork final : public QNetworkAccessManager {
++public:
++    struct Request {
++        Operation operation;
++        QNetworkRequest request;
++        QByteArray body;
++        QPointer<FakeReply> reply;
++    };
++    QList<Request> requests;
++
++protected:
++    QNetworkReply* createRequest(Operation operation, const QNetworkRequest& request,
++                                 QIODevice* data) override {
++        auto* reply = new FakeReply(request, this);
++        requests.push_back({operation, request, data ? data->readAll() : QByteArray{}, reply});
++        return reply;
++    }
++};
++
++class DialogTest final : public QObject {
++    Q_OBJECT
++
++public:
++    static Session Seed();
++    static QByteArray Catalog(int page = 1, int pages = 1);
++    static void Prepare(Dialog& dialog, FakeNetwork& network);
++    static int Preview(QApplication& app, const QString& screenshot = {});
++
++private slots:
++    void noImplicitTraffic();
++    void explicitCatalogAndPaging();
++    void consentAndDoubleSubmit();
++    void retryIdentityAndEdits();
++    void rateLimitAndCancellation();
++    void invalidCatalog_data();
++    void invalidCatalog();
++    void unsafeReceiptAndRedirect();
++    void localValidationAndClear();
++    void isolatedHttpTransport();
++    void serverRejections_data();
++    void serverRejections();
++    void reconfirmationKeepsRetryIdentity();
++    void cooldownPreservesPreviewSelection();
++    void dialogTranslationContext();
++    void machinePrefillsRemainEditable();
++    void enabledAddonPrefills();
++};
++
++Session DialogTest::Seed() {
++    return {.program_id = 0x0400000000000000ULL,
++            .title = QStringLiteral("Synthetic Switch 2 game"),
++            .build = QStringLiteral("Lichii prototype (synthetic)"),
++            .game_version = QStringLiteral("1.0.0"),
++            .cpu = QStringLiteral("Example CPU"),
++            .gpu = {},
++            .driver = {},
++            .os = QStringLiteral("Example OS"),
++            .ram = QStringLiteral("16 GiB"),
++            .graphics_api = QStringLiteral("Vulkan"),
++            .settings = QStringLiteral("Launch settings: handheld mode; resolution scale 1x."),
++            .mods = {},
++            .updates = {}};
++}
++
++QByteArray DialogTest::Catalog(int page, int pages) {
++    return QJsonDocument(
++               QJsonObject{
++                   {QStringLiteral("games"),
++                    QJsonArray{QJsonObject{
++                        {QStringLiteral("sgdbId"), 12345},
++                        {QStringLiteral("slug"), QStringLiteral("synthetic-game")},
++                        {QStringLiteral("title"), QStringLiteral("Synthetic Switch 2 game")}}}},
++                   {QStringLiteral("page"), page},
++                   {QStringLiteral("pageCount"), pages},
++                   {QStringLiteral("total"), 1}})
++        .toJson();
++}
++
++void DialogTest::Prepare(Dialog& dialog, FakeNetwork& network) {
++    dialog.search->click();
++    network.requests.last().reply->Complete(200, Catalog());
++    dialog.confirm->click();
++    dialog.fields[QStringLiteral("summary")]->setText(
++        QStringLiteral("Synthetic test, never sent to the Internet"));
++    dialog.paragraphs[QStringLiteral("progress")]->setPlainText(
++        QStringLiteral("Played the opening area in a synthetic session."));
++    dialog.paragraphs[QStringLiteral("details")]->setPlainText(
++        QStringLiteral("Example report for local UI verification only."));
++    dialog.outcome->setCurrentIndex(2);
++}
++
++int DialogTest::Preview(QApplication& app, const QString& screenshot) {
++    FakeNetwork network;
++    auto session = Seed();
++    session.gpu = QStringLiteral("Example active GPU");
++    session.driver = QStringLiteral("Example driver 1.2.3");
++    Dialog dialog(session, &network, nullptr);
++    Prepare(dialog, network);
++    dialog.status->setText(
++        QStringLiteral("LOCAL MOCK ONLY. No report or catalog request reaches the Internet."));
++    dialog.show();
++    if (!screenshot.isEmpty()) {
++        dialog.tabs->setCurrentIndex(1);
++        QTest::qWait(100);
++        return dialog.grab().save(screenshot) ? 0 : 1;
++    }
++    return app.exec();
++}
++
++void DialogTest::noImplicitTraffic() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    QCOMPARE(dialog.query->text(), Seed().title);
++    QVERIFY(network.requests.empty());
++    QVERIFY(!dialog.public_consent->isChecked());
++    QVERIFY(!dialog.safe_files_consent->isChecked());
++    QVERIFY(!dialog.submit->isEnabled());
++    dialog.query->setText(QStringLiteral("A different title"));
++    dialog.fields[QStringLiteral("name")]->setText(QStringLiteral("Player"));
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    dialog.clear->click();
++    dialog.reject();
++    QCOMPARE(network.requests.size(), 0);
++}
++
++void DialogTest::explicitCatalogAndPaging() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    dialog.search->click();
++    QCOMPARE(network.requests.size(), 1);
++    const auto& request = network.requests.first().request;
++    QCOMPARE(request.url().path(), QStringLiteral("/api/games"));
++    QCOMPARE(QUrlQuery(request.url()).queryItemValue(QStringLiteral("sort")),
++             QStringLiteral("title"));
++    QVERIFY(!request.hasRawHeader("X-Lichii-Client"));
++    network.requests.last().reply->Complete(200, Catalog(1, 2));
++    QCOMPARE(dialog.confirmed_game, 0);
++    dialog.confirm->click();
++    QCOMPARE(dialog.confirmed_game, 12345);
++    QCOMPARE(network.requests.size(), 1);
++    dialog.next->click();
++    QCOMPARE(network.requests.size(), 2);
++    QCOMPARE(
++        QUrlQuery(network.requests.last().request.url()).queryItemValue(QStringLiteral("page")),
++        QStringLiteral("2"));
++    QCOMPARE(dialog.confirmed_game, 0);
++    network.requests.last().reply->Complete(200, Catalog(2, 2));
++    QVERIFY(!dialog.next->isEnabled());
++    dialog.previous->click();
++    QCOMPARE(network.requests.size(), 3);
++    auto pending = network.requests.last().reply;
++    dialog.query->setText(QStringLiteral("Changed title"));
++    QVERIFY(pending->aborted);
++    pending->Complete(200, Catalog());
++    QCOMPARE(dialog.games->count(), 0);
++    QCOMPARE(dialog.confirmed_game, 0);
++}
++
++void DialogTest::consentAndDoubleSubmit() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    QVERIFY(dialog.ValidationError().isEmpty());
++    dialog.Submit();
++    QCOMPARE(network.requests.size(), 1);
++    dialog.public_consent->setChecked(true);
++    dialog.Submit();
++    QCOMPARE(network.requests.size(), 1);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    dialog.Submit();
++    QCOMPARE(network.requests.size(), 2);
++    QVERIFY(!dialog.submit->isEnabled());
++    const auto& sent = network.requests.last();
++    QCOMPARE(sent.operation, QNetworkAccessManager::PostOperation);
++    QCOMPARE(sent.request.url().toString(),
++             QStringLiteral("https://lichii.zortos.me/api/v1/desktop/reports"));
++    QCOMPARE(sent.request.rawHeader("X-Lichii-Client"), QByteArray("desktop/1"));
++    QVERIFY(!QUuid(QString::fromUtf8(sent.request.rawHeader("Idempotency-Key"))).isNull());
++    for (const auto& header : {"Cookie", "Authorization", "Origin", "Sec-Fetch-Site"}) {
++        QVERIFY(!sent.request.hasRawHeader(header));
++    }
++    QCOMPARE(sent.request.attribute(QNetworkRequest::CookieLoadControlAttribute).toInt(),
++             int(QNetworkRequest::Manual));
++    QCOMPARE(sent.request.attribute(QNetworkRequest::CookieSaveControlAttribute).toInt(),
++             int(QNetworkRequest::Manual));
++    QCOMPARE(sent.request.attribute(QNetworkRequest::AuthenticationReuseAttribute).toInt(),
++             int(QNetworkRequest::Manual));
++    QCOMPARE(sent.request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(),
++             int(QNetworkRequest::ManualRedirectPolicy));
++    const auto object = QJsonDocument::fromJson(sent.body).object();
++    const QStringList expected_fields{
++        QStringLiteral("build"),         QStringLiteral("cpu"),
++        QStringLiteral("details"),       QStringLiteral("driver"),
++        QStringLiteral("gameId"),        QStringLiteral("gameVersion"),
++        QStringLiteral("gpu"),           QStringLiteral("graphicsApi"),
++        QStringLiteral("handle"),        QStringLiteral("mods"),
++        QStringLiteral("name"),          QStringLiteral("os"),
++        QStringLiteral("outcome"),       QStringLiteral("progress"),
++        QStringLiteral("publicConsent"), QStringLiteral("ram"),
++        QStringLiteral("reproduction"),  QStringLiteral("safeFilesConsent"),
++        QStringLiteral("settings"),      QStringLiteral("summary"),
++        QStringLiteral("updates")};
++    QCOMPARE(object.keys(), expected_fields);
++    QCOMPARE(object.value(QStringLiteral("gameId")).toInt(), 12345);
++    QVERIFY(object.value(QStringLiteral("publicConsent")).toBool());
++    QVERIFY(object.value(QStringLiteral("safeFilesConsent")).toBool());
++    for (const auto& key : {"log", "privateLogConsent", "website", "programId", "title", "path"}) {
++        QVERIFY(!object.contains(QString::fromLatin1(key)));
++    }
++    QCOMPARE(object.value(QStringLiteral("gpu")).toString(), QStringLiteral("Unknown"));
++    network.requests.last().reply->Complete(
++        201,
++        R"({"id":"12345678-1234-4234-8234-123456789abc","url":"https://lichii.zortos.me/reports/12345678-1234-4234-8234-123456789abc"})");
++    QCOMPARE(dialog.state, Dialog::State::Finished);
++    dialog.Submit();
++    QCOMPARE(network.requests.size(), 2);
++}
++
++void DialogTest::retryIdentityAndEdits() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    const auto original = network.requests.last();
++    original.reply->Complete(503, "{}");
++    QCOMPARE(network.requests.size(), 2);
++    QVERIFY(!dialog.public_consent->isChecked());
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    QCOMPARE(network.requests.size(), 3);
++    QCOMPARE(network.requests.last().body, original.body);
++    QCOMPARE(network.requests.last().request.rawHeader("Idempotency-Key"),
++             original.request.rawHeader("Idempotency-Key"));
++    network.requests.last().reply->Complete(400, R"({"fields":{"summary":["Too long"]}})");
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.fields[QStringLiteral("summary")]->setText(QStringLiteral("Edited synthetic draft"));
++    QVERIFY(!dialog.public_consent->isChecked());
++    QVERIFY(!dialog.safe_files_consent->isChecked());
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    QVERIFY(network.requests.last().request.rawHeader("Idempotency-Key") !=
++            original.request.rawHeader("Idempotency-Key"));
++}
++
++void DialogTest::rateLimitAndCancellation() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    network.requests.last().reply->Complete(429, "{}", "1");
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    QVERIFY(!dialog.submit->isEnabled());
++    dialog.Submit();
++    QCOMPARE(network.requests.size(), 2);
++    QTest::qWait(1100);
++    dialog.Refresh();
++    QVERIFY(dialog.submit->isEnabled());
++    dialog.Submit();
++    auto pending = network.requests.last().reply;
++    dialog.reject();
++    QVERIFY(pending->aborted);
++    pending->Complete(201, "{}");
++    QCOMPARE(dialog.state, Dialog::State::Closed);
++    QCOMPARE(network.requests.size(), 3);
++}
++
++void DialogTest::invalidCatalog_data() {
++    QTest::addColumn<QByteArray>("body");
++    QTest::newRow("not-json") << QByteArray("invalid");
++    QTest::newRow("wrong-id") << QByteArray(
++        R"({"games":[{"sgdbId":"123","title":"Title","slug":"title"}],"page":1,"pageCount":1})");
++    QTest::newRow("fractional-id") << QByteArray(
++        R"({"games":[{"sgdbId":1.5,"title":"Title","slug":"title"}],"page":1,"pageCount":1})");
++    QTest::newRow("missing-games") << QByteArray(R"({"page":1,"pageCount":1})");
++    QTest::newRow("oversized") << QByteArray(256 * 1024 + 1, 'x');
++}
++
++void DialogTest::invalidCatalog() {
++    QFETCH(QByteArray, body);
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    dialog.search->click();
++    network.requests.last().reply->Complete(200, body);
++    QCOMPARE(dialog.games->count(), 0);
++    QCOMPARE(dialog.confirmed_game, 0);
++    QVERIFY(!dialog.submit->isEnabled());
++}
++
++void DialogTest::unsafeReceiptAndRedirect() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    for (const auto http_status : {302, 201}) {
++        dialog.public_consent->setChecked(true);
++        dialog.safe_files_consent->setChecked(true);
++        dialog.Submit();
++        network.requests.last().reply->Complete(
++            http_status,
++            R"({"id":"12345678-1234-4234-8234-123456789abc","url":"https://evil.example/reports/12345678-1234-4234-8234-123456789abc"})");
++        QVERIFY(dialog.receipt_url.isEmpty());
++        QCOMPARE(dialog.state, Dialog::State::Editing);
++    }
++    QCOMPARE(network.requests.size(), 3);
++}
++
++void DialogTest::localValidationAndClear() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    dialog.fields[QStringLiteral("handle")]->setText(QStringLiteral("not valid!"));
++    QVERIFY(!dialog.ValidationError().isEmpty());
++    dialog.fields[QStringLiteral("handle")]->clear();
++    dialog.paragraphs[QStringLiteral("details")]->setPlainText(QString(6001, QLatin1Char('x')));
++    QVERIFY(!dialog.ValidationError().isEmpty());
++    dialog.paragraphs[QStringLiteral("details")]->setPlainText(QStringLiteral("Text") + QChar(1));
++    QVERIFY(!dialog.ValidationError().isEmpty());
++    dialog.clear->click();
++    QCOMPARE(dialog.confirmed_game, 0);
++    QVERIFY(dialog.fields[QStringLiteral("cpu")]->text().isEmpty());
++    QVERIFY(dialog.paragraphs[QStringLiteral("details")]->toPlainText().isEmpty());
++    QCOMPARE(network.requests.size(), 1);
++}
++
++void DialogTest::isolatedHttpTransport() {
++    QTcpServer server;
++    QVERIFY(server.listen(QHostAddress::LocalHost));
++    class LocalNetwork final : public QNetworkAccessManager {
++    public:
++        quint16 port{};
++        int count{};
++
++    protected:
++        QNetworkReply* createRequest(Operation operation, const QNetworkRequest& request,
++                                     QIODevice* body) override {
++            auto local = request;
++            auto url = local.url();
++            if (url.host() != QStringLiteral("lichii.zortos.me")) {
++                qFatal("Unexpected request destination in local-only test");
++            }
++            url.setScheme(QStringLiteral("http"));
++            url.setHost(QStringLiteral("127.0.0.1"));
++            url.setPort(port);
++            local.setUrl(url);
++            ++count;
++            return QNetworkAccessManager::createRequest(operation, local, body);
++        }
++    } network;
++    network.port = server.serverPort();
++    network.cookieJar()->setCookiesFromUrl(
++        {QNetworkCookie("test-session", "must-not-be-sent")},
++        QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(network.port)));
++    QList<QByteArray> wire_requests;
++    connect(&server, &QTcpServer::newConnection, &server, [&] {
++        auto* socket = server.nextPendingConnection();
++        auto bytes = std::make_shared<QByteArray>();
++        connect(socket, &QTcpSocket::readyRead, &server, [&, socket, bytes] {
++            bytes->append(socket->readAll());
++            const auto split = bytes->indexOf("\r\n\r\n");
++            if (split < 0) {
++                return;
++            }
++            qsizetype content_length = 0;
++            for (const auto& line : bytes->left(split).split('\n')) {
++                if (line.toLower().startsWith("content-length:")) {
++                    content_length = line.mid(line.indexOf(':') + 1).trimmed().toLongLong();
++                }
++            }
++            if (bytes->size() < split + 4 + content_length) {
++                return;
++            }
++            wire_requests.append(*bytes);
++            const QByteArray body =
++                bytes->startsWith("GET ")
++                    ? Catalog()
++                    : QByteArray(
++                          R"({"id":"12345678-1234-4234-8234-123456789abc","url":"https://lichii.zortos.me/reports/12345678-1234-4234-8234-123456789abc"})");
++            socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: "
++                          "close\r\nContent-Length: " +
++                          QByteArray::number(body.size()) + "\r\n\r\n" + body);
++            socket->disconnectFromHost();
++        });
++    });
++    Dialog dialog(Seed(), &network, nullptr);
++    QTest::qWait(20);
++    QCOMPARE(network.count, 0);
++    const auto query_text = QStringLiteral("Café + %2B & #?");
++    dialog.query->setText(QStringLiteral("  %1  ").arg(query_text));
++    dialog.search->click();
++    QTRY_COMPARE(dialog.games->count(), 1);
++    dialog.confirm->click();
++    dialog.fields[QStringLiteral("summary")]->setText(QStringLiteral("Loopback fixture only"));
++    dialog.paragraphs[QStringLiteral("progress")]->setPlainText(QStringLiteral("Opening area"));
++    dialog.paragraphs[QStringLiteral("details")]->setPlainText(
++        QStringLiteral("Synthetic local fixture"));
++    dialog.outcome->setCurrentIndex(2);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    QCOMPARE(network.count, 1);
++    dialog.submit->click();
++    dialog.Submit();
++    QTRY_COMPARE(dialog.state, Dialog::State::Finished);
++    QCOMPARE(network.count, 2);
++    QCOMPARE(wire_requests.size(), 2);
++    const auto target = wire_requests.first().split(' ').value(1);
++    QByteArray encoded_query;
++    for (const auto& item : target.mid(target.indexOf('?') + 1).split('&')) {
++        if (item.startsWith("q=")) {
++            encoded_query = item.mid(2);
++        }
++    }
++    QCOMPARE(QUrl::fromPercentEncoding(encoded_query.replace('+', ' ')), query_text);
++    for (const auto& request : wire_requests) {
++        const auto headers = request.left(request.indexOf("\r\n\r\n")).toLower();
++        QVERIFY(!headers.contains("\r\ncookie:"));
++        QVERIFY(!headers.contains("\r\nauthorization:"));
++        QVERIFY(!headers.contains("\r\norigin:"));
++        QVERIFY(!headers.contains("\r\nsec-fetch-"));
++    }
++    const auto request = wire_requests.last();
++    QMap<QByteArray, QByteArray> headers;
++    for (const auto& line : request.left(request.indexOf("\r\n\r\n")).split('\n')) {
++        const auto colon = line.indexOf(':');
++        if (colon > 0) {
++            headers.insert(line.left(colon).trimmed().toLower(), line.mid(colon + 1).trimmed());
++        }
++    }
++    QCOMPARE(headers.value("x-lichii-client"), QByteArray("desktop/1"));
++    const auto body = request.mid(request.indexOf("\r\n\r\n") + 4);
++    QCOMPARE(body, dialog.submitted_payload);
++    QVERIFY(!body.contains("must-not-be-sent"));
++}
++
++void DialogTest::serverRejections_data() {
++    QTest::addColumn<int>("code");
++    for (const int code : {400, 403, 409, 413, 415, 500, 503}) {
++        QTest::newRow(QByteArray::number(code).constData()) << code;
++    }
++}
++
++void DialogTest::serverRejections() {
++    QFETCH(int, code);
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    network.requests.last().reply->Complete(
++        code,
++        R"({"error":"<script>untrusted</script>","fields":{"summary":["Untrusted server text"]}})");
++    QCOMPARE(dialog.state, Dialog::State::Editing);
++    QCOMPARE(network.requests.size(), 2);
++    QVERIFY(!dialog.public_consent->isChecked());
++    QVERIFY(!dialog.safe_files_consent->isChecked());
++    QVERIFY(!dialog.status->text().contains(QStringLiteral("untrusted"), Qt::CaseInsensitive));
++    QVERIFY(!dialog.fields[QStringLiteral("summary")]->text().isEmpty());
++    if (code == 400) {
++        QVERIFY(dialog.status->text().contains(QStringLiteral("summary")));
++    }
++}
++
++void DialogTest::reconfirmationKeepsRetryIdentity() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    const auto original = network.requests.last();
++    original.reply->Complete(503, "{}");
++    dialog.confirm->click();
++    QCOMPARE(network.requests.size(), 2);
++    QCOMPARE(dialog.submission_key, original.request.rawHeader("Idempotency-Key"));
++    QCOMPARE(dialog.submitted_payload, original.body);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    QCOMPARE(network.requests.last().request.rawHeader("Idempotency-Key"),
++             original.request.rawHeader("Idempotency-Key"));
++    QCOMPARE(network.requests.last().body, original.body);
++    network.requests.last().reply->Complete(503, "{}");
++    dialog.games->addItem(QStringLiteral("Different catalog game"), 98765);
++    dialog.games->setCurrentIndex(1);
++    dialog.confirm->click();
++    QVERIFY(dialog.submission_key.isEmpty());
++    QVERIFY(!dialog.public_consent->isChecked());
++    QVERIFY(!dialog.safe_files_consent->isChecked());
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    QVERIFY(network.requests.last().request.rawHeader("Idempotency-Key") !=
++            original.request.rawHeader("Idempotency-Key"));
++}
++
++void DialogTest::cooldownPreservesPreviewSelection() {
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    Prepare(dialog, network);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.Submit();
++    network.requests.last().reply->Complete(429, "{}", "60");
++    dialog.tabs->setCurrentWidget(dialog.preview);
++    dialog.show();
++    QTest::qWait(20);
++    auto cursor = dialog.preview->textCursor();
++    cursor.setPosition(20);
++    cursor.setPosition(80, QTextCursor::KeepAnchor);
++    dialog.preview->setTextCursor(cursor);
++    auto* scroll = dialog.preview->verticalScrollBar();
++    scroll->setValue(scroll->maximum());
++    const auto position = scroll->value();
++    const auto selected = cursor.selectedText();
++    QTest::qWait(1200);
++    QCOMPARE(dialog.preview->textCursor().selectedText(), selected);
++    QCOMPARE(scroll->value(), position);
++    QVERIFY(!dialog.submit->isEnabled());
++    QCOMPARE(network.requests.size(), 2);
++}
++
++void DialogTest::dialogTranslationContext() {
++    class Translator final : public QTranslator {
++    public:
++        QString translate(const char* context, const char* source, const char*,
++                          int) const override {
++            if (QByteArray(context) == "CompatibilityReporting::Dialog" &&
++                QByteArray(source) == "Submit compatibility report") {
++                return QStringLiteral("Translated report title");
++            }
++            return {};
++        }
++        bool isEmpty() const override {
++            return false;
++        }
++    } translator;
++    QCoreApplication::installTranslator(&translator);
++    FakeNetwork network;
++    Dialog dialog(Seed(), &network, nullptr);
++    const auto title = dialog.windowTitle();
++    QCoreApplication::removeTranslator(&translator);
++    QCOMPARE(title, QStringLiteral("Translated report title"));
++}
++
++void DialogTest::machinePrefillsRemainEditable() {
++    FakeNetwork network;
++    auto session = Seed();
++    session.gpu = QStringLiteral(" Active rendering GPU ");
++    session.driver = QStringLiteral(" Driver 123.45 ");
++    Dialog dialog(session, &network, nullptr);
++    QCOMPARE(network.requests.size(), 0);
++    QCOMPARE(dialog.fields[QStringLiteral("gpu")]->text(), QStringLiteral("Active rendering GPU"));
++    QCOMPARE(dialog.fields[QStringLiteral("driver")]->text(), QStringLiteral("Driver 123.45"));
++    QCOMPARE(dialog.graphics_api->currentText(), QStringLiteral("Vulkan"));
++    QCOMPARE(dialog.fields[QStringLiteral("cpu")]->text(), session.cpu);
++    QCOMPARE(dialog.fields[QStringLiteral("ram")]->text(), session.ram);
++    QCOMPARE(dialog.fields[QStringLiteral("os")]->text(), session.os);
++    session.gpu.clear();
++    session.driver.clear();
++    QCOMPARE(dialog.fields[QStringLiteral("gpu")]->text(), QStringLiteral("Active rendering GPU"));
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.fields[QStringLiteral("driver")]->setText(QStringLiteral("Corrected driver"));
++    QVERIFY(!dialog.public_consent->isChecked());
++    QVERIFY(!dialog.safe_files_consent->isChecked());
++    const auto payload = QJsonDocument::fromJson(dialog.Payload()).object();
++    QCOMPARE(payload.value(QStringLiteral("driver")).toString(),
++             QStringLiteral("Corrected driver"));
++    QCOMPARE(payload.value(QStringLiteral("gpu")).toString(),
++             QStringLiteral("Active rendering GPU"));
++    QCOMPARE(network.requests.size(), 0);
++}
++
++void DialogTest::enabledAddonPrefills() {
++    auto session = Seed();
++    session.mods = SummarizeEnabledAddons({
++        {QStringLiteral("Dynamic FPS"), QStringLiteral("IPS"), true},
++        {QStringLiteral("Max Resolution"), QStringLiteral("IPS"), false},
++        {QStringLiteral("Dynamic FPS"), QStringLiteral("IPS"), true},
++    });
++    session.updates = SummarizeEnabledAddons({
++        {QStringLiteral("Update"), QStringLiteral("2.0.0"), true},
++        {QStringLiteral("Update"), QStringLiteral("1.0.0"), false},
++    });
++    QCOMPARE(session.mods, QStringLiteral("Enabled at launch: Dynamic FPS (IPS)"));
++    QCOMPARE(session.updates, QStringLiteral("Enabled at launch: Update (2.0.0)"));
++    QCOMPARE(SummarizeEnabledAddons({}), QStringLiteral("None listed as enabled at launch."));
++    const auto long_summary = SummarizeEnabledAddons({{QString(700, QLatin1Char('x')), {}, true}});
++    QVERIFY(long_summary.size() <= 500);
++    QVERIFY(long_summary.endsWith(QStringLiteral("(list truncated; review)")));
++    FakeNetwork network;
++    Dialog dialog(session, &network, nullptr);
++    QCOMPARE(dialog.paragraphs[QStringLiteral("mods")]->toPlainText(), session.mods);
++    QCOMPARE(dialog.paragraphs[QStringLiteral("updates")]->toPlainText(), session.updates);
++    const auto object = QJsonDocument::fromJson(dialog.Payload()).object();
++    QCOMPARE(object.value(QStringLiteral("mods")).toString(), session.mods);
++    QCOMPARE(object.value(QStringLiteral("updates")).toString(), session.updates);
++    dialog.public_consent->setChecked(true);
++    dialog.safe_files_consent->setChecked(true);
++    dialog.paragraphs[QStringLiteral("mods")]->setPlainText(QStringLiteral("Corrected mod list"));
++    QVERIFY(!dialog.public_consent->isChecked());
++    QVERIFY(!dialog.safe_files_consent->isChecked());
++    QCOMPARE(network.requests.size(), 0);
++}
++
++} // namespace CompatibilityReporting
++
++int main(int argc, char** argv) {
++    QApplication app(argc, argv);
++    if (app.arguments().contains(QStringLiteral("--preview"))) {
++        return CompatibilityReporting::DialogTest::Preview(app);
++    }
++    const int screenshot = app.arguments().indexOf(QStringLiteral("--screenshot"));
++    if (screenshot >= 0 && screenshot + 1 < app.arguments().size()) {
++        return CompatibilityReporting::DialogTest::Preview(app, app.arguments()[screenshot + 1]);
++    }
++    CompatibilityReporting::DialogTest test;
++    return QTest::qExec(&test, argc, argv);
++}
++
++#include "compatibility_report.moc"
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index a248222d09..5fa5ffac2e 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -282,8 +282,13 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
+                                            device_addr_end_aligned - device_addr_start_aligned);
+     // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
+-    // instead keep read traps and flush on demand.
+-    const bool preflush = !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
++    // instead keep read traps and flush on demand, unless EDEN_NX2_PREFLUSH=1 opts them into
++    // preflushing too (Ocarina of Time: far fewer Finish stalls, but some flicker).
++    static const bool nx2_preflush = [] {
++        const char* value = std::getenv("EDEN_NX2_PREFLUSH");
++        return value != nullptr && value[0] == '1';
++    }();
++    const bool preflush = nx2_preflush || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+     if (!area->preemtive) {
+         if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
+             Nx2DownloadTrace::Marked(device_addr_start_aligned,
+@@ -833,8 +838,9 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
+         }
+         ssbo_addr = holder + indirect_offset;
+     }
+-    channel_state->compute_storage_buffers[ssbo_index] = StorageBufferBinding(
+-        ssbo_addr, cbuf_index, is_written, kepler_compute->IsNativeMode(), indirect_offset != ~0U);
++    channel_state->compute_storage_buffers[ssbo_index] =
++        StorageBufferBinding(ssbo_addr, cbuf_index, is_written, kepler_compute->IsNativeMode(),
++                             indirect_offset != ~0U, true);
+     if (indirect_offset != ~0U) {
+         TraceTablePointer(true, 0, ssbo_index, cbuf_index, cbuf_offset, indirect_offset, holder,
+                           channel_state->compute_storage_buffers[ssbo_index]);
+@@ -2892,7 +2898,8 @@ void BufferCache<P>::TraceTablePointer(bool compute, size_t stage, size_t ssbo_i
+ 
+ template <class P>
+ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
+-                                             bool native_pointer, bool table_pointer) const {
++                                             bool native_pointer, bool table_pointer,
++                                             bool compute) const {
+     const GPUVAddr gpu_addr = gpu_memory->Read<u64>(ssbo_addr);
+ 
+     if (gpu_addr == 0) {
+@@ -2913,8 +2920,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+     };
+     constexpr size_t ways = 4;
+     thread_local std::array<std::array<CachedBinding, ways>, 512> binding_cache{};
+-    const u32 flags =
+-        (is_written ? 1U : 0U) | (native_pointer ? 2U : 0U) | (table_pointer ? 4U : 0U);
++    const u32 flags = (is_written ? 1U : 0U) | (native_pointer ? 2U : 0U) |
++                      (table_pointer ? 4U : 0U) | (compute ? 8U : 0U);
+     const size_t owner = gpu_memory->GetID() + 1;
+     const u64 serial = gpu_memory->MapSerial();
+     auto& set = binding_cache[((gpu_addr ^ next_qword ^ flags) * 0x9E3779B97F4A7C15ULL) >> 55];
+@@ -2934,10 +2941,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+                 static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
+             // A pointer read from a table in memory is the base of an object pool, read anywhere in
+             // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
+-            // its mapping, up to 64 MiB. The 8 MiB cap made those reads return 0 and culled every
+-            // blade. Written pools keep the cap: a write marks the whole binding GPU-modified.
++            // its mapping, up to 64 MiB (256 MiB for compute: its fog light probes, SH records
++            // ~104-122 MiB past their pointer, all read 0 at 64 MiB and the volumetric fog lost its
++            // sky ambient). The 8 MiB cap made the grass reads return 0 and culled every blade.
++            // Written pools keep the cap: a write marks the whole binding GPU-modified.
+             if (table_pointer && !is_written) {
+-                return (std::min)(memory_layout_size, static_cast<u32>(64_MiB));
++                return (std::min)(memory_layout_size,
++                                  static_cast<u32>(compute ? 256_MiB : 64_MiB));
+             }
+             // A native (Switch 2) compute program's pointer is bare: the word after it is another
+             // parameter (a dimension, stride or texture handle), not an NVN buffer size. Taking it
+@@ -2979,6 +2989,13 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+         if (is_written) {
+             binding_size = aligned_size;
+         }
++        if constexpr (requires { runtime.GetMaxStorageBufferRange(); }) {
++            // A read-only pool's 256 MiB compute cap is above the 128 MiB every device
++            // guarantees. Only those are clamped, so no write is cut off.
++            if (table_pointer && !is_written) {
++                binding_size = (std::min)(binding_size, runtime.GetMaxStorageBufferRange());
++            }
++        }
+         return Binding{
+             .device_addr = *aligned_device_addr,
+             .gpu_addr = aligned_gpu_addr,
+diff --git a/src/video_core/buffer_cache/buffer_cache_base.h b/src/video_core/buffer_cache/buffer_cache_base.h
+index e7971b444b..3107ad918e 100644
+--- a/src/video_core/buffer_cache/buffer_cache_base.h
++++ b/src/video_core/buffer_cache/buffer_cache_base.h
+@@ -583,7 +583,8 @@ private:
+ 
+     [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
+                                                bool native_pointer = false,
+-                                               bool table_pointer = false) const;
++                                               bool table_pointer = false,
++                                               bool compute = false) const;
+ 
+     void TraceTablePointer(bool compute, size_t stage, size_t ssbo_index, u32 cbuf_index,
+                            u32 cbuf_offset, u32 indirect_offset, GPUVAddr holder,
+diff --git a/src/video_core/engines/kepler_compute.cpp b/src/video_core/engines/kepler_compute.cpp
+index 67d87a0abf..ca618680e5 100644
+--- a/src/video_core/engines/kepler_compute.cpp
++++ b/src/video_core/engines/kepler_compute.cpp
+@@ -31,6 +31,7 @@
+ #include "video_core/game_dlss_status.h"
+ #include "video_core/memory_manager.h"
+ #include "video_core/native_query_trace.h"
++#include "video_core/oot_network.h"
+ #ifdef ARCHITECTURE_x86_64
+ #include "video_core/macro_turing_jit.h"
+ #endif
+@@ -881,6 +882,97 @@ void KeplerCompute::DescribeNativeResources(const NativeQmdScheduler::Descriptor
+     }
+ }
+ 
++std::optional<Texture::TICEntry> KeplerCompute::ConstBuffer0Image(u32 offset) const {
++    const auto& cbuf = launch_description.const_buffer_config[0];
++    const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
++    if (!(launch_description.const_buffer_enable_mask & 1) || cbuf.size.Value() < offset + 4 ||
++        !memory_manager.IsFullyMappedRange(cbuf_address + offset, 4)) {
++        return std::nullopt;
++    }
++    const u32 tic_index = memory_manager.Read<u32>(cbuf_address + offset) & 0xfffff;
++    if (tic_index > regs.tic.limit ||
++        !memory_manager.IsFullyMappedRange(regs.tic.Address() +
++                                               u64{tic_index} * sizeof(Texture::TICEntry),
++                                           sizeof(Texture::TICEntry))) {
++        return std::nullopt;
++    }
++    return GetTICEntry(tic_index);
++}
++
++bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
++    using namespace VideoCommon::OotNetwork;
++    if (!BypassEnabled(program_id)) {
++        return false;
++    }
++    auto* const state = rasterizer->OotNetworkBypass();
++    if (!state) {
++        return false;
++    }
++    // The tonemap pass draws before the network every frame; until it has been seen (menus, the
++    // first frame) the network runs as usual. Its first passes are skipped only while the output
++    // pass is being replaced, so a failed replacement brings the whole network back next frame.
++    const GPUVAddr tonemapped = state->tonemapped_image.load(std::memory_order_relaxed);
++    if (tonemapped == 0) {
++        return false;
++    }
++    if (native_key == PrepassProgramKey || native_key == NetworkProgramKey) {
++        return state->output_replaced.load(std::memory_order_relaxed);
++    }
++    if (native_key != OutputProgramKey) {
++        return false;
++    }
++    const auto output = ConstBuffer0Image(OutputImageHandleOffset);
++    if (!output || output->format != Texture::TextureFormat::B10G11R11 || output->Address() == 0 ||
++        output->Address() == tonemapped || !output->IsBlockLinear()) {
++        state->output_replaced.store(false, std::memory_order_relaxed);
++        static bool warned = false;
++        if (!std::exchange(warned, true)) {
++            LOG_WARNING(HW_GPU, "Ocarina of Time: unexpected network output image; not replaced");
++        }
++        return false;
++    }
++    // The tonemapped image is a render target of the output's size, format and layout.
++    Fermi2D::Surface destination{};
++    destination.format = Tegra::RenderTargetFormat::B10G11R11_FLOAT;
++    destination.linear = Fermi2D::MemoryLayout::BlockLinear;
++    destination.block_width.Assign(output->block_width);
++    destination.block_height.Assign(output->block_height);
++    destination.block_depth.Assign(output->block_depth);
++    destination.depth = 1;
++    destination.width = output->Width();
++    destination.height = output->Height();
++    destination.addr_upper = static_cast<u32>(output->Address() >> 32);
++    destination.addr_lower = static_cast<u32>(output->Address());
++    Fermi2D::Surface source = destination;
++    source.addr_upper = static_cast<u32>(tonemapped >> 32);
++    source.addr_lower = static_cast<u32>(tonemapped);
++    const s32 width = static_cast<s32>(output->Width());
++    const s32 height = static_cast<s32>(output->Height());
++    const Fermi2D::Config config{
++        .operation = Fermi2D::Operation::SrcCopy,
++        .filter = Fermi2D::Filter::Point,
++        .must_accelerate = true,
++        .dst_x0 = 0,
++        .dst_y0 = 0,
++        .dst_x1 = width,
++        .dst_y1 = height,
++        .src_x0 = 0,
++        .src_y0 = 0,
++        .src_x1 = width,
++        .src_y1 = height,
++    };
++    const bool copied = rasterizer->AccelerateSurfaceCopy(source, destination, config);
++    state->output_replaced.store(copied, std::memory_order_relaxed);
++    static bool logged = false;
++    if (!std::exchange(logged, true)) {
++        LOG_INFO(HW_GPU,
++                 "Ocarina of Time: anti-aliasing network bypassed ({}): {:#x} -> {:#x} {}x{}",
++                 copied ? "copy of the tonemapped image" : "copy failed", tonemapped,
++                 output->Address(), width, height);
++    }
++    return copied;
++}
++
+ std::atomic<u32> g_nx2_trace_draws_after_upscale{};
+ 
+ // Fire Emblem: Fortune's Weave's first DLSS pass (rejected, before the network) has the input colour
+diff --git a/src/video_core/engines/kepler_compute.h b/src/video_core/engines/kepler_compute.h
+index fb875798c8..e93994d024 100644
+--- a/src/video_core/engines/kepler_compute.h
++++ b/src/video_core/engines/kepler_compute.h
+@@ -253,6 +253,10 @@ public:
+ 
+     bool IsNativeMode() const { return native_mode; }
+     bool ProcessGameDlss(u64 program_id, u64 native_key);
++    /// Ocarina of Time with anti-aliasing at No sharpening (oot_network.h): true when this
++    /// dispatch of the game's network is skipped, or its output pass replaced by a copy of the
++    /// tonemapped image.
++    bool BypassOotNetwork(u64 program_id, u64 native_key);
+     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
+ 
+     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by
+@@ -278,6 +282,8 @@ private:
+     bool DispatchNativeCompute(const NativeQmdScheduler::Descriptor& descriptor);
+     void ProcessNativeReportSemaphore(u32 argument);
+     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
++    /// Texture descriptor that the handle at `offset` in constant buffer 0 selects.
++    std::optional<Texture::TICEntry> ConstBuffer0Image(u32 offset) const;
+     void RememberDlssMotionVectors();
+     bool TryFireEmblemUpscale(bool allow_history = true);
+     void CaptureFireEmblemJitter();
+diff --git a/src/video_core/fence_manager.h b/src/video_core/fence_manager.h
+index ccad4fc88b..b0b32eabb4 100644
+--- a/src/video_core/fence_manager.h
++++ b/src/video_core/fence_manager.h
+@@ -81,7 +81,15 @@ public:
+ 
+     void SignalFence(std::function<void()>&& func) {
+         Nx2Profile::Scope profile_scope{Nx2Profile::Zone::Fence};
+-        const bool delay_fence = Settings::IsGPUFenceBehaviorDefault() ? Settings::IsGPULevelHigh() : Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
++        // A fence that writes a fence-flagged query report is never skipped as empty: a skipped
++        // fence runs its operation at once, before the host GPU has run the work the report
++        // follows, and Ocarina of Time then reads a wrong report (white flashes on leaves and walls
++        // at low GPU accuracy).
++        const bool delay_fence = VideoCore::g_signaling_query_report_fence ||
++                                 (Settings::IsGPUFenceBehaviorDefault()
++                                      ? Settings::IsGPULevelHigh()
++                                      : Settings::IsGPUFenceBehaviorBalanced() ||
++                                            Settings::IsGPUFenceBehaviorAccurate());
+         if constexpr (!can_async_check) {
+             TryReleasePendingFences<false>();
+         }
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
 index 5adb071273..4dcfc5b921 100644
 --- a/src/video_core/gpu_split.cpp
@@ -1035,6 +2426,560 @@ index 7f3756953b..aa6142b278 100644
          system.RegisterHostThread();
  
          auto current_context = context.Acquire();
+diff --git a/src/video_core/oot_network.h b/src/video_core/oot_network.h
+new file mode 100644
+index 0000000000..a09df8144d
+--- /dev/null
++++ b/src/video_core/oot_network.h
+@@ -0,0 +1,52 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <atomic>
++
++#include "common/common_types.h"
++#include "common/settings.h"
++
++// The Legend of Zelda: Ocarina of Time's anti-aliasing. After tonemapping, the game runs a
++// single-frame tensor network on the tonemapped image and an output pass that sharpens the result
++// hard. With the "Ocarina of Time anti-aliasing" setting at No sharpening, the network is skipped
++// and its output pass is replaced by a copy of the tonemapped image
++// (docs/nx2/oot-network-bypass.md).
++//
++// Shader hashes, native program keys and constant buffer offsets are those of the game's main
++// with build id E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348; a game update needs them re-checked.
++namespace VideoCommon::OotNetwork {
++
++constexpr u64 ProgramId = 0x0400486024DEC000ULL;
++
++// Native program keys of the network's compute passes.
++constexpr u64 PrepassProgramKey = 0x8475d671e6967428ULL;
++constexpr u64 NetworkProgramKey = 0x42593194bb0b2b32ULL;
++constexpr u64 OutputProgramKey = 0xda6df3e54c716df2ULL;
++
++/// Constant buffer 0 offset of the output pass's texture handle for the B10G11R11 image it writes
++/// (the scene image the rest of the frame uses).
++constexpr u32 OutputImageHandleOffset = 0xd0;
++
++/// Fragment shaders of the game's tonemap passes; render target 0 of their draws is the
++/// network's input.
++constexpr bool IsTonemapShader(u64 hash) {
++    return hash == 0xbded5ce917183214ULL || // outdoors
++           hash == 0x6cb06edf14be1d79ULL || // indoors
++           hash == 0x3ac011bd2d772994ULL;   // outdoors at another time of day
++}
++
++/// Owned by the rasterizer: the tonemap pass draws on the 3D engine, and the network's passes do
++/// not all run on the same compute engine.
++struct BypassState {
++    std::atomic<GPUVAddr> tonemapped_image{}; ///< render target 0 of the latest tonemap draw
++    std::atomic<bool> output_replaced{};      ///< the latest output pass was replaced
++};
++
++inline bool BypassEnabled(u64 program_id) {
++    return program_id == ProgramId &&
++           Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::NoSharpening;
++}
++
++} // namespace VideoCommon::OotNetwork
+diff --git a/src/video_core/query_cache/query_cache.h b/src/video_core/query_cache/query_cache.h
+index 1cd92dcfe2..83b1da6552 100644
+--- a/src/video_core/query_cache/query_cache.h
++++ b/src/video_core/query_cache/query_cache.h
+@@ -282,8 +282,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+     };
+     u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
+     u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
+-    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::IsGPULevelHigh() : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
+-    std::function<void()> operation([this, is_synced, streamer, query_base = query, query_location,
++    std::function<void()> operation([this, streamer, query_base = query, query_location,
+                                      pointer, pointer_timestamp, cpu_addr, addr,
+                                      asid = gpu_memory->GetID(), counter_type] {
+         if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
+@@ -294,9 +293,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+                          trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
+                          static_cast<u32>(query_base->flags));
+             }
+-            if (!is_synced) [[likely]] {
+-                impl->pending_unregister.push_back(query_location);
+-            }
++            impl->pending_unregister.push_back(query_location);
+             return;
+         }
+         if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
+@@ -309,9 +306,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+             }
+             LOG_ERROR(HW_GPU,
+                       "Query report value not synchronized. Consider increasing GPU accuracy.");
+-            if (!is_synced) [[likely]] {
+-                impl->pending_unregister.push_back(query_location);
+-            }
++            impl->pending_unregister.push_back(query_location);
+             return;
+         }
+         query_base->value += streamer->GetAmendValue();
+@@ -334,12 +329,12 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+                      wide ? query_base->value : static_cast<u32>(query_base->value),
+                      static_cast<u32>(query_base->flags));
+         }
+-        if (!is_synced) [[likely]] {
+-            impl->pending_unregister.push_back(query_location);
+-        }
++        impl->pending_unregister.push_back(query_location);
+     });
+     if (is_fence) {
++        VideoCore::g_signaling_query_report_fence = true;
+         impl->rasterizer.SignalFence(std::move(operation));
++        VideoCore::g_signaling_query_report_fence = false;
+     } else {
+         if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
+             if (has_timestamp) {
+@@ -364,10 +359,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+         }
+         impl->rasterizer.SyncOperation(std::move(operation));
+     }
+-    if (is_synced) {
+-        streamer->Free(new_query_id);
+-        return;
+-    }
+     auto [cont_addr, base] = gen_caching_indexing(cpu_addr);
+     {
+         std::scoped_lock lock(cache_mutex);
+diff --git a/src/video_core/rasterizer_interface.h b/src/video_core/rasterizer_interface.h
+index 9cebc4f29f..9d47dfcad1 100644
+--- a/src/video_core/rasterizer_interface.h
++++ b/src/video_core/rasterizer_interface.h
+@@ -34,6 +34,10 @@ struct TICEntry;
+ }
+ } // namespace Tegra
+ 
++namespace VideoCommon::OotNetwork {
++struct BypassState;
++}
++
+ namespace VideoCore {
+ 
+ enum class LoadCallbackStage {
+@@ -43,6 +47,10 @@ enum class LoadCallbackStage {
+ };
+ using DiskResourceLoadCallback = std::function<void(LoadCallbackStage, std::size_t, std::size_t)>;
+ 
++/// Set while the query cache signals the fence that writes a fence-flagged report, so the fence
++/// manager makes that fence even when it is empty (FenceManager::SignalFence).
++inline thread_local bool g_signaling_query_report_fence = false;
++
+ class RasterizerInterface {
+ public:
+     virtual ~RasterizerInterface() = default;
+@@ -236,6 +244,12 @@ public:
+         return std::nullopt;
+     }
+ 
++    /// State of the Ocarina of Time anti-aliasing network bypass (oot_network.h), or null when
++    /// this backend cannot bypass it.
++    [[nodiscard]] virtual VideoCommon::OotNetwork::BypassState* OotNetworkBypass() {
++        return nullptr;
++    }
++
+     [[nodiscard]] virtual Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() = 0;
+ 
+     virtual void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
+diff --git a/src/video_core/renderer_base.h b/src/video_core/renderer_base.h
+index 46f8276074..2dc357e52e 100644
+--- a/src/video_core/renderer_base.h
++++ b/src/video_core/renderer_base.h
+@@ -9,6 +9,7 @@
+ #include <atomic>
+ #include <functional>
+ #include <memory>
++#include <string>
+ 
+ #include "common/common_funcs.h"
+ #include "common/common_types.h"
+@@ -23,6 +24,12 @@ class GraphicsContext;
+ 
+ namespace VideoCore {
+ 
++struct RendererDeviceInfo {
++    std::string model;
++    std::string driver;
++    std::string api;
++};
++
+ struct RendererSettings {
+     // Screenshot
+     std::atomic<bool> screenshot_requested{false};
+@@ -51,6 +58,10 @@ public:
+ 
+     [[nodiscard]] virtual std::string GetDeviceVendor() const = 0;
+ 
++    [[nodiscard]] const RendererDeviceInfo& GetDeviceInfo() const {
++        return device_info;
++    }
++
+     // Getter/setter functions:
+     // ------------------------
+ 
+@@ -105,6 +116,7 @@ protected:
+     int m_current_frame = 0;  ///< Current frame, should be set by the renderer
+ 
+     RendererSettings renderer_settings;
++    RendererDeviceInfo device_info;
+ 
+ private:
+     /// Updates the framebuffer layout of the contained render window handle.
+diff --git a/src/video_core/renderer_opengl/renderer_opengl.cpp b/src/video_core/renderer_opengl/renderer_opengl.cpp
+index f9ec32e652..9e88820286 100644
+--- a/src/video_core/renderer_opengl/renderer_opengl.cpp
++++ b/src/video_core/renderer_opengl/renderer_opengl.cpp
+@@ -159,6 +159,12 @@ void RendererOpenGL::AddTelemetryFields() {
+     const char* const gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
+     const char* const gpu_model{reinterpret_cast<char const*>(glGetString(GL_RENDERER))};
+ 
++    device_info = {
++        .model = gpu_model ? gpu_model : "",
++        .driver = gl_version ? gl_version : "",
++        .api = "OpenGL",
++    };
++
+     LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
+     LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
+     LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
+diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
+index 3ffc6246bd..4dbd14cc4e 100644
+--- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
++++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
+@@ -197,6 +197,13 @@ try
+     VideoCore::FxChain::Instance().LoadFromSettings();
+ #endif
+ 
++    device_info = {
++        .model = std::string{device.GetModelName()},
++        .driver = device.GetDriverVersion() != 0
++                      ? fmt::format("{} {}", device.GetVendorName(), GetDriverVersion(device))
++                      : std::string{},
++        .api = "Vulkan",
++    };
+     Report();
+ } catch (const vk::Exception& exception) {
+     LOG_ERROR(Render_Vulkan, "Vulkan initialization failed with error: {}", exception.what());
+@@ -292,10 +299,6 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
+ 
+ void RendererVulkan::Report() const {
+     using namespace Common::Literals;
+-    const std::string vendor_name{device.GetVendorName()};
+-    const std::string model_name{device.GetModelName()};
+-    const std::string driver_version = GetDriverVersion(device);
+-    const std::string driver_name = fmt::format("{} {}", vendor_name, driver_version);
+ 
+     const std::string api_version = GetReadableVersion(device.ApiVersion());
+ 
+@@ -303,8 +306,8 @@ void RendererVulkan::Report() const {
+ 
+     const auto available_vram = static_cast<f64>(device.GetDeviceLocalMemory()) / f64{1_GiB};
+ 
+-    LOG_INFO(Render_Vulkan, "Driver: {}", driver_name);
+-    LOG_INFO(Render_Vulkan, "Device: {}", model_name);
++    LOG_INFO(Render_Vulkan, "Driver: {} {}", device.GetVendorName(), GetDriverVersion(device));
++    LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
+     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
+     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
+     if (VideoCommon::RenderTrace::Enabled()) {
+diff --git a/src/video_core/renderer_vulkan/vk_buffer_cache.h b/src/video_core/renderer_vulkan/vk_buffer_cache.h
+index f7bc117c35..024c9c65ca 100644
+--- a/src/video_core/renderer_vulkan/vk_buffer_cache.h
++++ b/src/video_core/renderer_vulkan/vk_buffer_cache.h
+@@ -283,6 +283,10 @@ public:
+         return max_dynamic_storage_buffers;
+     }
+ 
++    u32 GetMaxStorageBufferRange() const {
++        return static_cast<u32>(device.GetMaxStorageBufferRange());
++    }
++
+ private:
+     void BindBuffer(const Buffer& buffer, u32 offset, u32 size) {
+         const VkBuffer handle = buffer.Handle();
+diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
+index fa48503830..634deb2b47 100644
+--- a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <chrono>
+ #include <cstdlib>
+ #include <limits>
+ #include <vector>
+@@ -205,11 +206,13 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
+                                  Common::ThreadWorker* thread_worker,
+                                  PipelineStatistics* pipeline_statistics,
+                                  VideoCore::ShaderNotify* shader_notify, const Shader::Info& info_,
+-                                 vk::ShaderModule spv_module_, u64 shader_hash_)
++                                 vk::ShaderModule spv_module_, u64 shader_hash_,
++                                 bool skip_until_built_)
+     : device{device_},
+       pipeline_cache(pipeline_cache_), guest_descriptor_queue{guest_descriptor_queue_},
+       descriptor_buffer_ring{descriptor_buffer_ring_}, info{info_},
+-      shader_hash{shader_hash_}, spv_module(std::move(spv_module_)) {
++      shader_hash{shader_hash_}, skip_until_built{skip_until_built_},
++      spv_module(std::move(spv_module_)) {
+     if (shader_notify) {
+         shader_notify->MarkShaderBuilding();
+     }
+@@ -287,11 +290,16 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
+             .basePipelineHandle = 0,
+             .basePipelineIndex = 0,
+         };
++        const auto build_start = std::chrono::steady_clock::now();
++        const auto build_seconds = [&] {
++            return std::chrono::duration<double>(std::chrono::steady_clock::now() - build_start)
++                .count();
++        };
+         try {
+             pipeline = device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
+         } catch (const vk::Exception& exception) {
+-            LOG_CRITICAL(Render_Vulkan, "Adreno rejected compute shader {:016X}: {}", shader_hash,
+-                         exception.what());
++            LOG_CRITICAL(Render_Vulkan, "Driver rejected compute shader {:016X} after {:.1f} s: {}",
++                         shader_hash, build_seconds(), exception.what());
+             std::scoped_lock lock{build_mutex};
+             is_built = true;
+             build_condvar.notify_one();
+@@ -308,6 +316,10 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
+             );
+         }
+ 
++        if (skip_until_built) {
++            LOG_INFO(Render_Vulkan, "Deferred compute shader {:016X} built in {:.1f} s",
++                     shader_hash, build_seconds());
++        }
+         if (pipeline_statistics) {
+             pipeline_statistics->Collect(device, *pipeline);
+         }
+@@ -345,6 +357,20 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+                                 TextureCacheRuntime& texture_runtime,
+                                 std::optional<ByteAddressedShadow>& shadow) {
+     shadow.reset();
++    if (skip_until_built && (!is_built.load(std::memory_order::acquire) || !pipeline)) {
++        if (!kepler_compute.IsNativeMode()) {
++            return false;
++        }
++        if (!is_built.load(std::memory_order::acquire)) {
++            throw Shader::RuntimeError(
++                "Compute shader {:016X} is still being built by the driver; its dispatches are "
++                "skipped until it is ready",
++                shader_hash);
++        }
++        throw Shader::RuntimeError(
++            "The driver failed to build compute shader {:016X}; its dispatches are skipped",
++            shader_hash);
++    }
+     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
+ 
+     buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
+diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.h b/src/video_core/renderer_vulkan/vk_compute_pipeline.h
+index d28660665a..e64be4fb9d 100644
+--- a/src/video_core/renderer_vulkan/vk_compute_pipeline.h
++++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.h
+@@ -44,7 +44,8 @@ public:
+                              Common::ThreadWorker* thread_worker,
+                              PipelineStatistics* pipeline_statistics,
+                              VideoCore::ShaderNotify* shader_notify, const Shader::Info& info,
+-                             vk::ShaderModule spv_module, u64 shader_hash);
++                             vk::ShaderModule spv_module, u64 shader_hash,
++                             bool skip_until_built = false);
+ 
+     ComputePipeline& operator=(ComputePipeline&&) noexcept = delete;
+     ComputePipeline(ComputePipeline&&) noexcept = delete;
+@@ -95,6 +96,8 @@ private:
+     DescriptorBufferRing& descriptor_buffer_ring;
+     Shader::Info info;
+     u64 shader_hash{};
++    /// Built on a worker nothing waits for: dispatches are skipped until the pipeline exists.
++    bool skip_until_built{};
+     u32 num_descriptor_entries{};
+     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
+     std::vector<SampledImage> sampled_images;
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index 0cdc7521bf..abcb69bce4 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -752,7 +752,9 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+         // Wait for the pipeline to be built
+         scheduler.Record([this](vk::CommandBuffer) {
+             const auto begin = std::chrono::steady_clock::now();
+-            build->Wait(!worker_only_build);
++            // Claim the build here even for worker-only builds: the queue is FIFO, so a held
++            // draw otherwise waits behind every pipeline queued before it (title 1: 1-2 s).
++            build->Wait(true);
+             hold_time_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        std::chrono::steady_clock::now() - begin)
+                                        .count(),
+@@ -1220,7 +1222,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+         .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
+         .pDynamicStates = dynamic_states.data(),
+     };
+-    [[maybe_unused]] const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
++    const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
+         .pNext = nullptr,
+         .requiredSubgroupSize = GuestWarpSize,
+@@ -1230,17 +1232,24 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+         if (!spv_modules[stage]) {
+             continue;
+         }
+-        [[maybe_unused]] auto& stage_ci =
+-            shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
+-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+-                .pNext = nullptr,
+-                .flags = 0,
+-                .stage = StageFlag(stage_infos[stage],
+-                                   MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage))),
+-                .module = *spv_modules[stage],
+-                .pName = "main",
+-                .pSpecializationInfo = nullptr,
+-            });
++        const Shader::Info& info{stage_infos[stage]};
++        const VkShaderStageFlagBits stage_flag{
++            StageFlag(info, MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage)))};
++        // Votes, ballots and shuffles span the guest's 32-thread warp. A driver free to pick a
++        // narrower subgroup (Intel runs mesh shaders SIMD16) splits the warp and breaks them.
++        const bool uses_warp_ops = info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
++                                   info.uses_subgroup_shuffles || info.uses_subgroup_mask;
++        const bool force_warp_size = uses_warp_ops && device.IsExtSubgroupSizeControlSupported() &&
++                                     device.IsGuestWarpSizeSupported(stage_flag);
++        shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
++            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
++            .pNext = force_warp_size ? &subgroup_size_ci : nullptr,
++            .flags = 0,
++            .stage = stage_flag,
++            .module = *spv_modules[stage],
++            .pName = "main",
++            .pSpecializationInfo = nullptr,
++        });
+     }
+     VkPipelineCreateFlags flags{};
+     if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index 095bd4c1e6..cbb04734c9 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -457,6 +457,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+                                                                      : GetTotalPipelineWorkers()},
+       emission_budget{num_pipeline_workers},
+       workers(num_pipeline_workers, "VkPipelineBuilder", {}, Common::ThreadPlacement::Background),
++      deferred_workers(1, "VkDeferredPipelines", {}, Common::ThreadPlacement::Background),
+       serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background),
+       background_pipelines{64, 16 * 1024 * 1024, device.HasBrokenParallelShaderCompiling()} {
+     const auto& float_control{device.FloatControlProperties()};
+@@ -1638,11 +1639,15 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+         const auto name{fmt::format("Shader {:016x}", key.unique_hash)};
+         spv_module.SetObjectNameEXT(name.c_str());
+     }
+-    Common::ThreadWorker* const thread_worker{build_in_parallel ? &workers : nullptr};
++    const bool deferred = program.info.uses_software_matrix &&
++                          device.DefersSoftwareMatrixPipelines();
++    Common::ThreadWorker* const thread_worker{deferred            ? &deferred_workers
++                                              : build_in_parallel ? &workers
++                                                                  : nullptr};
+     return {.pipeline = std::make_unique<ComputePipeline>(
+                 device, scheduler, vulkan_pipeline_cache, descriptor_pool, guest_descriptor_queue,
+                 descriptor_buffer_ring, thread_worker, statistics, &shader_notify, program.info,
+-                std::move(spv_module), key.unique_hash)};
++                std::move(spv_module), key.unique_hash, deferred)};
+ 
+ } catch (const Shader::Exception& exception) {
+     LOG_ERROR(Render_Vulkan, "Compute pipeline compilation failed shader={:#016x} pipeline={:#016x}: {}",
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.h b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
+index 08f00f2436..80f25dbec1 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.h
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
+@@ -220,6 +220,9 @@ private:
+     std::atomic_bool flush_in_flight{};
+ 
+     Common::ThreadWorker workers;
++    /// Software HMMA compute pipelines on drivers that take minutes on them
++    /// (Device::DefersSoftwareMatrixPipelines); nothing waits for this worker.
++    Common::ThreadWorker deferred_workers;
+     Common::ThreadWorker serialization_thread;
+     DynamicFeatures dynamic_features;
+     PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+index 628dd72d97..25be766421 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -432,6 +432,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
+         TraceRenderState(is_indexed, "no-pipeline", nullptr);
+         return;
+     }
++    if (VideoCommon::OotNetwork::BypassEnabled(Settings::GetCurrentProgramID())) {
++        TrackOotTonemappedImage(*pipeline);
++    }
+     // Task/mesh pipelines: the draw's vertex count is the number of task workgroups.
+     mesh_draw = pipeline->IsMeshPipeline();
+     // EDEN_NX2_NO_MESH=1: skip task/mesh draws as before they were supported (A/B comparisons).
+@@ -933,6 +936,18 @@ void RasterizerVulkan::DrawIndirect() {
+     buffer_cache.SetDrawIndirect(nullptr);
+ }
+ 
++void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline) {
++    const auto& hashes = pipeline.ShaderHashes();
++    if (std::none_of(hashes.begin(), hashes.end(), VideoCommon::OotNetwork::IsTonemapShader)) {
++        return;
++    }
++    const GPUVAddr target = maxwell3d->regs.rt[0].Address();
++    if (target != 0 &&
++        oot_network_bypass.tonemapped_image.exchange(target, std::memory_order_relaxed) != target) {
++        LOG_INFO(Render_Vulkan, "Ocarina of Time: tonemapped image at {:#x}", target);
++    }
++}
++
+ void RasterizerVulkan::TraceDrawFailure(std::string_view reason) {
+     if (!Common::DkbFrameTrace::Enabled()) {
+         return;
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.h b/src/video_core/renderer_vulkan/vk_rasterizer.h
+index c33b0ed3b3..0b23dccc14 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.h
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.h
+@@ -18,6 +18,7 @@
+ #include "video_core/control/channel_state_cache.h"
+ #include "video_core/engines/maxwell_dma.h"
+ #include "video_core/host1x/gpu_device_memory_manager.h"
++#include "video_core/oot_network.h"
+ #include "video_core/rasterizer_interface.h"
+ #include "video_core/renderer_vulkan/blit_image.h"
+ #include "video_core/renderer_vulkan/vk_buffer_cache.h"
+@@ -153,6 +154,9 @@ public:
+                                    const Tegra::Texture::TICEntry* depth,
+                                    std::array<f32, 2> jitter,
+                                    std::array<f32, 2> motion_scale, bool use_history = true) override;
++    VideoCommon::OotNetwork::BypassState* OotNetworkBypass() override {
++        return &oot_network_bypass;
++    }
+     Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() override;
+     void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
+                                   std::span<const u8> memory) override;
+@@ -186,6 +190,8 @@ private:
+     void CaptureIndirectTrace();
+     void CollectIndirectTrace();
+     void TraceDrawFailure(std::string_view reason);
++    /// Remembers render target 0 of a draw with one of Ocarina of Time's tonemap shaders.
++    void TrackOotTonemappedImage(const GraphicsPipeline& pipeline);
+     bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
+ 
+     void FlushWork();
+@@ -276,6 +282,7 @@ private:
+     u32 render_trace_clears = 0;
+     bool pending_native_work{};
+     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
++    VideoCommon::OotNetwork::BypassState oot_network_bypass;
+ 
+     struct IndirectTrace {
+         vk::Buffer readback;
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 index 19bbcd9680..69396b4fcf 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
@@ -1048,3 +2993,1411 @@ index 19bbcd9680..69396b4fcf 100644
  
      const auto TryPopQueue{[this](auto& work) -> bool {
          if (work_queue.empty()) {
+diff --git a/src/video_core/shader_cache.cpp b/src/video_core/shader_cache.cpp
+index 96938b9e0f..610fad4a77 100644
+--- a/src/video_core/shader_cache.cpp
++++ b/src/video_core/shader_cache.cpp
+@@ -289,6 +289,10 @@ const ShaderInfo* ShaderCache::ComputeShader() {
+                                             shader->lowered_native->native_program_key)) {
+         kepler_compute->TraceDlssContract(shader->lowered_native->native_program_key);
+     }
++    if (kepler_compute->IsNativeMode() && shader->lowered_native &&
++        kepler_compute->BypassOotNetwork(program_id, shader->lowered_native->native_program_key)) {
++        throw FireEmblemUpscale::DispatchReplaced{};
++    }
+     if (kepler_compute->IsNativeMode() && shader->lowered_native &&
+         kepler_compute->ProcessGameDlss(program_id, shader->lowered_native->native_program_key)) {
+         throw FireEmblemUpscale::DispatchReplaced{};
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 8ca5df2337..00b5bbd704 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -259,8 +259,16 @@ template <class P>
+ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
+     // On every GPU: past what a frame needs, more device memory only keeps the textures of earlier
+     // scenes (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
+-    // MaxCriticalMemory on rather than near the card's budget.
+-    critical_memory = (std::min)(critical_memory, MaxCriticalMemory);
++    // MaxCriticalMemory on rather than near the card's budget. Cards with much more memory than
++    // that (16 GB) collect from 60% of their budget: evicted textures are decoded and uploaded
++    // again when a scene returns, which costs most over an external GPU's narrow link.
++    u64 critical_cap = MaxCriticalMemory;
++    if constexpr (HAS_DEVICE_MEMORY_INFO) {
++        if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
++            critical_cap = (std::max)(critical_cap, runtime.GetDeviceMemoryBudget() / 10 * 6);
++        }
++    }
++    critical_memory = (std::min)(critical_memory, critical_cap);
+     expected_memory =
+         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
+     minimum_memory =
+diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
+index 93a89d124b..ccf068ebdc 100644
+--- a/src/video_core/vulkan_common/vulkan_device.h
++++ b/src/video_core/vulkan_common/vulkan_device.h
+@@ -371,6 +371,23 @@ public:
+                id != VK_DRIVER_ID_MESA_RADV;
+     }
+ 
++    /// AMD's own drivers can spend minutes on a software HMMA compute pipeline (Ocarina of
++    /// Time's upscaling network) and then fail it with VK_ERROR_OUT_OF_HOST_MEMORY. Such
++    /// pipelines are built on their own worker and their dispatches skipped until they exist,
++    /// instead of stalling the GPU thread. EDEN_NX2_DEFER_MATRIX_PIPELINES=1 forces this on any
++    /// driver, =0 turns it off.
++    bool DefersSoftwareMatrixPipelines() const {
++        static const char forced = [] {
++            const char* value = std::getenv("EDEN_NX2_DEFER_MATRIX_PIPELINES");
++            return value == nullptr ? '\0' : value[0];
++        }();
++        if (forced == '0' || forced == '1') {
++            return forced == '1';
++        }
++        const VkDriverIdKHR id = GetDriverID();
++        return id == VK_DRIVER_ID_AMD_PROPRIETARY || id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
++    }
++
+     /// Returns true for tile-based deferred renderers.
+     bool IsTiler() const {
+         switch (GetDriverID()) {
+diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
+index 2052b63394..b8d7eb2d63 100644
+--- a/src/yuzu/CMakeLists.txt
++++ b/src/yuzu/CMakeLists.txt
+@@ -14,11 +14,17 @@ endif()
+ 
+ find_package(Qt6 REQUIRED COMPONENTS Widgets)
+ 
++if(YUZU_TESTS)
++    add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
++endif()
++
+ add_executable(yuzu
+     Info.plist
+     about_dialog.cpp
+     about_dialog.h
+     aboutdialog.ui
++    compatibility_report.cpp
++    compatibility_report.h
+     applets/qt_amiibo_settings.cpp
+     applets/qt_amiibo_settings.h
+     applets/qt_amiibo_settings.ui
+@@ -171,6 +177,7 @@ add_executable(yuzu
+     loading_screen.ui
+ 
+     main.cpp
++    nx2_switches.h
+ 
+     multiplayer/chat_room.cpp
+     multiplayer/chat_room.h
+diff --git a/src/yuzu/compatibility_report.cpp b/src/yuzu/compatibility_report.cpp
+new file mode 100644
+index 0000000000..db61233fe4
+--- /dev/null
++++ b/src/yuzu/compatibility_report.cpp
+@@ -0,0 +1,631 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "compatibility_report.h"
++
++#include <cmath>
++#include <memory>
++#include <QCheckBox>
++#include <QComboBox>
++#include <QDateTime>
++#include <QDesktopServices>
++#include <QDialogButtonBox>
++#include <QFormLayout>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QLabel>
++#include <QLineEdit>
++#include <QNetworkAccessManager>
++#include <QNetworkReply>
++#include <QPlainTextEdit>
++#include <QPushButton>
++#include <QRegularExpression>
++#include <QScrollArea>
++#include <QTabWidget>
++#include <QTimer>
++#include <QUrlQuery>
++#include <QUuid>
++#include <QVBoxLayout>
++
++namespace CompatibilityReporting {
++namespace {
++constexpr auto Site = "https://lichii.zortos.me";
++constexpr qsizetype ReplyLimit = 256 * 1024;
++const QMap<QString, int> Limits{
++    {QStringLiteral("name"), 60},      {QStringLiteral("handle"), 16},
++    {QStringLiteral("build"), 100},    {QStringLiteral("gameVersion"), 60},
++    {QStringLiteral("cpu"), 160},      {QStringLiteral("gpu"), 160},
++    {QStringLiteral("driver"), 160},   {QStringLiteral("os"), 160},
++    {QStringLiteral("ram"), 60},       {QStringLiteral("settings"), 3000},
++    {QStringLiteral("progress"), 500}, {QStringLiteral("summary"), 120},
++    {QStringLiteral("details"), 6000}, {QStringLiteral("reproduction"), 3000},
++    {QStringLiteral("updates"), 500},  {QStringLiteral("mods"), 500},
++};
++const QStringList OptionalFields{QStringLiteral("handle"), QStringLiteral("ram"),
++                                 QStringLiteral("reproduction"), QStringLiteral("updates"),
++                                 QStringLiteral("mods")};
++
++QString Known(const QString& value) {
++    return value.trimmed().isEmpty() ? QStringLiteral("Unknown") : value.trimmed();
++}
++
++bool HasControls(const QString& value) {
++    for (const auto ch : value) {
++        if (ch.category() == QChar::Other_Control && ch != QLatin1Char('\t') &&
++            ch != QLatin1Char('\n') && ch != QLatin1Char('\r')) {
++            return true;
++        }
++    }
++    return false;
++}
++} // namespace
++
++QString SummarizeEnabledAddons(const QList<Addon>& addons) {
++    QStringList labels;
++    for (const auto& addon : addons) {
++        if (!addon.enabled || addon.name.trimmed().isEmpty()) {
++            continue;
++        }
++        auto label = addon.name.trimmed();
++        if (!addon.version.trimmed().isEmpty()) {
++            label += QStringLiteral(" (%1)").arg(addon.version.trimmed());
++        }
++        if (!labels.contains(label)) {
++            labels.append(std::move(label));
++        }
++    }
++    if (labels.isEmpty()) {
++        return QStringLiteral("None listed as enabled at launch.");
++    }
++    const QString summary =
++        QStringLiteral("Enabled at launch: ") + labels.join(QStringLiteral("; "));
++    constexpr int limit = 500;
++    if (summary.size() <= limit) {
++        return summary;
++    }
++    const auto suffix = QStringLiteral("… (list truncated; review)");
++    auto shortened = summary.left(limit - suffix.size());
++    if (!shortened.isEmpty() && shortened.back().isHighSurrogate()) {
++        shortened.chop(1);
++    }
++    return shortened + suffix;
++}
++
++Dialog::Dialog(const Session& session, QWidget* parent) : Dialog(session, nullptr, parent) {}
++
++Dialog::Dialog(const Session& session, QNetworkAccessManager* network_, QWidget* parent)
++    : QDialog(parent), network(network_ ? network_ : new QNetworkAccessManager(this)) {
++    setWindowTitle(tr("Submit compatibility report"));
++    resize(760, 790);
++    auto* layout = new QVBoxLayout(this);
++    auto* introduction = new QLabel(
++        tr("Share your experience with the latest completed session. Nothing is sent until you "
++           "choose Search or Submit. Logs are not uploaded. No account is required."),
++        this);
++    introduction->setWordWrap(true);
++    layout->addWidget(introduction);
++    auto* search_row = new QHBoxLayout;
++    query = new QLineEdit(session.title, this);
++    query->setObjectName(QStringLiteral("catalogQuery"));
++    query->setMaxLength(150);
++    query->setPlaceholderText(tr("Game title to search"));
++    search = new QPushButton(tr("Search catalog"), this);
++    search->setObjectName(QStringLiteral("search"));
++    search_row->addWidget(query, 1);
++    search_row->addWidget(search);
++    layout->addLayout(search_row);
++    auto* search_notice = new QLabel(tr("Search sends only the text above to lichii.zortos.me. "
++                                        "The service sees your IP address."),
++                                     this);
++    search_notice->setWordWrap(true);
++    layout->addWidget(search_notice);
++    auto* results_row = new QHBoxLayout;
++    games = new QComboBox(this);
++    games->setObjectName(QStringLiteral("catalogResults"));
++    previous = new QPushButton(tr("Previous"), this);
++    next = new QPushButton(tr("Next"), this);
++    previous->setObjectName(QStringLiteral("previous"));
++    next->setObjectName(QStringLiteral("next"));
++    confirm = new QPushButton(tr("Confirm game"), this);
++    confirm->setObjectName(QStringLiteral("confirm"));
++    results_row->addWidget(games, 1);
++    results_row->addWidget(previous);
++    results_row->addWidget(next);
++    results_row->addWidget(confirm);
++    layout->addLayout(results_row);
++    match = new QLabel(tr("No catalog game confirmed."), this);
++    match->setTextFormat(Qt::PlainText);
++    match->setWordWrap(true);
++    layout->addWidget(match);
++
++    tabs = new QTabWidget(this);
++    layout->addWidget(tabs, 1);
++    const auto add_page = [this](const QString& title) {
++        auto* content = new QWidget;
++        auto* form = new QFormLayout(content);
++        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
++        auto* scroll = new QScrollArea(this);
++        scroll->setWidgetResizable(true);
++        scroll->setWidget(content);
++        tabs->addTab(scroll, title);
++        return form;
++    };
++    const auto line = [this](QFormLayout* form, const QString& key, const QString& label,
++                             const QString& value = QString{}) {
++        auto* edit = new QLineEdit(value, this);
++        edit->setObjectName(key);
++        edit->setMaxLength(Limits.value(key));
++        fields.insert(key, edit);
++        form->addRow(label, edit);
++    };
++    const auto paragraph = [this](QFormLayout* form, const QString& key, const QString& label,
++                                  const QString& value = QString{}) {
++        auto* edit = new QPlainTextEdit(value, this);
++        edit->setObjectName(key);
++        edit->setMinimumHeight(90);
++        paragraphs.insert(key, edit);
++        form->addRow(label, edit);
++    };
++    auto* experience = add_page(tr("Experience"));
++    line(experience, QStringLiteral("name"), tr("Public nickname"), QStringLiteral("Anonymous"));
++    line(experience, QStringLiteral("handle"), tr("X handle (optional)"));
++    outcome = new QComboBox(this);
++    outcome->setObjectName(QStringLiteral("outcome"));
++    outcome->addItem(tr("Choose your assessment"), QString{});
++    for (const auto& value : {"Perfect", "Playable", "Runs", "Loads", "Unplayable"}) {
++        outcome->addItem(QString::fromLatin1(value), QString::fromLatin1(value));
++    }
++    experience->addRow(tr("Compatibility"), outcome);
++    line(experience, QStringLiteral("summary"), tr("Summary"));
++    paragraph(experience, QStringLiteral("progress"), tr("How far did you play?"));
++    paragraph(experience, QStringLiteral("details"), tr("What worked or failed?"));
++    paragraph(experience, QStringLiteral("reproduction"), tr("Steps to reproduce (optional)"));
++    auto* setup = add_page(tr("System and settings"));
++    auto* setup_notice =
++        new QLabel(tr("Prefilled values describe launch settings, not measured "
++                      "performance. Review changes made during play. Unknown means "
++                      "not collected. Do not paste logs, paths, keys or private details."));
++    setup_notice->setWordWrap(true);
++    setup->addRow(setup_notice);
++    line(setup, QStringLiteral("build"), tr("Lichii build"), Known(session.build));
++    line(setup, QStringLiteral("gameVersion"), tr("Game version"), Known(session.game_version));
++    line(setup, QStringLiteral("cpu"), tr("CPU"), Known(session.cpu));
++    line(setup, QStringLiteral("gpu"), tr("GPU"), Known(session.gpu));
++    line(setup, QStringLiteral("driver"), tr("GPU driver / OpenGL version"), Known(session.driver));
++    line(setup, QStringLiteral("os"), tr("Operating system"), Known(session.os));
++    line(setup, QStringLiteral("ram"), tr("RAM (optional)"), session.ram);
++    graphics_api = new QComboBox(this);
++    graphics_api->setObjectName(QStringLiteral("graphicsApi"));
++    graphics_api->addItems(
++        {QStringLiteral("Unknown"), QStringLiteral("Vulkan"), QStringLiteral("OpenGL")});
++    graphics_api->setCurrentText(Known(session.graphics_api));
++    setup->addRow(tr("Graphics API"), graphics_api);
++    paragraph(setup, QStringLiteral("settings"), tr("Launch settings"), Known(session.settings));
++    paragraph(setup, QStringLiteral("updates"), tr("Updates (optional)"), session.updates);
++    paragraph(setup, QStringLiteral("mods"), tr("Mods (optional)"), session.mods);
++    preview = new QPlainTextEdit(this);
++    preview->setObjectName(QStringLiteral("preview"));
++    preview->setReadOnly(true);
++    tabs->addTab(preview, tr("Public preview"));
++
++    auto* privacy = new QLabel(tr("All report fields in the preview will be public. Logs, files, "
++                                  "local title IDs and play history are not sent. The server uses "
++                                  "your IP address for rate limiting. Review and clear anything "
++                                  "you do not want to share."),
++                               this);
++    privacy->setWordWrap(true);
++    layout->addWidget(privacy);
++    public_consent = new QCheckBox(tr("I understand my name, optional X handle, report text, "
++                                      "hardware and settings will be public."),
++                                   this);
++    safe_files_consent = new QCheckBox(tr("My report contains no game files, keys, firmware, "
++                                          "saves or private account details."),
++                                       this);
++    public_consent->setObjectName(QStringLiteral("publicConsent"));
++    safe_files_consent->setObjectName(QStringLiteral("safeFilesConsent"));
++    layout->addWidget(public_consent);
++    layout->addWidget(safe_files_consent);
++    status = new QLabel(this);
++    status->setObjectName(QStringLiteral("status"));
++    status->setTextFormat(Qt::PlainText);
++    status->setWordWrap(true);
++    layout->addWidget(status);
++    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
++    clear = buttons->addButton(tr("Clear draft"), QDialogButtonBox::ResetRole);
++    submit = buttons->addButton(tr("Submit report"), QDialogButtonBox::ActionRole);
++    open_receipt = buttons->addButton(tr("Open public report"), QDialogButtonBox::ActionRole);
++    clear->setObjectName(QStringLiteral("clear"));
++    submit->setObjectName(QStringLiteral("submit"));
++    open_receipt->setVisible(false);
++    layout->addWidget(buttons);
++    for (auto* button : findChildren<QPushButton*>()) {
++        button->setAutoDefault(false);
++        button->setDefault(false);
++    }
++    connect(buttons, &QDialogButtonBox::rejected, this, &Dialog::reject);
++    connect(search, &QPushButton::clicked, this, [this] {
++        page = 1;
++        Search();
++    });
++    connect(previous, &QPushButton::clicked, this, [this] {
++        --page;
++        Search();
++    });
++    connect(next, &QPushButton::clicked, this, [this] {
++        ++page;
++        Search();
++    });
++    connect(confirm, &QPushButton::clicked, this, &Dialog::ConfirmGame);
++    connect(submit, &QPushButton::clicked, this, &Dialog::Submit);
++    connect(clear, &QPushButton::clicked, this, &Dialog::Clear);
++    connect(open_receipt, &QPushButton::clicked, this, [this] {
++        if (!receipt_url.isEmpty()) {
++            QDesktopServices::openUrl(receipt_url);
++        }
++    });
++    connect(query, &QLineEdit::textChanged, this, [this] {
++        Abort();
++        games->clear();
++        confirmed_game = 0;
++        page = page_count = 1;
++        match->setText(tr("No catalog game confirmed."));
++        Edited();
++    });
++    connect(games, &QComboBox::currentIndexChanged, this, [this] {
++        confirmed_game = 0;
++        match->setText(tr("No catalog game confirmed."));
++        Edited();
++    });
++    for (auto* field : fields) {
++        connect(field, &QLineEdit::textChanged, this, &Dialog::Edited);
++    }
++    for (auto* field : paragraphs) {
++        connect(field, &QPlainTextEdit::textChanged, this, &Dialog::Edited);
++    }
++    connect(outcome, &QComboBox::currentIndexChanged, this, &Dialog::Edited);
++    connect(graphics_api, &QComboBox::currentIndexChanged, this, &Dialog::Edited);
++    connect(public_consent, &QCheckBox::toggled, this, &Dialog::Refresh);
++    connect(safe_files_consent, &QCheckBox::toggled, this, &Dialog::Refresh);
++    auto* cooldown = new QTimer(this);
++    connect(cooldown, &QTimer::timeout, this, &Dialog::Refresh);
++    cooldown->start(1000);
++    Refresh();
++}
++
++Dialog::~Dialog() {
++    state = State::Closed;
++    Abort();
++}
++
++void Dialog::reject() {
++    state = State::Closed;
++    Abort();
++    QDialog::reject();
++}
++
++void Dialog::Abort() {
++    if (reply) {
++        auto* pending = reply.data();
++        reply = nullptr;
++        pending->abort();
++        pending->deleteLater();
++    }
++    if (state == State::Searching) {
++        state = State::Editing;
++    }
++}
++
++void Dialog::Edited() {
++    public_consent->setChecked(false);
++    safe_files_consent->setChecked(false);
++    submitted_payload.clear();
++    submission_key.clear();
++    Refresh();
++}
++
++void Dialog::Clear() {
++    if (state != State::Editing && state != State::Searching) {
++        return;
++    }
++    Abort();
++    query->clear();
++    games->clear();
++    confirmed_game = 0;
++    for (auto* field : fields) {
++        field->clear();
++    }
++    for (auto* field : paragraphs) {
++        field->clear();
++    }
++    outcome->setCurrentIndex(0);
++    graphics_api->setCurrentIndex(0);
++    Edited();
++    status->setText(tr("Draft cleared. Nothing was sent by clearing it."));
++}
++
++QByteArray Dialog::Payload() const {
++    QJsonObject object;
++    for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
++        object.insert(it.key(), it.value()->text().trimmed());
++    }
++    for (auto it = paragraphs.cbegin(); it != paragraphs.cend(); ++it) {
++        object.insert(it.key(), it.value()->toPlainText().trimmed());
++    }
++    object.insert(QStringLiteral("gameId"), confirmed_game);
++    object.insert(QStringLiteral("graphicsApi"), graphics_api->currentText());
++    object.insert(QStringLiteral("outcome"), outcome->currentData().toString());
++    object.insert(QStringLiteral("publicConsent"), public_consent->isChecked());
++    object.insert(QStringLiteral("safeFilesConsent"), safe_files_consent->isChecked());
++    return QJsonDocument(object).toJson(QJsonDocument::Compact);
++}
++
++QString Dialog::ValidationError() const {
++    if (confirmed_game == 0) {
++        return tr("Search for and confirm the catalog game first.");
++    }
++    const auto object = QJsonDocument::fromJson(Payload()).object();
++    for (auto it = Limits.cbegin(); it != Limits.cend(); ++it) {
++        const auto value = object.value(it.key()).toString();
++        if ((!OptionalFields.contains(it.key()) && value.isEmpty()) || value.size() > it.value() ||
++            HasControls(value)) {
++            return tr("Check %1: required fields must be filled, within their length limit, "
++                      "and contain no control characters.")
++                .arg(it.key());
++        }
++    }
++    static const QRegularExpression handle_pattern(QStringLiteral("^@?[A-Za-z0-9_]{1,15}$"));
++    const auto handle = object.value(QStringLiteral("handle")).toString();
++    if (!handle.isEmpty() && !handle_pattern.match(handle).hasMatch()) {
++        return tr(
++            "An X handle must contain 1–15 letters, digits or underscores, with an optional @.");
++    }
++    if (outcome->currentData().toString().isEmpty()) {
++        return tr("Choose your own compatibility assessment.");
++    }
++    if (Payload().size() > 128 * 1024) {
++        return tr("The report is too large.");
++    }
++    return {};
++}
++
++void Dialog::Refresh() {
++    const bool editing = state == State::Editing;
++    const bool searching = state == State::Searching;
++    const bool cooling_down = QDateTime::currentMSecsSinceEpoch() < retry_at;
++    query->setEnabled(editing || searching);
++    search->setEnabled(editing && !cooling_down);
++    games->setEnabled(editing);
++    confirm->setEnabled(editing && games->currentIndex() >= 0);
++    previous->setEnabled(editing && page > 1 && !cooling_down);
++    next->setEnabled(editing && page < page_count && !cooling_down);
++    clear->setEnabled(editing || searching);
++    tabs->setEnabled(editing || searching || state == State::Finished);
++    public_consent->setEnabled(editing);
++    safe_files_consent->setEnabled(editing);
++    const auto validation = ValidationError();
++    submit->setEnabled(editing && !cooling_down && validation.isEmpty() &&
++                       public_consent->isChecked() && safe_files_consent->isChecked());
++    submit->setToolTip(validation);
++    const auto content =
++        QString::fromUtf8(QJsonDocument::fromJson(Payload()).toJson(QJsonDocument::Indented));
++    if (preview->toPlainText() != content) {
++        preview->setPlainText(content);
++    }
++}
++
++void Dialog::Search() {
++    if (state != State::Editing || QDateTime::currentMSecsSinceEpoch() < retry_at) {
++        return;
++    }
++    if (HasControls(query->text()) || query->text().trimmed().size() > 150) {
++        status->setText(tr("Check the search text."));
++        return;
++    }
++    confirmed_game = 0;
++    games->clear();
++    Edited();
++    state = State::Searching;
++    status->setText(tr("Searching catalog… Cancel closes the dialog and stops this request."));
++    Refresh();
++    Request(false);
++}
++
++void Dialog::ConfirmGame() {
++    if (state != State::Editing || games->currentIndex() < 0) {
++        return;
++    }
++    if (confirmed_game == games->currentData().toLongLong()) {
++        return;
++    }
++    confirmed_game = games->currentData().toLongLong();
++    confirmed_title = games->currentText();
++    match->setText(tr("Confirmed: %1 (catalog ID %2)").arg(confirmed_title).arg(confirmed_game));
++    Edited();
++}
++
++void Dialog::Submit() {
++    if (state != State::Editing || QDateTime::currentMSecsSinceEpoch() < retry_at ||
++        !public_consent->isChecked() || !safe_files_consent->isChecked()) {
++        return;
++    }
++    const auto error = ValidationError();
++    if (!error.isEmpty()) {
++        status->setText(error);
++        return;
++    }
++    const auto payload = Payload();
++    if (submitted_payload != payload || submission_key.isEmpty()) {
++        submitted_payload = payload;
++        submission_key = QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8();
++    }
++    state = State::Submitting;
++    status->setText(tr("Submitting… Closing stops waiting, but cannot retract a report the "
++                       "server already received. There are no automatic retries."));
++    Refresh();
++    Request(true, submitted_payload);
++}
++
++void Dialog::Request(bool submission, const QByteArray& payload) {
++    QUrl url(QString::fromLatin1(Site) + (submission ? QStringLiteral("/api/v1/desktop/reports")
++                                                     : QStringLiteral("/api/games")));
++    if (!submission) {
++        QUrlQuery params;
++        params.addQueryItem(QStringLiteral("q"),
++                            QString::fromLatin1(QUrl::toPercentEncoding(query->text().trimmed())));
++        params.addQueryItem(QStringLiteral("page"), QString::number(page));
++        params.addQueryItem(QStringLiteral("sort"), QStringLiteral("title"));
++        url.setQuery(params);
++    }
++    QNetworkRequest request(url);
++    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
++                         QNetworkRequest::ManualRedirectPolicy);
++    request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
++    request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
++    request.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
++    request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
++                         QNetworkRequest::AlwaysNetwork);
++    request.setAttribute(QNetworkRequest::CacheSaveControlAttribute, false);
++    request.setTransferTimeout(20000);
++    request.setRawHeader("Accept", "application/json");
++    if (submission) {
++        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
++        request.setRawHeader("X-Lichii-Client", "desktop/1");
++        request.setRawHeader("Idempotency-Key", submission_key);
++    }
++    auto* pending = submission ? network->post(request, payload) : network->get(request);
++    reply = pending;
++    QTimer::singleShot(20000, this, [this, pending = QPointer<QNetworkReply>(pending)] {
++        if (pending && reply == pending) {
++            pending->abort();
++        }
++    });
++    pending->setReadBufferSize(ReplyLimit + 1);
++    auto body = std::make_shared<QByteArray>();
++    connect(pending, &QNetworkReply::readyRead, this, [this, pending, body] {
++        if (reply != pending) {
++            return;
++        }
++        body->append(pending->read(ReplyLimit + 1 - body->size()));
++        if (body->size() > ReplyLimit) {
++            pending->abort();
++        }
++    });
++    connect(pending, &QNetworkReply::finished, this, [this, pending, submission, body] {
++        pending->deleteLater();
++        if (reply != pending || state == State::Closed) {
++            return;
++        }
++        reply = nullptr;
++        body->append(pending->read(ReplyLimit + 1 - body->size()));
++        Finished(submission, pending->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(),
++                 *body, pending->rawHeader("Retry-After"),
++                 pending->error() != QNetworkReply::NoError || body->size() > ReplyLimit);
++    });
++}
++
++void Dialog::Finished(bool submission, int http_status, const QByteArray& body,
++                      const QByteArray& retry_after, bool network_error) {
++    state = State::Editing;
++    if (http_status == 429) {
++        bool valid = false;
++        const auto seconds = retry_after.toLongLong(&valid);
++        const auto delay = valid && seconds >= 0 && seconds <= 31536000 ? seconds : 3600;
++        retry_at = QDateTime::currentMSecsSinceEpoch() + delay * 1000;
++        status->setText(tr("Rate limit reached. Wait %1 seconds, then retry explicitly. "
++                           "Nothing will be retried automatically.")
++                            .arg(delay));
++    } else if (http_status == 400) {
++        const auto errors =
++            QJsonDocument::fromJson(body).object().value(QStringLiteral("fields")).toObject();
++        QStringList invalid_fields;
++        for (auto it = errors.constBegin(); it != errors.constEnd(); ++it) {
++            if (Limits.contains(it.key()) || it.key() == QStringLiteral("gameId") ||
++                it.key() == QStringLiteral("outcome") ||
++                it.key() == QStringLiteral("graphicsApi") ||
++                it.key() == QStringLiteral("publicConsent") ||
++                it.key() == QStringLiteral("safeFilesConsent")) {
++                invalid_fields.append(it.key());
++            }
++        }
++        status->setText(invalid_fields.isEmpty()
++                            ? tr("The server rejected the report. Review the fields and length "
++                                 "limits before submitting again.")
++                            : tr("The server rejected these fields: %1. Review them before "
++                                 "submitting again.")
++                                  .arg(invalid_fields.join(QStringLiteral(", "))));
++    } else if (http_status == 409) {
++        status->setText(
++            tr("The server rejected this submission identity. Edit the draft to start "
++               "a new submission; first check whether your report was already accepted."));
++    } else if (http_status == 403 || http_status == 413 || http_status == 415) {
++        status->setText(
++            tr("The server rejected the request (HTTP %1). No automatic retry was made.")
++                .arg(http_status));
++    } else if (network_error || (http_status != 200 && !(submission && http_status == 201))) {
++        status->setText(
++            submission ? tr("No valid receipt was received. Delivery may have succeeded. "
++                            "An explicit retry of this unchanged draft uses the same submission "
++                            "identity. Closing loses that identity; do not create a duplicate.")
++                       : tr("Catalog search failed. Check your connection and retry explicitly."));
++    } else {
++        QJsonParseError parse_error;
++        const auto document = QJsonDocument::fromJson(body, &parse_error);
++        const auto object = document.object();
++        bool valid = parse_error.error == QJsonParseError::NoError && document.isObject();
++        if (submission) {
++            const auto id = object.value(QStringLiteral("id")).toString();
++            const QUrl url(object.value(QStringLiteral("url")).toString());
++            const auto uuid = QUuid(id);
++            valid = valid && !uuid.isNull() && uuid.toString(QUuid::WithoutBraces) == id &&
++                    url.isValid() && url.scheme() == QStringLiteral("https") &&
++                    url.host() == QStringLiteral("lichii.zortos.me") && url.port(-1) == -1 &&
++                    url.userInfo().isEmpty() && !url.hasQuery() && !url.hasFragment() &&
++                    url.path() == QStringLiteral("/reports/") + id;
++            if (valid) {
++                state = State::Finished;
++                receipt_url = url;
++                open_receipt->setVisible(true);
++                status->setText(tr("Report submitted. It is public. Thank you."));
++            } else {
++                status->setText(tr("The server returned an invalid receipt. The report may have "
++                                   "been accepted. Only retry this unchanged draft explicitly."));
++            }
++        } else {
++            const auto entries = object.value(QStringLiteral("games")).toArray();
++            const auto returned_page = object.value(QStringLiteral("page")).toInt(-1);
++            const auto pages = object.value(QStringLiteral("pageCount")).toInt(-1);
++            valid = valid && object.value(QStringLiteral("games")).isArray() &&
++                    entries.size() <= 15 && returned_page == page && pages >= 1 && pages <= 10000;
++            for (const auto& entry : entries) {
++                const auto game = entry.toObject();
++                const double id = game.value(QStringLiteral("sgdbId")).toDouble(-1);
++                const auto title = game.value(QStringLiteral("title")).toString();
++                valid = valid && std::isfinite(id) && id > 0 && id <= 9007199254740991.0 &&
++                        std::floor(id) == id && !title.trimmed().isEmpty() &&
++                        title.size() <= 1000 && !HasControls(title) &&
++                        game.value(QStringLiteral("slug")).isString();
++            }
++            if (valid) {
++                for (const auto& entry : entries) {
++                    const auto game = entry.toObject();
++                    games->addItem(game.value(QStringLiteral("title")).toString(),
++                                   game.value(QStringLiteral("sgdbId")).toInteger());
++                }
++                page_count = pages;
++                status->setText(tr("Page %1 of %2. Select the exact game and press Confirm game.")
++                                    .arg(page)
++                                    .arg(page_count));
++            } else {
++                status->setText(
++                    tr("The catalog returned an invalid response. No game was confirmed."));
++            }
++        }
++    }
++    if (submission) {
++        public_consent->setChecked(false);
++        safe_files_consent->setChecked(false);
++    }
++    Refresh();
++}
++
++} // namespace CompatibilityReporting
+diff --git a/src/yuzu/compatibility_report.h b/src/yuzu/compatibility_report.h
+new file mode 100644
+index 0000000000..0825707e5c
+--- /dev/null
++++ b/src/yuzu/compatibility_report.h
+@@ -0,0 +1,106 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <QByteArray>
++#include <QDialog>
++#include <QList>
++#include <QMap>
++#include <QPointer>
++#include <QString>
++#include <QUrl>
++
++class QCheckBox;
++class QComboBox;
++class QLabel;
++class QLineEdit;
++class QNetworkAccessManager;
++class QNetworkReply;
++class QPlainTextEdit;
++class QPushButton;
++class QTabWidget;
++
++namespace CompatibilityReporting {
++
++struct Addon {
++    QString name;
++    QString version;
++    bool enabled;
++};
++
++QString SummarizeEnabledAddons(const QList<Addon>& addons);
++
++struct Session {
++    quint64 program_id{};
++    QString title;
++    QString build;
++    QString game_version;
++    QString cpu;
++    QString gpu;
++    QString driver;
++    QString os;
++    QString ram;
++    QString graphics_api;
++    QString settings;
++    QString mods;
++    QString updates;
++};
++
++class Dialog final : public QDialog {
++    Q_OBJECT
++
++public:
++    explicit Dialog(const Session& session, QWidget* parent = nullptr);
++    ~Dialog() override;
++    void reject() override;
++
++private:
++    friend class DialogTest;
++    Dialog(const Session& session, QNetworkAccessManager* network, QWidget* parent);
++    enum class State { Editing, Searching, Submitting, Finished, Closed };
++    void Search();
++    void ConfirmGame();
++    void Submit();
++    void Clear();
++    void Edited();
++    void Refresh();
++    void Abort();
++    void Request(bool submission, const QByteArray& payload = {});
++    void Finished(bool submission, int status, const QByteArray& body,
++                  const QByteArray& retry_after, bool network_error);
++    QByteArray Payload() const;
++    QString ValidationError() const;
++
++    QNetworkAccessManager* network;
++    QPointer<QNetworkReply> reply;
++    State state{State::Editing};
++    qint64 confirmed_game{};
++    QString confirmed_title;
++    QByteArray submitted_payload;
++    QByteArray submission_key;
++    qint64 retry_at{};
++    int page{1};
++    int page_count{1};
++    QUrl receipt_url;
++    QMap<QString, QLineEdit*> fields;
++    QMap<QString, QPlainTextEdit*> paragraphs;
++    QLineEdit* query;
++    QComboBox* games;
++    QComboBox* outcome;
++    QComboBox* graphics_api;
++    QCheckBox* public_consent;
++    QCheckBox* safe_files_consent;
++    QPushButton* search;
++    QPushButton* confirm;
++    QPushButton* previous;
++    QPushButton* next;
++    QPushButton* submit;
++    QPushButton* clear;
++    QPushButton* open_receipt;
++    QLabel* status;
++    QLabel* match;
++    QTabWidget* tabs;
++    QPlainTextEdit* preview;
++};
++
++} // namespace CompatibilityReporting
+diff --git a/src/yuzu/game/game_list.cpp b/src/yuzu/game/game_list.cpp
+index f4ba7b09f1..4912fb3ab7 100644
+--- a/src/yuzu/game/game_list.cpp
++++ b/src/yuzu/game/game_list.cpp
+@@ -454,6 +454,10 @@ void GameList::PopupContextMenu(const QPoint& menu_location) {
+     context_menu.exec(m_currentView->viewport()->mapToGlobal(menu_location));
+ }
+ 
++void GameList::SetReportableProgramId(u64 program_id) {
++    reportable_program_id = program_id;
++}
++
+ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::string& path) {
+     // TODO(crueter): Refactor this and make it less bad
+     QAction* favorite = context_menu.addAction(tr("Favorite"));
+@@ -512,6 +516,11 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
+         edit_nup->setEnabled(!nup_conversion_running);
+     }
+     QAction* properties = context_menu.addAction(tr("Configure Game"));
++    if (program_id != 0 && program_id == reportable_program_id) {
++        auto* report = context_menu.addAction(tr("Submit compatibility report…"));
++        connect(report, &QAction::triggered, this,
++                [this, program_id] { emit ReportCompatibilityRequested(program_id); });
++    }
+ 
+     favorite->setVisible(program_id != 0);
+     favorite->setCheckable(true);
+diff --git a/src/yuzu/game/game_list.h b/src/yuzu/game/game_list.h
+index 11a2bd1ae3..e826657af0 100644
+--- a/src/yuzu/game/game_list.h
++++ b/src/yuzu/game/game_list.h
+@@ -77,6 +77,7 @@ public:
+ 
+     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
+     void SetScanEnabled(bool enabled);
++    void SetReportableProgramId(u64 program_id);
+ 
+     void SaveInterfaceLayout();
+     void LoadInterfaceLayout();
+@@ -96,6 +97,7 @@ public slots:
+     void OnPopulate();
+ 
+ signals:
++    void ReportCompatibilityRequested(u64 program_id);
+     void BootGame(const QString& game_path, StartGameType type);
+     void GameChosen(const QString& game_path, const u64 title_id = 0);
+     void OpenFolderRequested(u64 program_id, GameListOpenTarget target,
+@@ -171,6 +173,7 @@ private:
+ 
+     bool m_isTreeMode = true;
+     bool nup_conversion_running{};
++    u64 reportable_program_id{};
+     QAbstractItemView* m_currentView = nullptr;
+ };
+ 
+diff --git a/src/yuzu/main.cpp b/src/yuzu/main.cpp
+index 1f25f92476..cacdbf187f 100644
+--- a/src/yuzu/main.cpp
++++ b/src/yuzu/main.cpp
+@@ -1,16 +1,11 @@
+ // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
+-#include <cstdlib>
+-#include <filesystem>
+-#include <fstream>
+-#include <map>
+-#include <string>
+-
+ #include <QApplication>
+ 
+ #include "common/fs/fs_paths.h"
+ #include "common/fs/path_util.h"
++#include "nx2_switches.h"
+ #include "startup_checks.h"
+ 
+ #if YUZU_ROOM
+@@ -86,81 +81,6 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
+ #endif
+ }
+ 
+-// The NX2 switches are read from the environment (EDEN_NX2_*), which a GUI launch has no way to
+-// set. nx2_switches.txt holds "NAME=VALUE" lines, one per line, '#' comments. A variable already
+-// in the real environment always wins, so a launcher script can still override one run; between
+-// files the later one wins, so the copy next to the executable (shipped with the build) can be
+-// overridden by %APPDATA%\eden\nx2_switches.txt without editing the one that gets replaced.
+-static void ParseSwitchFile(const std::filesystem::path& path,
+-                            std::map<std::string, std::string>& entries) {
+-    std::ifstream file{path};
+-    if (!file) {
+-        return;
+-    }
+-    constexpr const char* blank = " \t\r";
+-    std::string line;
+-    while (std::getline(file, line)) {
+-        line.erase(0, line.find_first_not_of(blank));
+-        line.erase(line.find_last_not_of(blank) + 1);
+-        if (line.empty() || line[0] == '#') {
+-            continue;
+-        }
+-        const auto eq = line.find('=');
+-        if (eq == std::string::npos) {
+-            continue;
+-        }
+-        std::string name = line.substr(0, eq);
+-        std::string value = line.substr(eq + 1);
+-        name.erase(name.find_last_not_of(blank) + 1);
+-        value.erase(0, value.find_first_not_of(blank));
+-        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+-            value = value.substr(1, value.size() - 2);
+-        }
+-        if (!name.empty()) {
+-            entries.insert_or_assign(std::move(name), std::move(value));
+-        }
+-    }
+-}
+-
+-static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
+-#ifdef _WIN32
+-    return Common::FS::GetExeDirectory();
+-#else
+-    std::error_code ec;
+-#ifdef __linux__
+-    if (auto exe = std::filesystem::read_symlink("/proc/self/exe", ec); !ec) {
+-        return exe.parent_path();
+-    }
+-#endif
+-    const auto exe = std::filesystem::absolute(argv0, ec);
+-    return ec ? std::filesystem::path{} : exe.parent_path();
+-#endif
+-}
+-
+-static void LoadNx2Switches(const char* argv0) {
+-    // Later files overwrite earlier entries; the real environment is checked only at the end.
+-    std::map<std::string, std::string> entries;
+-    if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {
+-        ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
+-    }
+-#ifdef _WIN32
+-    const auto config_dir = Common::FS::GetAppDataRoamingDirectory() / EDEN_DIR;
+-#else
+-    const auto config_dir = Common::FS::GetDataDirectory("XDG_CONFIG_HOME") / EDEN_DIR;
+-#endif
+-    ParseSwitchFile(config_dir / "nx2_switches.txt", entries);
+-    for (const auto& [name, value] : entries) {
+-        if (std::getenv(name.c_str()) != nullptr) {
+-            continue;
+-        }
+-#ifdef _WIN32
+-        _putenv_s(name.c_str(), value.c_str());
+-#else
+-        setenv(name.c_str(), value.c_str(), 1);
+-#endif
+-    }
+-}
+-
+ int main(int argc, char* argv[]) {
+     LoadNx2Switches(argv[0]);
+ #if YUZU_ROOM
+diff --git a/src/yuzu/main_window.cpp b/src/yuzu/main_window.cpp
+index e24a09d966..fac2e5cc60 100644
+--- a/src/yuzu/main_window.cpp
++++ b/src/yuzu/main_window.cpp
+@@ -8,6 +8,7 @@
+ #undef VMA_IMPLEMENTATION
+ #endif
+ 
++#include <QSysInfo>
+ #include <boost/algorithm/string/split.hpp>
+ #include "common/fs/path_util.h"
+ #include "common/game_presets.h"
+@@ -1453,6 +1454,14 @@ void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
+ }
+ 
+ void MainWindow::ConnectWidgetEvents() {
++    connect(game_list, &GameList::ReportCompatibilityRequested, this, [this](u64 program_id) {
++        if (!report_session || report_session->program_id != program_id || emulation_running ||
++            boot_in_progress || close_pending) {
++            return;
++        }
++        CompatibilityReporting::Dialog dialog(*report_session, this);
++        dialog.exec();
++    });
+     connect(game_list, &GameList::BootGame, this, &MainWindow::BootGameFromList);
+     connect(game_list, &GameList::GameChosen, this, &MainWindow::OnGameListLoadFile);
+     connect(game_list, &GameList::OpenDirectory, this, &MainWindow::OnGameListOpenDirectory);
+@@ -1936,6 +1945,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
+         return;
+     }
+     LOG_INFO(Frontend, "Lichii starting...");
++    report_session.reset();
++    game_list->SetReportableProgramId(0);
+ 
+     if (params.program_id == 0 ||
+         params.program_id > static_cast<u64>(Service::AM::AppletProgramId::MaxProgramId)) {
+@@ -2046,6 +2057,80 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
+     }
+     LOG_INFO(Frontend, "Core load completed: elapsed_ms={}", load_timer.elapsed());
+ 
++    const auto report_program_id = QtCommon::system->GetApplicationProcessProgramID();
++    if (Settings::CurrentProgramIsSwitch2() && report_program_id != 0) {
++        auto& session = report_session.emplace();
++        session.program_id = report_program_id;
++        const FileSys::PatchManager pm(report_program_id,
++                                       QtCommon::system->GetFileSystemController(),
++                                       QtCommon::system->GetContentProvider());
++        if (const auto metadata = pm.GetControlMetadata(); metadata.first) {
++            session.title = QString::fromStdString(metadata.first->GetApplicationName());
++            session.game_version = QString::fromStdString(metadata.first->GetVersionString());
++        }
++        if (session.title.trimmed().isEmpty()) {
++            std::string title;
++            if (QtCommon::system->GetGameName(title) == Loader::ResultStatus::Success) {
++                session.title = QString::fromStdString(title);
++            }
++        }
++        FileSys::VirtualFile update_raw;
++        auto& report_loader = QtCommon::system->GetAppLoader();
++        report_loader.ReadUpdateRaw(update_raw);
++        QList<CompatibilityReporting::Addon> mods;
++        QList<CompatibilityReporting::Addon> updates;
++        for (const auto& patch : pm.GetPatches(update_raw)) {
++            auto* entries = patch.type == FileSys::PatchType::Mod      ? &mods
++                            : patch.type == FileSys::PatchType::Update ? &updates
++                                                                       : nullptr;
++            if (entries) {
++                entries->push_back({QString::fromStdString(patch.name),
++                                    QString::fromStdString(patch.version), patch.enabled});
++            }
++        }
++        if (report_loader.GetFileType() == Loader::FileType::NUP) {
++            std::string version;
++            if (report_loader.ReadDisplayVersion(version) == Loader::ResultStatus::Success &&
++                !version.empty()) {
++                session.game_version = QString::fromStdString(version);
++                updates.push_back(
++                    {QStringLiteral("Loaded NUP package"), session.game_version, true});
++            }
++        }
++        session.mods = CompatibilityReporting::SummarizeEnabledAddons(mods);
++        session.updates = CompatibilityReporting::SummarizeEnabledAddons(updates);
++        session.build = QStringLiteral("Lichii %1 (%2)")
++                            .arg(QString::fromUtf8(Common::g_build_version),
++                                 QString::fromUtf8(Common::g_scm_rev).left(12));
++#ifdef ARCHITECTURE_x86_64
++        session.cpu = QString::fromLatin1(Common::g_cpu_caps.cpu_string,
++                                          sizeof(Common::g_cpu_caps.cpu_string))
++                          .section(QChar{}, 0, 0)
++                          .trimmed();
++#endif
++        session.os = QSysInfo::prettyProductName();
++        const auto memory = Common::GetMemInfo().TotalPhysicalMemory;
++        if (memory != 0) {
++            session.ram =
++                QStringLiteral("%1 GiB").arg(double(memory) / (1024 * 1024 * 1024), 0, 'f', 1);
++        }
++        const auto& device_info = QtCommon::system->Renderer().GetDeviceInfo();
++        session.gpu = QString::fromStdString(device_info.model);
++        session.driver = QString::fromStdString(device_info.driver);
++        session.graphics_api = QString::fromStdString(device_info.api);
++        session.settings =
++            QStringLiteral("Launch settings: %1 mode; resolution scale %2x; "
++                           "GPU accuracy %3; asynchronous shaders %4.")
++                .arg(Settings::IsDockedMode() ? QStringLiteral("Docked")
++                                              : QStringLiteral("Handheld"))
++                .arg(Settings::values.resolution_info.up_factor)
++                .arg(Settings::values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High
++                         ? QStringLiteral("High")
++                         : QStringLiteral("Low"))
++                .arg(Settings::values.use_asynchronous_shaders.GetValue() ? QStringLiteral("on")
++                                                                          : QStringLiteral("off"));
++    }
++
+     QtCommon::system->SetShuttingDown(false);
+     game_list->setDisabled(true);
+ 
+@@ -2276,6 +2361,8 @@ void MainWindow::OnEmulationStopped() {
+ 
+     emulation_running = false;
+ 
++    game_list->SetReportableProgramId(report_session ? report_session->program_id : 0);
++
+     discord_rpc->Update();
+     Common::FeralGamemode::Stop();
+ 
+@@ -4549,6 +4636,11 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
+     if (!emulation_running || program_id == 0)
+         return;
+ 
++    if (report_session && report_session->program_id != program_id) {
++        report_session.reset();
++        game_list->SetReportableProgramId(0);
++    }
++
+     std::string title_name;
+     std::string title_version;
+ 
+diff --git a/src/yuzu/main_window.h b/src/yuzu/main_window.h
+index 9e98b97ef9..4d7a9fb1a2 100644
+--- a/src/yuzu/main_window.h
++++ b/src/yuzu/main_window.h
+@@ -27,6 +27,7 @@
+ #include "qt_common/config/qt_config.h"
+ #include "qt_common/qt_common.h"
+ #include "qt_common/util/game.h"
++#include "yuzu/compatibility_report.h"
+ #include "yuzu/hotkeys.h"
+ #include "yuzu/user_data_migration.h"
+ 
+@@ -552,6 +553,7 @@ private:
+ 
+     // Whether emulation is currently running in yuzu.
+     bool emulation_running = false;
++    std::optional<CompatibilityReporting::Session> report_session;
+     bool boot_in_progress = false;
+     bool close_pending = false;
+     // The path to the game currently running
+diff --git a/src/yuzu/nx2_switches.h b/src/yuzu/nx2_switches.h
+new file mode 100644
+index 0000000000..91b12ac9ad
+--- /dev/null
++++ b/src/yuzu/nx2_switches.h
+@@ -0,0 +1,112 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <map>
++#include <string>
++
++#include "common/fs/fs_paths.h"
++#include "common/fs/path_util.h"
++
++// The NX2 switches are read from the environment (EDEN_NX2_*), which a GUI launch has no way to
++// set. nx2_switches.txt holds "NAME=VALUE" lines, one per line, '#' comments. A variable already
++// in the real environment always wins, so a launcher script can still override one run; between
++// files the later one wins, so the copy next to the executable (shipped with the build) can be
++// overridden by %APPDATA%\eden\nx2_switches.txt without editing the one that gets replaced.
++static void ParseSwitchFile(const std::filesystem::path& path,
++                            std::map<std::string, std::string>& entries) {
++    std::ifstream file{path};
++    if (!file) {
++        return;
++    }
++    constexpr const char* blank = " \t\r";
++    std::string line;
++    while (std::getline(file, line)) {
++        line.erase(0, line.find_first_not_of(blank));
++        line.erase(line.find_last_not_of(blank) + 1);
++        if (line.empty() || line[0] == '#') {
++            continue;
++        }
++        const auto eq = line.find('=');
++        if (eq == std::string::npos) {
++            continue;
++        }
++        std::string name = line.substr(0, eq);
++        std::string value = line.substr(eq + 1);
++        name.erase(name.find_last_not_of(blank) + 1);
++        value.erase(0, value.find_first_not_of(blank));
++        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
++            value = value.substr(1, value.size() - 2);
++        }
++        if (!name.empty()) {
++            entries.insert_or_assign(std::move(name), std::move(value));
++        }
++    }
++}
++
++static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
++#ifdef _WIN32
++    return Common::FS::GetExeDirectory();
++#else
++    std::error_code ec;
++#ifdef __linux__
++    if (auto exe = std::filesystem::read_symlink("/proc/self/exe", ec); !ec) {
++        return exe.parent_path();
++    }
++#endif
++    const auto exe = std::filesystem::absolute(argv0, ec);
++    return ec ? std::filesystem::path{} : exe.parent_path();
++#endif
++}
++
++static void LoadNx2Switches(const char* argv0) {
++    // Later files overwrite earlier entries; the real environment is checked only at the end.
++    std::map<std::string, std::string> entries;
++    if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {
++        ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
++    }
++#ifdef __linux__
++    if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
++        std::error_code ec;
++        const std::filesystem::path path{appimage};
++        if (path.is_absolute()) {
++            const auto resolved = std::filesystem::canonical(path, ec);
++            if (!ec) {
++                ParseSwitchFile(resolved.parent_path() / "nx2_switches.txt", entries);
++            }
++        }
++    }
++#endif
++    std::erase_if(entries, [](const auto& entry) {
++        const auto& name = entry.first;
++        return !(name.starts_with("EDEN_NX2_") || name == "EDEN_DKB_FRAME_TRACE" ||
++                 name == "EDEN_DKB_INDIRECT_READBACK" || name == "EDEN_NATIVE_DRAW_CAPTURE" ||
++                 name == "EDEN_NATIVE_DRAW_DIAGNOSTICS" || name == "EDEN_NATIVE_FRAME_CAPTURE" ||
++                 name == "EDEN_NATIVE_SHADER_OVERRIDE_DIR" || name == "EDEN_PUNCH_HOLE" ||
++                 name == "EDEN_STARFOX_WINDOW_TRACE" || name == "EDEN_VI2_MAX_RESOLUTION_MODE" ||
++                 name == "EGLANTINE_EXPERIMENTAL_STATIC_VERTEX_REPACK" ||
++                 name == "EGLANTINE_TEST_VERTEX_REPACK");
++    });
++#ifdef _WIN32
++    const auto config_base = Common::FS::GetAppDataRoamingDirectory();
++#else
++    const auto config_base = Common::FS::GetDataDirectory("XDG_CONFIG_HOME");
++#endif
++    if (config_base.is_absolute()) {
++        ParseSwitchFile(config_base / EDEN_DIR / "nx2_switches.txt", entries);
++    }
++    for (const auto& [name, value] : entries) {
++        if (std::getenv(name.c_str()) != nullptr) {
++            continue;
++        }
++#ifdef _WIN32
++        _putenv_s(name.c_str(), value.c_str());
++#else
++        setenv(name.c_str(), value.c_str(), 1);
++#endif
++    }
++}
+diff --git a/tools/nx2/test_switches.py b/tools/nx2/test_switches.py
+new file mode 100644
+index 0000000000..ac99ca8513
+--- /dev/null
++++ b/tools/nx2/test_switches.py
+@@ -0,0 +1,122 @@
++#!/usr/bin/env python3
++# SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++# SPDX-License-Identifier: GPL-3.0-or-later
++
++import os
++import pathlib
++import subprocess
++import tempfile
++import unittest
++
++ROOT = pathlib.Path(__file__).resolve().parents[2]
++
++
++class SwitchDiscovery(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = pathlib.Path(self.tmp.name)
++        self.bin = self.root / "mount/usr/bin"
++        self.bin.mkdir(parents=True)
++        self.config = self.root / "config/eden"
++        self.config.mkdir(parents=True)
++        source = self.root / "probe.cpp"
++        source.write_text('''#include "yuzu/nx2_switches.h"
++#include <iostream>
++namespace Common::FS {
++std::filesystem::path GetDataDirectory(const std::string&) {
++    return std::getenv("XDG_CONFIG_HOME");
++}
++}
++int main(int argc, char** argv) {
++    LoadNx2Switches(argv[0]);
++    const char* value = std::getenv(argc > 1 ? argv[1] : "EDEN_NX2_PRELOAD_ALL_PIPELINES");
++    std::cout << (value ? value : "unset");
++}
++''')
++        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), "-o", str(self.bin / "lichii")], check=True)
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def run_probe(self, executable, name="EDEN_NX2_PRELOAD_ALL_PIPELINES", **env):
++        clean = os.environ.copy()
++        clean.pop("EDEN_NX2_PRELOAD_ALL_PIPELINES", None)
++        clean.pop(name, None)
++        clean.pop("APPIMAGE", None)
++        clean["XDG_CONFIG_HOME"] = str(self.config.parent)
++        clean.update(env)
++        return subprocess.check_output([str(executable), name], env=clean, cwd=self.root, text=True)
++
++    def test_untrusted_sidecars_cannot_set_host_environment(self):
++        outer = self.root / "app"
++        outer.mkdir()
++        image = outer / "Lichii.AppImage"
++        image.touch()
++        forbidden = ("LD_PRELOAD", "LD_LIBRARY_PATH", "LIBVULKAN_PATH", "QT_PLUGIN_PATH",
++                     "PATH", "HOME", "XDG_CONFIG_HOME", "YUZU_DO_STARTUP_CHECKS",
++                     "EDEN_STREAMLINE_DIR")
++        for folder in (self.bin, outer):
++            sidecar = folder / "nx2_switches.txt"
++            sidecar.write_text("".join(f"{name}=/untrusted\n" for name in forbidden))
++            for name in forbidden:
++                with self.subTest(folder=folder, name=name):
++                    expected = str(self.config.parent) if name == "XDG_CONFIG_HOME" else "unset"
++                    self.assertEqual(self.run_probe(self.bin / "lichii", name, APPIMAGE=str(image)), expected)
++            sidecar.unlink()
++
++    def test_diagnostics_and_explicit_user_environment(self):
++        supported = ("EDEN_NX2_PRELOAD_ALL_PIPELINES", "EDEN_DKB_FRAME_TRACE",
++                     "EDEN_DKB_INDIRECT_READBACK", "EDEN_NATIVE_DRAW_CAPTURE",
++                     "EDEN_NATIVE_DRAW_DIAGNOSTICS", "EDEN_NATIVE_FRAME_CAPTURE",
++                     "EDEN_NATIVE_SHADER_OVERRIDE_DIR", "EDEN_PUNCH_HOLE",
++                     "EDEN_STARFOX_WINDOW_TRACE", "EDEN_VI2_MAX_RESOLUTION_MODE",
++                     "EGLANTINE_EXPERIMENTAL_STATIC_VERTEX_REPACK", "EGLANTINE_TEST_VERTEX_REPACK")
++        (self.bin / "nx2_switches.txt").write_text("".join(f"{name}=1\n" for name in supported))
++        for name in supported:
++            with self.subTest(name=name):
++                self.assertEqual(self.run_probe(self.bin / "lichii", name), "1")
++                self.assertEqual(self.run_probe(self.bin / "lichii", name, **{name: "2"}), "2")
++        (self.config / "nx2_switches.txt").write_text("EDEN_STREAMLINE_DIR=/trusted\n")
++        self.assertEqual(self.run_probe(self.bin / "lichii", "EDEN_STREAMLINE_DIR"), "/trusted")
++
++    def test_invalid_config_base_does_not_search_cwd(self):
++        cwd_config = self.root / "eden"
++        cwd_config.mkdir()
++        (cwd_config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=99\n")
++        for base in ("", "."):
++            with self.subTest(base=base):
++                self.assertEqual(self.run_probe(self.bin / "lichii", XDG_CONFIG_HOME=base), "unset")
++
++    def test_elf_path_symlink_and_precedence(self):
++        (self.root / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=99\n")
++        self.assertEqual(self.run_probe(self.bin / "lichii"), "unset")
++        (self.bin / "nx2_switches.txt").write_text('EDEN_NX2_PRELOAD_ALL_PIPELINES="1"\n')
++        linkdir = self.root / "links"
++        linkdir.mkdir()
++        (linkdir / "lichii").symlink_to(self.bin / "lichii")
++        self.assertEqual(self.run_probe("lichii", PATH=str(linkdir)), "1")
++        (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
++        self.assertEqual(self.run_probe(linkdir / "lichii"), "2")
++        self.assertEqual(self.run_probe(linkdir / "lichii", EDEN_NX2_PRELOAD_ALL_PIPELINES="3"), "3")
++
++    def test_appimage_external_overrides_internal(self):
++        (self.bin / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=1\n")
++        outer = self.root / "app"
++        outer.mkdir()
++        image = outer / "Lichii.AppImage"
++        image.touch()
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "1")
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(outer / "missing.AppImage")), "1")
++        (outer / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "2")
++        link = self.root / "link.AppImage"
++        link.symlink_to(image)
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(link)), "2")
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE="app/Lichii.AppImage"), "1")
++        (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=3\n")
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "3")
++        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image), EDEN_NX2_PRELOAD_ALL_PIPELINES="4"), "4")
++
++
++if __name__ == "__main__":
++    unittest.main()
