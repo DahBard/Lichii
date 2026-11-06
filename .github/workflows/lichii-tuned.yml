@@ -43,7 +43,9 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
       CCACHE_COMPILERCHECK: content
-      TUNE_FLAGS: -march=x86-64-v3 -mtune=arrowlake
+      # -ffp-contract=off: no fused multiply-adds the source does not ask for, so float results
+      # match official (x86-64 baseline) builds.
+      TUNE_FLAGS: -march=x86-64-v3 -mtune=arrowlake -ffp-contract=off
     steps:
       - name: Check out source
         uses: actions/checkout@v5
