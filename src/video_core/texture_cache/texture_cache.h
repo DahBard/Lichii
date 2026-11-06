@@ -259,8 +259,16 @@ template <class P>
 void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     // On every GPU: past what a frame needs, more device memory only keeps the textures of earlier
     // scenes (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
-    // MaxCriticalMemory on rather than near the card's budget.
-    critical_memory = (std::min)(critical_memory, MaxCriticalMemory);
+    // MaxCriticalMemory on rather than near the card's budget. Cards with much more memory than
+    // that (16 GB) collect from 60% of their budget: evicted textures are decoded and uploaded
+    // again when a scene returns, which costs most over an external GPU's narrow link.
+    u64 critical_cap = MaxCriticalMemory;
+    if constexpr (HAS_DEVICE_MEMORY_INFO) {
+        if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
+            critical_cap = (std::max)(critical_cap, runtime.GetDeviceMemoryBudget() / 10 * 6);
+        }
+    }
+    critical_memory = (std::min)(critical_memory, critical_cap);
     expected_memory =
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
     minimum_memory =

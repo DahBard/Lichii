@@ -13,6 +13,17 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Intel WAITPKG waits: the GPU threads and idle emulated cores wait for each other with
    UMWAIT (the core idles until the other thread writes) instead of spinning on PAUSE, which
    leaves more of a laptop CPU's power budget to the busy cores.
+ * The texture cache keeps up to 60% of the VRAM budget (about 9 GB of a 16 GB card) before
+   it evicts, instead of 5 GB, so scenes you return to are not decoded and uploaded again.
+ * Ocarina of Time fixes from open Lichii pull requests: a setting to skip the game's
+   anti-aliasing network (#319; AMD GPUs run its tensor math in software), AMD drivers no
+   longer stall on those shaders (#300), white flashes at GPU accuracy Low (#337), fog white
+   haze (#292), leaf holes from split warps (#329), held draws build their pipeline at once
+   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259).
+ * Recommended speed settings, applied once on first start (change them freely afterwards):
+   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
+   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
+   settings; "Game" brings the game's network back).
 
 A/B launchers (this build with one change switched off or on; compare the same scene each time):
  ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
@@ -21,8 +32,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-4-strict-placement.bat    emulated CPU cores on P-cores too, pipeline builds on E-cores only
                               (LICHII_CPU_POLICY=strict)
  ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
- ab-6-big-texture-cache.bat   lets the texture cache keep up to 9 GiB of the 16 GB card before it
-                              evicts (default 5 GiB), so revisited areas re-upload less over OCuLink
+ ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
+ ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
+                              over OCuLink, but some flicker was reported
  perf-trace.bat               default settings plus per-second GPU thread zones and frame timing
                               in the log (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1)
 

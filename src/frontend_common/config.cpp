@@ -134,17 +134,35 @@ void Config::SetUpIni() {
     }
 
 #ifndef __ANDROID__
+    const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
+        WriteStringSetting(setting.GetLabel(), value);
+        WriteBooleanSetting(setting.GetLabel() + "\\default", false);
+    };
     if (new_global_config) {
         BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
-        const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
-            WriteStringSetting(setting.GetLabel(), value);
-            WriteBooleanSetting(setting.GetLabel() + "\\default", false);
-        };
         seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
         seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
         seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
         seed(Settings::values.async_presentation, ToString(true));
         seed(Settings::values.use_asynchronous_shaders, ToString(true));
+        EndGroup();
+    }
+    if (global) {
+        // lichii-tuned: the speed settings it recommends, applied once to an existing
+        // configuration as well. Whatever is changed afterwards is kept.
+        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
+        constexpr s64 TunedDefaultsVersion = 1;
+        if (ReadIntegerSetting(std::string("lichii_tuned_defaults"), 0) < TunedDefaultsVersion) {
+            seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
+            seed(Settings::values.use_asynchronous_shaders, ToString(true));
+            seed(Settings::values.use_reactive_flushing, ToString(false));
+            seed(Settings::values.async_presentation, ToString(true));
+            seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
+            seed(Settings::values.oot_anti_aliasing,
+                 ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
+            WriteIntegerSetting(std::string("lichii_tuned_defaults"), TunedDefaultsVersion);
+            LOG_INFO(Config, "lichii-tuned: applied the recommended speed settings");
+        }
         EndGroup();
     }
 #endif
