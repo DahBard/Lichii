@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -10,6 +11,8 @@
 #include <memory>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 #include "common/common_types.h"
 
@@ -175,6 +178,71 @@ public:
     /// of it was still queued.
     bool WaitForSync();
 
+    /// Work that may write guest memory at addresses the front does not track was just sent.
+    /// `source` names the sender for EDEN_NX2_MME_DMA_STATS.
+    void NoteMemoryBarrier(u32 source = 0) {
+        last_barrier_position = write_position;
+        last_barrier_source = source;
+    }
+    [[nodiscard]] u32 MemoryBarrierSource() const {
+        return last_barrier_source;
+    }
+    /// Where the last untracked memory write (or compute and copy work) was sent.
+    [[nodiscard]] u64 MemoryBarrierPosition() const {
+        return std::max(last_barrier_position, last_writer_position);
+    }
+    [[nodiscard]] u64 WriterPosition() const {
+        return last_writer_position;
+    }
+    [[nodiscard]] u64 Position() const {
+        return write_position;
+    }
+    /// How far the back has executed.
+    [[nodiscard]] u64 Consumed() {
+        consumed_cache = consumed.load(std::memory_order_acquire);
+        return consumed_cache;
+    }
+    /// Waits until the back executed everything sent before `target`.
+    void WaitForPosition(u64 target, DrainSite site) {
+        WaitFor(std::min(target, write_position), site);
+    }
+
+    /// Work just sent writes [begin, end) of the GPU address space `space` (a memory manager).
+    /// `opaque`: the front does not know the data written.
+    void NoteMemoryWrite(const void* space, u64 begin, u64 end, bool opaque = true) {
+        if (end <= begin) {
+            return;
+        }
+        if (((end - 1) >> WriteBlockShift) - (begin >> WriteBlockShift) >= MaxWriteBlocks) {
+            NoteMemoryBarrier(0x40001);
+            return;
+        }
+        if (write_blocks.size() >= 8192 && Consumed() >= latest_block_write) {
+            write_blocks.clear();
+            opaque_blocks.clear();
+        }
+        if (write_blocks.size() >= 65536) {
+            write_blocks.clear();
+            opaque_blocks.clear();
+            NoteMemoryBarrier(0x40000);
+        }
+        NoteBlocks(write_blocks, space, begin, end);
+        latest_block_write = write_position;
+        if (opaque) {
+            NoteBlocks(opaque_blocks, space, begin, end);
+            latest_opaque_write = write_position;
+        }
+    }
+    /// The position the back must reach before [begin, end) of `space` can be read: the last
+    /// untracked write, or the last queued write that overlaps it.
+    [[nodiscard]] u64 ReadReadyPosition(const void* space, u64 begin, u64 end) {
+        return ReadyPosition(write_blocks, latest_block_write, space, begin, end);
+    }
+    /// As ReadReadyPosition, for writes whose data the front does not know.
+    [[nodiscard]] u64 OpaqueReadyPosition(const void* space, u64 begin, u64 end) {
+        return ReadyPosition(opaque_blocks, latest_opaque_write, space, begin, end);
+    }
+
 private:
     friend struct GpuSplitTestAccess;
 
@@ -246,6 +314,42 @@ private:
     // Front side.
     u64 write_position{};
     u64 last_writer_position{};
+    u64 last_barrier_position{};
+    u32 last_barrier_source{};
+    // Queued tracked writes: the ring position after the last write to each 64-byte block.
+    static constexpr u64 WriteBlockShift = 6;
+    static constexpr u64 MaxWriteBlocks = 1024;
+    static u64 WriteBlockKey(const void* space, u64 block) {
+        // Aliasing only makes a read wait for an unrelated write.
+        return block ^ (static_cast<u64>(reinterpret_cast<uintptr_t>(space)) << 40);
+    }
+    std::unordered_map<u64, u64> write_blocks;
+    std::unordered_map<u64, u64> opaque_blocks;
+    u64 latest_block_write{};
+    u64 latest_opaque_write{};
+    void NoteBlocks(std::unordered_map<u64, u64>& blocks, const void* space, u64 begin, u64 end) {
+        for (u64 block = begin >> WriteBlockShift; block <= (end - 1) >> WriteBlockShift; ++block) {
+            blocks[WriteBlockKey(space, block)] = write_position;
+        }
+    }
+    u64 ReadyPosition(const std::unordered_map<u64, u64>& blocks, u64 latest, const void* space,
+                      u64 begin, u64 end) {
+        u64 target = MemoryBarrierPosition();
+        if (end <= begin || blocks.empty() || latest <= target) {
+            return target;
+        }
+        const u64 first = begin >> WriteBlockShift;
+        const u64 last = (end - 1) >> WriteBlockShift;
+        if (last - first >= MaxWriteBlocks) {
+            return std::max(target, latest);
+        }
+        for (u64 block = first; block <= last; ++block) {
+            if (const auto it = blocks.find(WriteBlockKey(space, block)); it != blocks.end()) {
+                target = std::max(target, it->second);
+            }
+        }
+        return target;
+    }
     u64 last_sync_position{};
     u64 published_local{};
     u64 consumed_cache{};

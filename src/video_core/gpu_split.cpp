@@ -141,6 +141,11 @@ void GpuSplit::Stop() {
     ring.reset();
     write_position = 0;
     last_writer_position = 0;
+    last_barrier_position = 0;
+    write_blocks.clear();
+    opaque_blocks.clear();
+    latest_block_write = 0;
+    latest_opaque_write = 0;
     last_sync_position = 0;
     published_local = 0;
     consumed_cache = 0;

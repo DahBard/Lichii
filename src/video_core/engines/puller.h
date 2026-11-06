@@ -7,9 +7,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <mutex>
 #include <chrono>
 #include <cstddef>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
@@ -149,6 +152,19 @@ private:
     [[nodiscard]] bool ExecuteMethodOnEngine(DmaPusher& dma_pusher, u32 method);
 
     std::optional<PendingAcquire> pending_acquire;
+    /// Semaphore releases this channel queued for the split's back: payload and ring position.
+    struct QueuedRelease {
+        u32 payload;
+        u64 position;
+    };
+    std::unordered_map<GPUVAddr, QueuedRelease> queued_releases;
+    void NoteRelease(GPUVAddr address, u32 payload);
+    /// Acquires at an address that queued GPU work met each time: how often in a row, or ~0U
+    /// once the back found one unmet after skipping its wait.
+    std::unordered_map<GPUVAddr, u32> gpu_met_acquires;
+    std::mutex unmet_mutex;
+    std::vector<GPUVAddr> unmet_acquires;
+    std::atomic<bool> has_unmet_acquires{false};
 
     /// Mapping of command subchannels to their bound engine ids
     std::array<EngineID, 8> bound_engines{};

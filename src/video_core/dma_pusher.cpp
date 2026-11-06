@@ -44,6 +44,35 @@ bool DmaPusher::IsMemoryWriter(const Engines::EngineInterface& engine, Engines::
     }
     return false;
 }
+namespace {
+// Host methods that can write guest memory without noting it themselves.
+bool PullerMethodWritesMemory(u32 method) {
+    switch (static_cast<BufferMethods>(method)) {
+    case BufferMethods::BindObject:
+    case BufferMethods::Nop:
+    case BufferMethods::SemaphoreAddressHigh:
+    case BufferMethods::SemaphoreAddressLow:
+    case BufferMethods::SemaphoreSequencePayload:
+    case BufferMethods::SemaphoreOperation: // Releases note their own writes (Puller)
+    case BufferMethods::SemaphoreRelease:
+    case BufferMethods::NonStallInterrupt:
+    case BufferMethods::WrcacheFlush:
+    case BufferMethods::MemOpA:
+    case BufferMethods::MemOpB:
+    case BufferMethods::MemOpC:
+    case BufferMethods::MemOpD:
+    case BufferMethods::RefCnt:
+    case BufferMethods::SemaphoreAcquire: // Ampere: SEM_PAYLOAD_HI, like 0x17..0x19
+    case BufferMethods::SyncpointPayload:
+    case BufferMethods::SyncpointOperation:
+    case BufferMethods::WaitForIdle:
+    case BufferMethods::Yield:
+        return false;
+    default:
+        return !(method >= 0x17 && method <= 0x19);
+    }
+}
+} // namespace
 
 DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
     : system{system_}
@@ -198,10 +227,16 @@ bool DmaPusher::Step() {
         // (the split only starts with unsafe reads; the settings can change mid-game).
         const bool use_safe = !VideoCommon::GpuSplit::Get().Active() &&
                               (Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe());
-        if (!gpu_written && VideoCommon::GpuSplit::Get().Active() &&
-            VideoCommon::GpuSplit::Get().WaitForWriters()) {
-            gpu_written =
-                IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
+        if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
+            const size_t bytes = size_t{header.size} * sizeof(u32);
+            if (!CpuListPages(dma_state.dma_get, bytes, false)) {
+                if (VideoCommon::GpuSplit::Get().WaitForWriters()) {
+                    gpu_written = IsGpuWrittenCommands(dma_state.dma_get, bytes);
+                }
+                if (!gpu_written) {
+                    CpuListPages(dma_state.dma_get, bytes, true);
+                }
+            }
         }
         // Resume and GPU-written entries need live words, even after a flush cleared dirty state.
         const bool submitted = (command_list.snapshot_suspensions & 1) == 0 &&
@@ -464,6 +499,9 @@ void DmaPusher::CallMethod(u32 argument) {
             dma_state.subchannel,
             dma_state.method_count,
         });
+        if (PullerMethodWritesMemory(dma_state.method)) {
+            split.NoteMemoryBarrier(0x10000 | dma_state.method);
+        }
     } else {
         auto subchannel = subchannels[dma_state.subchannel];
         if (subchannel == nullptr) {
@@ -473,9 +511,16 @@ void DmaPusher::CallMethod(u32 argument) {
         const auto engine_type = subchannel_type[dma_state.subchannel];
         const bool writer = split.Active() &&
                             IsMemoryWriter(*subchannel, engine_type, dma_state.method);
+        // Other engines' memory writes are not tracked by address (Maxwell3D::FrontDmaRead).
+        const bool untracked_writes = engine_type != Engines::EngineTypes::Maxwell3D &&
+                                      engine_type != Engines::EngineTypes::KeplerCompute &&
+                                      engine_type != Engines::EngineTypes::MaxwellDMA;
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
+            } else if (untracked_writes) {
+                split.NoteMemoryBarrier(0x20000 | (static_cast<u32>(engine_type) << 12) |
+                                        (dma_state.method & 0xfff));
             }
         };
         if (split.Active()) {
@@ -522,6 +567,12 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
     auto& split = VideoCommon::GpuSplit::Get();
     if (dma_state.method < non_puller_methods) {
         puller.CallMultiMethod(*this, dma_state.method, dma_state.subchannel, base_start, num_methods, dma_state.method_count);
+        for (u32 i = 0; i < num_methods; ++i) {
+            if (PullerMethodWritesMemory(dma_state.method + (dma_state.non_incrementing ? 0 : i))) {
+                split.NoteMemoryBarrier(0x10000 | dma_state.method);
+                break;
+            }
+        }
     } else {
         auto subchannel = subchannels[dma_state.subchannel];
         if (subchannel == nullptr) {
@@ -531,9 +582,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         const auto engine_type = subchannel_type[dma_state.subchannel];
         const bool writer = split.Active() &&
                             IsMemoryWriter(*subchannel, engine_type, dma_state.method);
+        // Other engines' memory writes are not tracked by address (Maxwell3D::FrontDmaRead).
+        const bool untracked_writes = engine_type != Engines::EngineTypes::Maxwell3D &&
+                                      engine_type != Engines::EngineTypes::KeplerCompute &&
+                                      engine_type != Engines::EngineTypes::MaxwellDMA;
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
+            } else if (untracked_writes) {
+                split.NoteMemoryBarrier(0x20000 | (static_cast<u32>(engine_type) << 12) |
+                                        (dma_state.method & 0xfff));
             }
         };
         if (split.Active()) {
@@ -595,6 +653,35 @@ void DmaPusher::RefreshDeferredEntries(CommandList& list) {
                                        entry.size * sizeof(u32));
     }
     list.deferred_entries.clear();
+}
+
+bool DmaPusher::CpuListPages(GPUVAddr address, size_t size, bool mark) {
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || size == 0) {
+        return false;
+    }
+    if (const u64 misses = Tegra::g_nx2_cpu_list_misses.load(std::memory_order_relaxed);
+        misses != reported_cpu_list_misses) {
+        reported_cpu_list_misses = misses;
+        LOG_WARNING(HW_GPU, "GPU wrote {} command list pages first fetched as CPU-written", misses);
+    }
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < address + size; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        if (!device) {
+            return false;
+        }
+        const u64 index = *device >> Tegra::Nx2WrittenPageBits;
+        if (index >= Tegra::g_nx2_cpu_list_pages.size() * 64) {
+            return false;
+        }
+        auto& word = Tegra::g_nx2_cpu_list_pages[index / 64];
+        const u64 bit = u64{1} << (index % 64);
+        if (mark) {
+            word.fetch_or(bit, std::memory_order_relaxed);
+        } else if ((word.load(std::memory_order_relaxed) & bit) == 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool DmaPusher::IsGpuWrittenCommands(GPUVAddr address, size_t size) {
