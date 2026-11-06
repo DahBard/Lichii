@@ -242,6 +242,8 @@ public:
     [[nodiscard]] u64 OpaqueReadyPosition(const void* space, u64 begin, u64 end) {
         return ReadyPosition(opaque_blocks, latest_opaque_write, space, begin, end);
     }
+    /// The position after the last queued tracked write to [begin, end), untracked writes aside.
+    [[nodiscard]] u64 TrackedWritePosition(const void* space, u64 begin, u64 end);
 
 private:
     friend struct GpuSplitTestAccess;
@@ -319,36 +321,25 @@ private:
     // Queued tracked writes: the ring position after the last write to each 64-byte block.
     static constexpr u64 WriteBlockShift = 6;
     static constexpr u64 MaxWriteBlocks = 1024;
-    static u64 WriteBlockKey(const void* space, u64 block) {
-        // Aliasing only makes a read wait for an unrelated write.
-        return block ^ (static_cast<u64>(reinterpret_cast<uintptr_t>(space)) << 40);
-    }
     std::unordered_map<u64, u64> write_blocks;
     std::unordered_map<u64, u64> opaque_blocks;
     u64 latest_block_write{};
     u64 latest_opaque_write{};
-    void NoteBlocks(std::unordered_map<u64, u64>& blocks, const void* space, u64 begin, u64 end) {
-        for (u64 block = begin >> WriteBlockShift; block <= (end - 1) >> WriteBlockShift; ++block) {
-            blocks[WriteBlockKey(space, block)] = write_position;
-        }
-    }
+    // Keyed by the backing memory (`space` is a Tegra::MemoryManager), so writes and reads
+    // through different GPU addresses of the same memory meet.
+    void NoteBlocks(std::unordered_map<u64, u64>& blocks, const void* space, u64 begin, u64 end);
+    u64 BlocksPosition(const std::unordered_map<u64, u64>& blocks, const void* space, u64 begin,
+                       u64 end) const;
     u64 ReadyPosition(const std::unordered_map<u64, u64>& blocks, u64 latest, const void* space,
                       u64 begin, u64 end) {
         u64 target = MemoryBarrierPosition();
         if (end <= begin || blocks.empty() || latest <= target) {
             return target;
         }
-        const u64 first = begin >> WriteBlockShift;
-        const u64 last = (end - 1) >> WriteBlockShift;
-        if (last - first >= MaxWriteBlocks) {
+        if (((end - 1) >> WriteBlockShift) - (begin >> WriteBlockShift) >= MaxWriteBlocks) {
             return std::max(target, latest);
         }
-        for (u64 block = first; block <= last; ++block) {
-            if (const auto it = blocks.find(WriteBlockKey(space, block)); it != blocks.end()) {
-                target = std::max(target, it->second);
-            }
-        }
-        return target;
+        return std::max(target, BlocksPosition(blocks, space, begin, end));
     }
     u64 last_sync_position{};
     u64 published_local{};
