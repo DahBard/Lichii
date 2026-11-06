@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include "common/assert.h"
 #include "common/bit_util.h"
 #include "common/scope_exit.h"
@@ -1046,6 +1047,8 @@ struct Maxwell3D::FrontState {
     bool upload_tracked{};
     GPUVAddr upload_begin{};
     GPUVAddr upload_end{};
+    /// Pages that report_semaphore writes went to.
+    std::unordered_set<GPUVAddr> report_pages;
 };
 
 namespace {
@@ -1267,6 +1270,10 @@ void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u3
         const GPUVAddr begin = address(MAXWELL3D_REG_INDEX(report_semaphore.address_high),
                                        MAXWELL3D_REG_INDEX(report_semaphore.address_low));
         note(begin, begin + 16);
+        if (fs.report_pages.size() < 4096) {
+            fs.report_pages.insert(begin >> 12);
+            fs.report_pages.insert((begin + 15) >> 12);
+        }
     }
 }
 
@@ -1529,6 +1536,26 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         split.Run(
             [memory = &memory_manager, source, read_bytes] {
                 memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+            },
+            VideoCommon::DrainSite::MacroDmaFlush);
+    }
+    // A read of a page reports were sent to writes out the reports the query cache still holds,
+    // waiting for their host results (Lichii #215), or the guest reads stale occlusion counts.
+    const bool reads_reports = [&] {
+        if (!shadow_words.empty() || words == 0) {
+            return false;
+        }
+        for (GPUVAddr page = source >> 12; page <= (source + read_bytes - 1) >> 12; ++page) {
+            if (fs.report_pages.contains(page)) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    if (reads_reports) {
+        split.Run(
+            [this, source, read_bytes] {
+                VideoCommon::QueryDma::FlushPending(memory_manager, *rasterizer, source, read_bytes);
             },
             VideoCommon::DrainSite::MacroDmaFlush);
     }
