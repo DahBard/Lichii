@@ -23,6 +23,11 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    no violet halos from shader exports AMD leaves undefined (#353), no green tint growing from
    shadow lookups through wrong texture handles (#354), batched texture evictions (#376),
    precise macro reads and cheaper semaphore waits on the split GPU thread (#345).
+ * Shaders stay compiled: up to 4096 built pipelines are kept however long they go unused
+   (official builds destroy one unused for 9000 frames, so a few minutes on the title screen
+   threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
+   every cached pipeline is compiled at boot, not just the ones the last sessions used.
+   Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -50,6 +55,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
                               even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
                               GPU does not idle between frames; logs like perf-trace.bat
+ ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
+                              pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1)

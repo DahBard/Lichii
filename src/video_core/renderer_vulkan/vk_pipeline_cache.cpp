@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -739,6 +740,23 @@ bool PreloadAllPipelines() {
     }();
     return all;
 }
+
+// Built graphics pipelines kept however long they go unused, and cached pipelines built at boot
+// whether or not the last sessions used them (LICHII_KEEP_PIPELINES=<n>; 0 restores upstream:
+// boot builds only the used list, and a pipeline unused for EvictAfterFrames is destroyed). On
+// AMD's driver a destroyed pipeline took ~6 ms to build again, and a draw that needs it waits:
+// Ocarina of Time evicted 1,076 of its 1,236 pipelines during three minutes on the title screen,
+// then held the first gameplay frames 2.3 s to rebuild them. ~0.45 MB of driver memory each.
+size_t KeptPipelines() {
+    static const size_t kept = [] {
+        const char* value = std::getenv("LICHII_KEEP_PIPELINES");
+        const size_t count = value != nullptr ? std::strtoull(value, nullptr, 10) : 4096;
+        LOG_INFO(Render_Vulkan, "Pipelines: up to {} kept built and built at boot "
+                                "(LICHII_KEEP_PIPELINES)", count);
+        return count;
+    }();
+    return kept;
+}
 } // Anonymous namespace
 
 PipelineCache::~PipelineCache() {
@@ -960,9 +978,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         if (!disk_pipelines.insert(hash).second) {
             return;
         }
-        if (!PreloadAllPipelines() &&
-            (used_pipelines.empty() ? queued_graphics >= MaxPipelinesWithoutUsedList
-                                    : !used_pipelines.contains(hash))) {
+        // Pipelines the last sessions used are built at boot; with LICHII_KEEP_PIPELINES, the
+        // others too while fewer than that many are queued.
+        const bool used = used_pipelines.empty() ? queued_graphics < MaxPipelinesWithoutUsedList
+                                                 : used_pipelines.contains(hash);
+        if (!PreloadAllPipelines() && !used && queued_graphics >= KeptPipelines()) {
             ++skipped_pipelines;
             size_t capture_bytes = (envs.capacity() - envs.size()) * sizeof(FileEnvironment);
             for (const auto& env : envs) {
@@ -1178,7 +1198,7 @@ void PipelineCache::EvictUnusedPipelines() {
     // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
     // this long is destroyed; it takes 2-3 ms to build again from the driver's pipeline cache.
     constexpr u64 EvictAfterFrames = 9000;
-    if (frame_count <= EvictAfterFrames) {
+    if (frame_count <= EvictAfterFrames || graphics_cache.size() <= KeptPipelines()) {
         return;
     }
     const u64 cutoff = frame_count - EvictAfterFrames;
