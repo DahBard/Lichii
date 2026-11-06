@@ -71,10 +71,10 @@ index 0502b3f38e..48e0ad1f2c 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..0cf7549749
+index 0000000000..be90874934
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,73 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -100,6 +100,11 @@ index 0000000000..0cf7549749
 +   no violet halos from shader exports AMD leaves undefined (#353), no green tint growing from
 +   shadow lookups through wrong texture handles (#354), batched texture evictions (#376),
 +   precise macro reads and cheaper semaphore waits on the split GPU thread (#345).
++ * Shaders stay compiled: up to 4096 built pipelines are kept however long they go unused
++   (official builds destroy one unused for 9000 frames, so a few minutes on the title screen
++   threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
++   every cached pipeline is compiled at boot, not just the ones the last sessions used.
++   Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -127,6 +132,8 @@ index 0000000000..0cf7549749
 + ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
 +                              even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
 +                              GPU does not idle between frames; logs like perf-trace.bat
++ ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
++                              pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
 + perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
 +                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
 +                              EDEN_DKB_FRAME_TRACE=1)
@@ -162,6 +169,17 @@ index 0000000000..66de3f8751
 +rem is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow GPU never idles between frames. Also logs
 +rem GPU timing like perf-trace.bat, for comparison.
 +set EDEN_NX2_FRAMES_AHEAD=2&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-11-official-shader-cache.bat b/dist/lichii-tuned/ab-11-official-shader-cache.bat
+new file mode 100644
+index 0000000000..57171701d1
+--- /dev/null
++++ b/dist/lichii-tuned/ab-11-official-shader-cache.bat
+@@ -0,0 +1,5 @@
++@echo off
++rem Official shader handling: boot compiles only the pipelines the last sessions used, and a
++rem pipeline unused for 9000 frames is destroyed (LICHII_KEEP_PIPELINES=0).
++set LICHII_KEEP_PIPELINES=0
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
 new file mode 100644
@@ -5196,11 +5214,56 @@ index 3ffc6246bd..4dbd14cc4e 100644
      LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
      LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
      if (VideoCommon::RenderTrace::Enabled()) {
+diff --git a/src/video_core/renderer_vulkan/vk_buffer_cache.cpp b/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
+index 8cd9bf700b..16673a4300 100644
+--- a/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
+@@ -490,14 +490,14 @@ void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
+     master.Wait(tick);
+ }
+ 
+-void BufferCacheRuntime::Finish() {
+-    scheduler.Finish();
++void BufferCacheRuntime::Finish(std::source_location location) {
++    scheduler.Finish({}, {}, location);
+ }
+ 
+-void BufferCacheRuntime::FinishForHostRead() {
+-    scheduler.RequestOutsideRenderPassOperationContext();
++void BufferCacheRuntime::FinishForHostRead(std::source_location location) {
++    scheduler.RequestOutsideRenderPassOperationContext(location);
+     scheduler.Record(HostReadBarrier);
+-    scheduler.Finish();
++    scheduler.Finish({}, {}, location);
+ }
+ 
+ bool BufferCacheRuntime::CanReorderUpload(const Buffer& buffer,
 diff --git a/src/video_core/renderer_vulkan/vk_buffer_cache.h b/src/video_core/renderer_vulkan/vk_buffer_cache.h
-index f7bc117c35..024c9c65ca 100644
+index f7bc117c35..6ad688e3c7 100644
 --- a/src/video_core/renderer_vulkan/vk_buffer_cache.h
 +++ b/src/video_core/renderer_vulkan/vk_buffer_cache.h
-@@ -283,6 +283,10 @@ public:
+@@ -6,6 +6,8 @@
+ 
+ #pragma once
+ 
++#include <source_location>
++
+ #include <limits>
+ 
+ #include <boost/container/small_vector.hpp>
+@@ -130,9 +132,9 @@ public:
+     /// Waits for a submitted tick without flushing: safe on threads other than the GPU thread.
+     void WaitSubmittedTick(u64 tick);
+ 
+-    void Finish();
++    void Finish(std::source_location location = std::source_location::current());
+ 
+-    void FinishForHostRead();
++    void FinishForHostRead(std::source_location location = std::source_location::current());
+ 
+     u64 GetDeviceLocalMemory() const;
+ 
+@@ -283,6 +285,10 @@ public:
          return max_dynamic_storage_buffers;
      }
  
@@ -5559,10 +5622,18 @@ index 6e02abfa38..b09e4341c4 100644
  
      vk::DescriptorSetLayout descriptor_set_layout;
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
-index 095bd4c1e6..17bf880cf6 100644
+index 095bd4c1e6..264c79b977 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
-@@ -457,6 +457,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+@@ -8,6 +8,7 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstddef>
++#include <cstdlib>
+ #include <fstream>
+ #include <functional>
+ #include <iostream>
+@@ -457,6 +458,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                                                       : GetTotalPipelineWorkers()},
        emission_budget{num_pipeline_workers},
        workers(num_pipeline_workers, "VkPipelineBuilder", {}, Common::ThreadPlacement::Background),
@@ -5570,7 +5641,7 @@ index 095bd4c1e6..17bf880cf6 100644
        serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background),
        background_pipelines{64, 16 * 1024 * 1024, device.HasBrokenParallelShaderCompiling()} {
      const auto& float_control{device.FloatControlProperties()};
-@@ -599,9 +600,22 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+@@ -599,9 +601,22 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
          .support_conditional_barrier = device.SupportsConditionalBarriers(),
          .single_lane_geometry_subgroups = !profile.SupportsSubgroupStage(Shader::Stage::Geometry),
          .support_byte_addressed_r16 = true,
@@ -5593,7 +5664,55 @@ index 095bd4c1e6..17bf880cf6 100644
      if (device.GetMaxVertexInputAttributes() < Maxwell::NumVertexAttributes) {
          LOG_WARNING(Render_Vulkan, "maxVertexInputAttributes is too low: {} < {}",
                      device.GetMaxVertexInputAttributes(), Maxwell::NumVertexAttributes);
-@@ -1638,11 +1652,15 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+@@ -725,6 +740,23 @@ bool PreloadAllPipelines() {
+     }();
+     return all;
+ }
++
++// Built graphics pipelines kept however long they go unused, and cached pipelines built at boot
++// whether or not the last sessions used them (LICHII_KEEP_PIPELINES=<n>; 0 restores upstream:
++// boot builds only the used list, and a pipeline unused for EvictAfterFrames is destroyed). On
++// AMD's driver a destroyed pipeline took ~6 ms to build again, and a draw that needs it waits:
++// Ocarina of Time evicted 1,076 of its 1,236 pipelines during three minutes on the title screen,
++// then held the first gameplay frames 2.3 s to rebuild them. ~0.45 MB of driver memory each.
++size_t KeptPipelines() {
++    static const size_t kept = [] {
++        const char* value = std::getenv("LICHII_KEEP_PIPELINES");
++        const size_t count = value != nullptr ? std::strtoull(value, nullptr, 10) : 4096;
++        LOG_INFO(Render_Vulkan, "Pipelines: up to {} kept built and built at boot "
++                                "(LICHII_KEEP_PIPELINES)", count);
++        return count;
++    }();
++    return kept;
++}
+ } // Anonymous namespace
+ 
+ PipelineCache::~PipelineCache() {
+@@ -946,9 +978,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+         if (!disk_pipelines.insert(hash).second) {
+             return;
+         }
+-        if (!PreloadAllPipelines() &&
+-            (used_pipelines.empty() ? queued_graphics >= MaxPipelinesWithoutUsedList
+-                                    : !used_pipelines.contains(hash))) {
++        // Pipelines the last sessions used are built at boot; with LICHII_KEEP_PIPELINES, the
++        // others too while fewer than that many are queued.
++        const bool used = used_pipelines.empty() ? queued_graphics < MaxPipelinesWithoutUsedList
++                                                 : used_pipelines.contains(hash);
++        if (!PreloadAllPipelines() && !used && queued_graphics >= KeptPipelines()) {
+             ++skipped_pipelines;
+             size_t capture_bytes = (envs.capacity() - envs.size()) * sizeof(FileEnvironment);
+             for (const auto& env : envs) {
+@@ -1164,7 +1198,7 @@ void PipelineCache::EvictUnusedPipelines() {
+     // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
+     // this long is destroyed; it takes 2-3 ms to build again from the driver's pipeline cache.
+     constexpr u64 EvictAfterFrames = 9000;
+-    if (frame_count <= EvictAfterFrames) {
++    if (frame_count <= EvictAfterFrames || graphics_cache.size() <= KeptPipelines()) {
+         return;
+     }
+     const u64 cutoff = frame_count - EvictAfterFrames;
+@@ -1638,11 +1672,15 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
          const auto name{fmt::format("Shader {:016x}", key.unique_hash)};
          spv_module.SetObjectNameEXT(name.c_str());
      }
@@ -5861,10 +5980,78 @@ index c33b0ed3b3..ac338326f3 100644
      struct IndirectTrace {
          vk::Buffer readback;
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-index 19bbcd9680..69396b4fcf 100644
+index 19bbcd9680..424f505ea2 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-@@ -501,7 +501,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
+@@ -14,6 +14,7 @@
+ #include <map>
+ #include <mutex>
+ #include <thread>
++#include <tuple>
+ #include <utility>
+ 
+ #include <fmt/format.h>
+@@ -45,6 +46,23 @@ std::atomic<u64> g_profile_finish_ns{};
+ std::atomic<u64> g_profile_window_start{};
+ std::mutex g_profile_end_mutex;
+ std::map<std::string, u64> g_profile_ends;
++/// Finish (a full GPU wait) by call site: count and nanoseconds waited.
++std::map<std::string, std::pair<u64, u64>> g_profile_finish_sites;
++
++std::string SiteName(const char* file, u32 line) {
++    std::string_view name{file};
++    if (const auto slash = name.find_last_of("/\\"); slash != std::string_view::npos) {
++        name.remove_prefix(slash + 1);
++    }
++    return fmt::format("{}:{}", name, line);
++}
++
++void CountFinish(const char* file, u32 line, u64 ns) {
++    std::scoped_lock lock{g_profile_end_mutex};
++    auto& [count, total] = g_profile_finish_sites[SiteName(file, line)];
++    ++count;
++    total += ns;
++}
+ 
+ void CountRenderPassEnd(const char* file, u32 line) {
+     if (!VideoCommon::Nx2Profile::Enabled()) {
+@@ -90,6 +108,22 @@ void ReportSubmitCounts() {
+         LOG_INFO(Render_Vulkan, "Render pass ends {:.0f}/s at {}",
+                  static_cast<double>(ends[i].first) / seconds, ends[i].second);
+     }
++    // Where the full GPU waits come from (the caches pass their callers' location).
++    std::vector<std::tuple<u64, u64, std::string>> finishes;
++    {
++        std::scoped_lock lock{g_profile_end_mutex};
++        for (const auto& [site, entry] : g_profile_finish_sites) {
++            finishes.emplace_back(entry.second, entry.first, site);
++        }
++        g_profile_finish_sites.clear();
++    }
++    std::sort(finishes.rbegin(), finishes.rend());
++    for (size_t i = 0; i < finishes.size() && i < 8; ++i) {
++        const auto& [ns, count, site] = finishes[i];
++        LOG_INFO(Render_Vulkan, "Finish sites: {:.1f}/s waiting {:.1f} ms/s at {}",
++                 static_cast<double>(count) / seconds, static_cast<double>(ns) / 1e6 / seconds,
++                 site);
++    }
+ }
+ }
+ 
+@@ -254,9 +288,10 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
+     last_flush = std::chrono::steady_clock::now();
+     flush_pending = false;
+     if (profile) {
++        const u64 waited = VideoCommon::Nx2Profile::Now() - start;
+         g_profile_finishes.fetch_add(1, std::memory_order_relaxed);
+-        g_profile_finish_ns.fetch_add(VideoCommon::Nx2Profile::Now() - start,
+-                                      std::memory_order_relaxed);
++        g_profile_finish_ns.fetch_add(waited, std::memory_order_relaxed);
++        CountFinish(location.file_name(), location.line(), waited);
+     }
+ }
+ 
+@@ -501,7 +536,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
      Common::SetCurrentThreadName("VulkanWorker");
      const Common::DkbCpuTrace::Registration trace_thread{Common::DkbCpuTrace::Role::VulkanWorker};
      Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
@@ -5873,6 +6060,43 @@ index 19bbcd9680..69396b4fcf 100644
  
      const auto TryPopQueue{[this](auto& work) -> bool {
          if (work_queue.empty()) {
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+index 65f84789f4..c148a2ab3e 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -1260,8 +1260,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
+     }
+ }
+ 
+-void TextureCacheRuntime::Finish() {
+-    scheduler.Finish();
++void TextureCacheRuntime::Finish(std::source_location location) {
++    scheduler.Finish({}, {}, location);
+ }
+ 
+ StagingBufferRef TextureCacheRuntime::UploadStagingBuffer(size_t size, bool deferred) {
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
+index 49dd837a42..f997f735e8 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -6,6 +6,8 @@
+ 
+ #pragma once
+ 
++#include <source_location>
++
+ #include <chrono>
+ #include <deque>
+ #include <memory>
+@@ -85,7 +87,7 @@ public:
+                                  DescriptorPool& descriptor_pool,
+                                  ComputePassDescriptorQueue& compute_pass_descriptor_queue);
+ 
+-    void Finish();
++    void Finish(std::source_location location = std::source_location::current());
+ 
+     StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
+ 
 diff --git a/src/video_core/shader_cache.cpp b/src/video_core/shader_cache.cpp
 index 96938b9e0f..610fad4a77 100644
 --- a/src/video_core/shader_cache.cpp
