@@ -21,10 +21,11 @@ using SetCpuSetsFn = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
 
 // LICHII_CPU_POLICY:
 //  off    - Windows places every thread.
-//  soft   - keep off a low-power island (Meteor/Arrow Lake-H SoC-tile E-cores) and run pipeline
-//           builds on E-cores.
+//  soft   - keep every thread off a low-power island (Meteor/Arrow Lake-H SoC-tile E-cores).
 //  auto   - soft, plus the GPU command threads on P-cores and core timing on E-cores (default).
-//  strict - auto, plus the guest CPU cores on P-cores.
+//           Pipeline builds keep every other core: they run at low priority, and a draw can be
+//           waiting for one.
+//  strict - auto, plus the guest CPU cores on P-cores and pipeline builds on E-cores.
 enum class Policy { Off, Soft, Auto, Strict };
 
 Policy ReadPolicy() {
@@ -193,7 +194,7 @@ const std::vector<ULONG>* RoleCpus(const Topology& topology, CoreRole role) {
     case CoreRole::Waiting:
         return placed ? &topology.efficient : &topology.shared;
     case CoreRole::Background:
-        return &topology.efficient;
+        return strict ? &topology.efficient : &topology.shared;
     }
     return nullptr;
 }

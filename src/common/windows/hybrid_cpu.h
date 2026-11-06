@@ -10,7 +10,7 @@ enum class CoreRole {
     Fastest,     ///< Threads that bound the frame time (GPU command threads): P-cores.
     Performance, ///< Busy, latency-sensitive threads (guest cores): P- and E-cores.
     Waiting,     ///< Threads that wait without sleeping (core timing): E-cores.
-    Background,  ///< Throughput work (pipeline builds): E-cores.
+    Background,  ///< Low-priority throughput work (pipeline builds): any core but the island.
 };
 
 /// Restricts the calling thread to the CPU sets of its role. Does nothing on CPUs with a single
