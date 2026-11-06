@@ -2,7 +2,7 @@ name: lichii-tuned
 
 # Windows builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H) CPU and an
 # AMD RDNA4 (RX 9070 XT) GPU. Every push to the `tuned` branch that touches the patch or this
-# workflow builds both variants; the source is this branch plus lichii-tuned/lichii-tuned.patch.
+# workflow builds every variant; the source is this branch plus lichii-tuned/lichii-tuned.patch.
 on:
   push:
     branches: [tuned]
@@ -14,17 +14,16 @@ on:
 permissions:
   contents: read
 
-# A newer push queues behind the running build instead of cancelling it, so the compiler cache
-# from the running build is always saved for the next one.
-concurrency:
-  group: lichii-tuned-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
     name: windows ${{ matrix.variant }}
     runs-on: windows-2022
     timeout-minutes: 330
+    # A newer push queues each variant behind the same variant of the running build instead of
+    # cancelling it (so its compiler cache is saved for the next one), and not behind the others.
+    concurrency:
+      group: lichii-tuned-${{ github.ref }}-${{ matrix.variant }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -32,17 +31,25 @@ jobs:
           # MinGW clang + the repo's PGO profile + x86-64-v3 (AVX2/BMI2/FMA) tuned for Arrow Lake.
           - variant: pgo
             lto: "OFF"
-          # Same plus ThinLTO across the whole program (experimental).
+          # Same plus ThinLTO across the whole program.
           - variant: pgo-lto
             lto: "ON"
-          # Instrumented build that records an Ocarina profile while you play (slower).
-          - variant: pgo-train
+          # The same source built like the official MSVC download (MSVC, no PGO, baseline x86-64),
+          # to tell compiler differences from source changes.
+          - variant: msvc
             lto: "OFF"
-            train: true
+            msvc: true
+          # Instrumented build that records an Ocarina profile while you play (slower). Off until
+          # a profile is wanted: the r7 pgo-train download records one for this code too.
+          # - variant: pgo-train
+          #   lto: "OFF"
+          #   train: true
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
       CCACHE_COMPILERCHECK: content
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: 3G
       # -ffp-contract=off: no fused multiply-adds the source does not ask for, so float results
       # match official (x86-64 baseline) builds.
       TUNE_FLAGS: -march=x86-64-v3 -mtune=arrowlake -ffp-contract=off
@@ -66,6 +73,7 @@ jobs:
           printf '%s' "tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }}" > GIT-REFSPEC
 
       - name: Set up MSYS2
+        if: ${{ !matrix.msvc }}
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -81,14 +89,45 @@ jobs:
             libusb:p unordered_dense:p jbigkit:p xz:p libdeflate:p bzip2:p
             lerc:p graphite2:p libwebp:p libtiff:p brotli:p ccache:p
 
+      # MSVC toolchain, Qt, sccache and the Vulkan SDK exactly as the official MSVC build.
+      - name: Set up MSVC
+        if: matrix.msvc
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt for MSVC
+        if: matrix.msvc
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install sccache
+        if: matrix.msvc
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'sccache.zip'
+          Invoke-WebRequest -OutFile $zip https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'sccache')
+          $bin = (Get-ChildItem -Recurse -Filter sccache.exe (Join-Path $env:RUNNER_TEMP 'sccache')).DirectoryName
+          $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Install the Vulkan SDK
+        if: matrix.msvc
+        shell: pwsh
+        run: ./tools/windows/install-vulkan-sdk.ps1
+
       - name: Restore CPM downloads
         id: cpm-cache
         uses: actions/cache/restore@v5
         with:
           path: .cache/cpm
-          key: cpm-tuned-v1-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          key: cpm-tuned-${{ matrix.msvc && 'msvc-' || '' }}v1-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
           restore-keys: |
-            cpm-tuned-v1-
+            cpm-tuned-${{ matrix.msvc && 'msvc-' || '' }}v1-
 
       - name: Restore compiler objects
         id: compiler-cache
@@ -96,12 +135,14 @@ jobs:
         with:
           path: |
             .ccache
+            .sccache
             .thinlto
           key: objects-tuned-${{ matrix.variant }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             objects-tuned-${{ matrix.variant }}-v1-
 
       - name: Configure
+        if: ${{ !matrix.msvc }}
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -160,6 +201,24 @@ jobs:
             "-DCMAKE_CXX_FLAGS=$profile $TUNE_FLAGS" \
             "${extra[@]}"
 
+      - name: Configure MSVC
+        if: matrix.msvc
+        shell: bash
+        run: >-
+          cmake -S . -B build/release -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DYUZU_TESTS=OFF
+          -DYUZU_CMD=OFF
+          -DYUZU_ROOM=OFF
+          -DYUZU_ROOM_STANDALONE=OFF
+          -DYUZU_USE_BUNDLED_QT=OFF
+          -DYUZU_USE_BUNDLED_SDL3=ON
+          -DENABLE_UPDATE_CHECKER=OFF
+          -DUSE_DISCORD_PRESENCE=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
       - name: Save CPM downloads
         if: steps.cpm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
@@ -168,11 +227,25 @@ jobs:
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
       - name: Build
+        if: ${{ !matrix.msvc }}
         shell: msys2 {0}
         run: |
           ccache --zero-stats
           cmake --build build/release --target yuzu --parallel
           ccache --show-stats
+
+      - name: Build MSVC
+        if: matrix.msvc
+        shell: bash
+        run: |
+          sccache --zero-stats
+          cmake --build build/release --target yuzu --parallel
+          sccache --show-stats
+
+      - name: Stop sccache
+        if: always() && matrix.msvc && steps.compiler-cache.outcome == 'success'
+        shell: pwsh
+        run: sccache --stop-server
 
       - name: Save compiler objects
         if: always() && steps.compiler-cache.outcome == 'success'
@@ -180,12 +253,14 @@ jobs:
         with:
           path: |
             .ccache
+            .sccache
             .thinlto
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
 
       # Same packaging as upstream's MinGW build: Qt via windeployqt6, then every non-system DLL
       # the program and the Qt plugins pull in.
       - name: Package
+        if: ${{ !matrix.msvc }}
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -217,6 +292,19 @@ jobs:
             cp "$GITHUB_WORKSPACE"/dist/lichii-tuned/* .
           fi
 
+      # Same packaging as upstream's MSVC build.
+      - name: Package MSVC
+        if: matrix.msvc
+        shell: pwsh
+        run: |
+          if (-not (Test-Path build/release/bin/lichii.exe)) {
+            throw "build/release/bin/lichii.exe was not produced"
+          }
+          windeployqt --release --no-translations build/release/bin/lichii.exe
+          if (Test-Path dist/lichii-tuned) {
+            Copy-Item dist/lichii-tuned/* build/release/bin/
+          }
+
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
@@ -232,7 +320,11 @@ jobs:
           {
             echo "### lichii-tuned r${GITHUB_RUN_NUMBER} (${{ matrix.variant }})"
             echo "- base: \`${GITHUB_SHA::10}\` on \`${GITHUB_REF_NAME}\`"
-            echo "- flags: ${{ matrix.train && 'PGO instrumentation' || 'PGO' }} + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
+            if [ "${{ matrix.msvc }}" = "true" ]; then
+              echo "- flags: MSVC, as the official windows-x86_64 build"
+            else
+              echo "- flags: ${{ matrix.train && 'PGO instrumentation' || 'PGO' }} + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
+            fi
             if [ -s lichii-tuned/lichii-tuned.patch ]; then
               echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
             fi
