@@ -60,7 +60,7 @@ void OnBack(const Func& func) {
 
 // EDEN_NX2_MME_DMA_STATS: how semaphore acquires end and how long they hold the front.
 struct AcquireStats {
-    enum Kind : size_t { Fast, Own, Learned, AfterWait, AfterDrain, Suspended, Count };
+    enum Kind : size_t { Fast, Own, AfterWait, AfterDrain, Suspended, Count };
     std::array<u64, Count> counts{};
     u64 wait_ns{};
     u64 drain_ns{};
@@ -80,9 +80,9 @@ struct AcquireStats {
         }
         last_log = now;
         LOG_INFO(HW_GPU,
-                 "Acquires (5 s): fast {}, own release {}, learned {}, met after wait {} ({} ms), "
+                 "Acquires (5 s): fast {}, own release {}, met after wait {} ({} ms), "
                  "met after drain {} ({} ms), suspended {} ({} ms)",
-                 counts[Fast], counts[Own], counts[Learned], counts[AfterWait], wait_ns / 1000000,
+                 counts[Fast], counts[Own], counts[AfterWait], wait_ns / 1000000,
                  counts[AfterDrain], drain_ns / 1000000, counts[Suspended], suspended_ns / 1000000);
         counts = {};
         wait_ns = drain_ns = suspended_ns = 0;
@@ -251,8 +251,9 @@ void Puller::ProcessFenceActionMethod(DmaPusher& dma_pusher) {
 
 bool Puller::StableSemaphore(DmaPusher& dma_pusher, GPUVAddr address) {
     auto& split = VideoCommon::GpuSplit::Get();
-    if (split.TrackedWritePosition(&dma_pusher.memory_manager, address, address + 4) >
-        split.Consumed()) {
+    // Queued compute and copy work may write it too, untracked.
+    if (std::max(split.TrackedWritePosition(&dma_pusher.memory_manager, address, address + 4),
+                 split.MemoryBarrierPosition()) > split.Consumed()) {
         return false;
     }
     const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
@@ -272,6 +273,24 @@ void Puller::NoteRelease(GPUVAddr address, u32 payload) {
         }
     }
     queued_releases[address] = {payload, split.Position()};
+}
+
+std::optional<u32> Puller::OwnQueuedRelease(DmaPusher& dma_pusher, GPUVAddr address) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    // At High GPU accuracy the release is written when its fence signals, after the back ran it.
+    if (!split.Active() || Settings::IsGPULevelHigh()) {
+        return std::nullopt;
+    }
+    const auto it = queued_releases.find(address);
+    if (it == queued_releases.end() || it->second.position <= split.Consumed()) {
+        return std::nullopt;
+    }
+    // Another write queued after it (a reset by compute, copy or another release) wins.
+    if (split.ReadReadyPosition(&dma_pusher.memory_manager, address, address + 4) >
+        it->second.position) {
+        return std::nullopt;
+    }
+    return it->second.payload;
 }
 
 void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
@@ -334,16 +353,13 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             split.NoteSync();
             return;
         }
-        if (split.Active()) {
-            // This channel's own release, still queued, meets it once the back runs it, which is
-            // before anything sent after the acquire.
-            if (const auto it = queued_releases.find(acquire.address);
-                it != queued_releases.end() && it->second.position > split.Consumed() &&
-                acquire.Matches(it->second.payload)) {
-                if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Own);
-                split.NoteSync();
-                return;
-            }
+        // This channel's own release, still queued, meets it once the back runs it, which is
+        // before anything sent after the acquire.
+        if (const auto released = OwnQueuedRelease(dma_pusher, acquire.address);
+            released && acquire.Matches(*released)) {
+            if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Own);
+            split.NoteSync();
+            return;
         }
         if (split.Active()) {
             // Only queued work that writes the semaphore (or untracked writes) can change it.
@@ -371,46 +387,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                              causes[3], causes[4]);
                 }
             }
-            // An address queued GPU work met 8 times in a row (compute completion, releases) is
-            // trusted to be met by the work before it; the back checks each skipped one and stops
-            // trusting the address if it was not.
-            // Any queued write the back makes before this point (compute, releases, reports).
-            const bool queued_writer = target > split.Consumed();
-            if (has_unmet_acquires.exchange(false, std::memory_order_acquire)) {
-                std::scoped_lock lock{unmet_mutex};
-                for (const GPUVAddr unmet : unmet_acquires) {
-                    gpu_met_acquires[unmet] = ~0U;
-                    LOG_WARNING(HW_GPU, "Acquire at {:#x} was not met by the GPU work before it",
-                                unmet);
-                }
-                unmet_acquires.clear();
-            }
-            if (queued_writer) {
-                const auto it = gpu_met_acquires.find(acquire.address);
-                if (it != gpu_met_acquires.end() && it->second >= 8 && it->second != ~0U) {
-                    split.Defer([this, memory = &dma_pusher.memory_manager, acquire_check = acquire] {
-                        if (!acquire_check.Matches(memory->Read<u32>(acquire_check.address))) {
-                            std::scoped_lock lock{unmet_mutex};
-                            unmet_acquires.push_back(acquire_check.address);
-                            has_unmet_acquires.store(true, std::memory_order_release);
-                        }
-                    });
-                    if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Learned);
-                    split.NoteSync();
-                    return;
-                }
-            }
             const auto wait_start = std::chrono::steady_clock::now();
             split.WaitForPosition(target, VideoCommon::DrainSite::Acquire);
             if (auto* stats = AcquireStats::Get()) stats->wait_ns += NsSince(wait_start);
-            const bool met = acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address));
-            if (queued_writer) {
-                u32& count = gpu_met_acquires[acquire.address];
-                if (count != ~0U) {
-                    count = met ? count + 1 : 0;
-                }
-            }
-            if (met) {
+            if (acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
                 if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterWait);
                 split.NoteSync();
                 return;
@@ -516,14 +496,12 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         return;
     }
     auto& split = VideoCommon::GpuSplit::Get();
-    if (operation <= 3 && operation != 1 && split.Active()) {
+    if (operation <= 3 && operation != 1) {
         // This channel's own queued release meets it before anything sent after the acquire.
-        if (const auto it = queued_releases.find(address);
-            it != queued_releases.end() && it->second.position > split.Consumed()) {
-            const u32 released = it->second.payload;
-            if (operation == 0 ? released == payload
-                : operation == 2 ? released >= payload
-                                 : static_cast<s32>(released - payload) >= 0) {
+        if (const auto released = OwnQueuedRelease(dma_pusher, address)) {
+            if (operation == 0 ? *released == payload
+                : operation == 2 ? *released >= payload
+                                 : static_cast<s32>(*released - payload) >= 0) {
                 split.NoteSync();
                 return;
             }

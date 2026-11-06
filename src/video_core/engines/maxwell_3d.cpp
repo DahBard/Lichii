@@ -1037,19 +1037,18 @@ struct Maxwell3D::FrontState {
     bool draw_pending{true};
     bool skip_same{}; ///< SkipSameValueWrites() && FrontSkipSame(), read once
     u32 dma_reads{};
-    /// Constant buffer words sent inline: value and the ring position after the upload.
+    /// Constant buffer words sent inline, keyed by device address like the split's write
+    /// tracking (so GPU addresses aliasing one word meet): value and the ring position after
+    /// the upload.
     struct ShadowWord {
         u32 value;
         u64 position;
     };
-    std::unordered_map<GPUVAddr, ShadowWord> cb_shadow;
+    std::unordered_map<DAddr, ShadowWord> cb_shadow;
     /// The inline-to-memory upload being sent writes [upload_begin, upload_end).
     bool upload_tracked{};
     GPUVAddr upload_begin{};
     GPUVAddr upload_end{};
-    /// Device pages that report_semaphore writes went to; past 4096 of them, every read flushes.
-    std::unordered_set<DAddr> report_pages;
-    bool report_pages_full{};
 };
 
 namespace {
@@ -1204,6 +1203,25 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
     }
 }
 
+template <typename Func>
+bool Maxwell3D::DeviceWords(GPUVAddr begin, u32 count, Func&& func) {
+    GPUVAddr page = ~GPUVAddr{};
+    std::optional<DAddr> page_device;
+    for (u32 i = 0; i < count; ++i) {
+        const GPUVAddr address = begin + u64{i} * sizeof(u32);
+        if ((address & ~GPUVAddr{0xfff}) != page) {
+            page = address & ~GPUVAddr{0xfff};
+            page_device = memory_manager.GpuToCpuAddress(page);
+        }
+        const std::optional<DAddr> device =
+            page_device ? std::optional<DAddr>{*page_device + (address & 0xfff)} : std::nullopt;
+        if (!func(i, device)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
                                 u32 amount, const u32* values) {
     constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
@@ -1240,10 +1258,18 @@ void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u3
                 fs.cb_shadow.clear();
             }
         }
+        // Only the words ProcessCBMultiData writes: it drops those past the buffer's end.
+        const u64 offset = offset_end - bytes;
+        const u64 size = fs.regs[MAXWELL3D_REG_INDEX(const_buffer.size)];
+        const u64 room = offset < size ? size - offset : 0;
+        const u32 count = static_cast<u32>(std::min<u64>(amount, room / sizeof(u32)));
         const u64 position = split.Position();
-        for (u32 i = 0; i < amount; ++i) {
-            fs.cb_shadow[begin + u64{i} * sizeof(u32)] = {values[i], position};
-        }
+        DeviceWords(begin, count, [&](u32 i, std::optional<DAddr> device) {
+            if (device) {
+                fs.cb_shadow[*device] = {values[i], position};
+            }
+            return true;
+        });
         return;
     }
     if (covers(MAXWELL3D_REG_INDEX(launch_dma))) {
@@ -1277,12 +1303,9 @@ void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u3
                                        MAXWELL3D_REG_INDEX(report_semaphore.address_low));
         note(begin, begin + 16);
         for (const GPUVAddr page : {begin, begin + 15}) {
-            const auto device = memory_manager.GpuToCpuAddress(page);
-            if (!device || fs.report_pages.size() >= 4096) {
-                fs.report_pages_full = true;
-                break;
+            if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+                Tegra::Nx2MarkReportPages(*device, 1);
             }
-            fs.report_pages.insert(*device >> 12);
         }
     }
 }
@@ -1481,15 +1504,18 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
             const u64 opaque =
                 split.OpaqueReadyPosition(&memory_manager, source, source + read_bytes);
             shadow_words.clear();
-            for (u32 i = 0; i < words; ++i) {
-                const auto it = fs.cb_shadow.find(source + u64{i} * sizeof(u32));
+            const bool complete = DeviceWords(source, words, [&](u32, std::optional<DAddr> device) {
+                const auto it = device ? fs.cb_shadow.find(*device) : fs.cb_shadow.end();
                 // Only words still queued: memory has the others, maybe rewritten by the CPU.
                 if (it == fs.cb_shadow.end() || it->second.position < opaque ||
                     it->second.position <= consumed) {
-                    shadow_words.clear();
-                    break;
+                    return false;
                 }
                 shadow_words.push_back(it->second.value);
+                return true;
+            });
+            if (!complete) {
+                shadow_words.clear();
             }
         }
         const bool from_shadow = !shadow_words.empty();
@@ -1582,12 +1608,9 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         if (!shadow_words.empty() || words == 0) {
             return false;
         }
-        if (fs.report_pages_full) {
-            return true;
-        }
         for (GPUVAddr page = source >> 12; page <= (source + read_bytes - 1) >> 12; ++page) {
             const auto device = memory_manager.GpuToCpuAddress(page << 12);
-            if (device && fs.report_pages.contains(*device >> 12)) {
+            if (device && Tegra::Nx2IsReportPage(*device)) {
                 return true;
             }
         }

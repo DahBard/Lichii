@@ -161,12 +161,9 @@ private:
     /// Whether no queued write or undownloaded GPU write can change the semaphore at `address`.
     bool StableSemaphore(DmaPusher& dma_pusher, GPUVAddr address);
     void NoteRelease(GPUVAddr address, u32 payload);
-    /// Acquires at an address that queued GPU work met each time: how often in a row, or ~0U
-    /// once the back found one unmet after skipping its wait.
-    std::unordered_map<GPUVAddr, u32> gpu_met_acquires;
-    std::mutex unmet_mutex;
-    std::vector<GPUVAddr> unmet_acquires;
-    std::atomic<bool> has_unmet_acquires{false};
+    /// The payload of this channel's queued release at `address`, if it is still queued and is
+    /// the last write to it before what is sent now.
+    std::optional<u32> OwnQueuedRelease(DmaPusher& dma_pusher, GPUVAddr address);
 
     /// Mapping of command subchannels to their bound engine ids
     std::array<EngineID, 8> bound_engines{};
