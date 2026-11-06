@@ -227,8 +227,10 @@ bool DmaPusher::Step() {
         // (the split only starts with unsafe reads; the settings can change mid-game).
         const bool use_safe = !VideoCommon::GpuSplit::Get().Active() &&
                               (Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe());
-        if (!gpu_written && VideoCommon::GpuSplit::Get().Active() &&
-            VideoCommon::GpuSplit::Get().WaitForWriters()) {
+        // Recheck even when the wait returns at once: a writer may have finished (and marked the
+        // pages) since the check above.
+        if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
+            VideoCommon::GpuSplit::Get().WaitForWriters();
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
         }
