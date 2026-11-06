@@ -90,6 +90,8 @@ add_library(
     page_table.cpp
     page_table.h
     param_package.cpp
+    pgo_training.cpp
+    pgo_training.h
     param_package.h
     parent_of_member.h
     point.h

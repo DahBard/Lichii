@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "common/adpf.h"
+#include "common/pgo_training.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -75,6 +76,7 @@ void Conductor::UnlinkVsyncEvent(u64 display_id, Event* event) {
 
 void Conductor::ProcessVsync() {
     Common::PollThreadPolicies();
+    Common::PgoTraining::Tick();
     Common::ADPF::SetTargetWorkDuration(std::chrono::nanoseconds{this->GetFramePeriodNs()});
 
     for (auto& [display_id, manager] : m_vsync_managers) {

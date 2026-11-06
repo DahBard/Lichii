@@ -13,6 +13,7 @@
 #include "common/fs/fs.h"
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
+#include "common/pgo_training.h"
 #include "common/adpf.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -665,6 +666,7 @@ bool System::IsPaused() const {
 
 void System::ShutdownMainProcess() {
     impl->ShutdownMainProcess();
+    Common::PgoTraining::Flush();
 }
 
 bool System::IsShuttingDown() const {

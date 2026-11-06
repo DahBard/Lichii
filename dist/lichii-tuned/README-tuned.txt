@@ -28,3 +28,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
 
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
+
+PGO training build (the "pgo-train" download)
+---------------------------------------------
+This build records which code your game runs, so the next "pgo" build can be optimized for it.
+It runs slower than the others; that is expected. Run lichii.exe from it, play Ocarina through
+a few typical areas for 10-15 minutes, then stop the game and close the emulator normally. It
+leaves lichii-pgo-<number>.profraw files next to lichii.exe (it also saves them every 30 s).
+Zip them and upload the zip to lichii-tuned/pgo in the fork; the next builds use them.
