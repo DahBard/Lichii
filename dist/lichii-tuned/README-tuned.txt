@@ -19,7 +19,10 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    anti-aliasing network (#319; AMD GPUs run its tensor math in software), AMD drivers no
    longer stall on those shaders (#300), white flashes at GPU accuracy Low (#337), fog white
    haze (#292), leaf holes from split warps (#329), held draws build their pipeline at once
-   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259).
+   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259),
+   no violet halos from shader exports AMD leaves undefined (#353), no green tint growing from
+   shadow lookups through wrong texture handles (#354), batched texture evictions (#376),
+   precise macro reads and cheaper semaphore waits on the split GPU thread (#345).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -35,8 +38,14 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
  ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
                               over OCuLink, but some flicker was reported
- perf-trace.bat               default settings plus per-second GPU thread zones and frame timing
-                              in the log (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1)
+ ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
+                              (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
+                              can be missing for a few frames; logs like perf-trace.bat
+ ab-9-amd-fp16.bat            keeps float16 shader math on AMD (EDEN_AMD_FP16=1); official builds
+                              turn it off for a driver bug in another game, so look for wrong colors
+ perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
+                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
+                              EDEN_DKB_FRAME_TRACE=1)
 
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
