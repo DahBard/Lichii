@@ -18,11 +18,12 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Ocarina of Time fixes from open Lichii pull requests: a setting to skip the game's
    anti-aliasing network (#319; AMD GPUs run its tensor math in software), AMD drivers no
    longer stall on those shaders (#300), white flashes at GPU accuracy Low (#337), fog white
-   haze (#292), leaf holes from split warps (#329), held draws build their pipeline at once
-   (#321), Dynamic FPS keeps real speed down to 10 fps (#299), opt-in readback preflush (#259),
-   no violet halos from shader exports AMD leaves undefined (#353), no green tint growing from
-   shadow lookups through wrong texture handles (#354), batched texture evictions (#376),
-   precise macro reads and cheaper semaphore waits on the split GPU thread (#345).
+   haze and black water and foliage after area changes (#292), leaf holes from split warps
+   (#329), held draws build their pipeline at once (#321), Dynamic FPS keeps real speed down
+   to 10 fps (#299), opt-in readback preflush (#259), no violet halos from shader exports AMD
+   leaves undefined (#353), no green tint growing from shadow lookups through wrong texture
+   handles (#354), batched texture evictions (#376), precise macro reads and cheaper semaphore
+   waits on the split GPU thread (#345).
  * Shaders stay compiled: up to 4096 built pipelines are kept however long they go unused
    (official builds destroy one unused for 9000 frames, so a few minutes on the title screen
    threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
