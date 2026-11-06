@@ -35,6 +35,10 @@ jobs:
           # Same plus ThinLTO across the whole program (experimental).
           - variant: pgo-lto
             lto: "ON"
+          # Instrumented build that records an Ocarina profile while you play (slower).
+          - variant: pgo-train
+            lto: "OFF"
+            train: true
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
@@ -68,7 +72,7 @@ jobs:
           install: >-
             git make autoconf libtool automake-wrapper patch jq pactoys ninja
           pacboy: >-
-            toolchain:p clang:p lld:p llvm:p cmake:p python-pip:p
+            toolchain:p clang:p lld:p llvm:p compiler-rt:p cmake:p python-pip:p
             qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
             openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
             vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
@@ -100,8 +104,26 @@ jobs:
         run: |
           set -euo pipefail
           command -v llvm-ar llvm-ranlib clang ld.lld || true
-          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+          # Profiles recorded with a pgo-train build (lichii-tuned/pgo/*.profraw, or zips of them)
+          # are merged with Lichii's own profile, weighted 4:1 toward the recorded game.
+          profdata="$PWD/eglantine.profdata"
+          shopt -s nullglob
+          for zip in lichii-tuned/pgo/*.zip; do
+            python -m zipfile -e "$zip" lichii-tuned/pgo/
+          done
+          raws=(lichii-tuned/pgo/*.profraw lichii-tuned/pgo/*/*.profraw)
+          if [ "${{ matrix.train }}" != "true" ] && [ ${#raws[@]} -gt 0 ]; then
+            inputs=(--weighted-input=1,eglantine.profdata)
+            for raw in "${raws[@]}"; do inputs+=("--weighted-input=4,$raw"); done
+            llvm-profdata merge -o merged.profdata "${inputs[@]}"
+            profdata="$PWD/merged.profdata"
+            echo "Merged ${#raws[@]} recorded profile(s) into merged.profdata"
+          fi
+          profile="-fprofile-use=$(cygpath -m "$profdata") -Wno-backend-plugin \
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
+          if [ "${{ matrix.train }}" = "true" ]; then
+            profile="-fprofile-generate"
+          fi
           linker="-fuse-ld=lld"
           extra=()
           if [ "${{ matrix.lto }}" = "ON" ]; then
@@ -208,8 +230,11 @@ jobs:
           {
             echo "### lichii-tuned r${GITHUB_RUN_NUMBER} (${{ matrix.variant }})"
             echo "- base: \`${GITHUB_SHA::10}\` on \`${GITHUB_REF_NAME}\`"
-            echo "- flags: PGO + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
+            echo "- flags: ${{ matrix.train && 'PGO instrumentation' || 'PGO' }} + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
             if [ -s lichii-tuned/lichii-tuned.patch ]; then
               echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
+            fi
+            if [ -f merged.profdata ]; then
+              echo "- profile: eglantine.profdata merged with recorded profiles"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
