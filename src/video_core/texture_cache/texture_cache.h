@@ -142,12 +142,12 @@ void TextureCache<P>::RunGarbageCollector() {
     // memory their deletion will free.
     using Map = decltype(runtime.DownloadStagingBuffer(size_t{}));
     using Copies = decltype(FullDownloadCopies(std::declval<const ImageInfo&>()));
-    struct PendingDownload {
+    struct CollectorDownload {
         ImageId image_id;
         Map map;
         Copies copies;
     };
-    boost::container::small_vector<PendingDownload, 16> pending;
+    boost::container::small_vector<CollectorDownload, 16> pending;
     size_t pending_bytes = 0;
     u64 pending_freed = 0;
     const auto used_memory = [&] {
@@ -168,7 +168,7 @@ void TextureCache<P>::RunGarbageCollector() {
         }
         runtime.Finish();
         ++gc_download_waits;
-        for (PendingDownload& entry : pending) {
+        for (CollectorDownload& entry : pending) {
             Image& image = slot_images[entry.image_id];
             SwizzleImage(*gpu_memory, image.gpu_addr, image.info, entry.copies,
                          entry.map.mapped_span, swizzle_data_buffer);
@@ -196,7 +196,7 @@ void TextureCache<P>::RunGarbageCollector() {
         if (num_iterations == 0) {
             return true;
         }
-        if (std::ranges::any_of(pending, [image_id](const PendingDownload& entry) {
+        if (std::ranges::any_of(pending, [image_id](const CollectorDownload& entry) {
                 return entry.image_id == image_id;
             })) {
             return false;
@@ -226,7 +226,7 @@ void TextureCache<P>::RunGarbageCollector() {
             pending_bytes += image.unswizzled_size_bytes;
             pending_freed += (image.HasScaled() ? GetScaledImageSizeBytes(image) : 0) +
                              ImageMemoryBytes(image);
-            pending.push_back(PendingDownload{image_id, map, std::move(copies)});
+            pending.push_back(CollectorDownload{image_id, map, std::move(copies)});
         } else {
             Evict(image_id);
         }
@@ -250,7 +250,7 @@ void TextureCache<P>::RunGarbageCollector() {
             std::vector<ImageId> candidates;
             const size_t limit = num_iterations * 8;
             lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, [&](ImageId image_id) {
-                if (std::ranges::any_of(pending, [image_id](const PendingDownload& entry) {
+                if (std::ranges::any_of(pending, [image_id](const CollectorDownload& entry) {
                         return entry.image_id == image_id;
                     })) {
                     return false;
