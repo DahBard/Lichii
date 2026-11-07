@@ -34,6 +34,7 @@
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
 #include "video_core/pending_maps.h"
+#include "video_core/gpu_split.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/gpu_timestamp.h"
 #include "video_core/gpu_wait_stats.h"
@@ -210,11 +211,16 @@ struct GPU::Impl {
     /// core timing events.
     void Start() {
         Settings::UpdateGPUAccuracy();
+        // With the GPU thread split, its back runs a sync operation a guest thread waits for as
+        // soon as it asks (OnCPURead).
+        VideoCommon::GpuSplit::Get().SetTickHook(
+            [](void* argument) { static_cast<Impl*>(argument)->TickWork(); }, this);
         gpu_thread.StartThread(*renderer, renderer->Context(), scheduler);
     }
 
     void NotifyShutdown() {
         gpu_thread.NotifyShutdown();
+        VideoCommon::GpuSplit::Get().SetTickHook(nullptr, nullptr);
         {
             // The GPU threads stopped: no sync operation runs anymore. Guest threads still run
             // until the kernel suspends them, and one waiting for a read's flush (OnCPURead)
@@ -305,6 +311,9 @@ struct GPU::Impl {
             timing.bytes = Stats::t_download_bytes - bytes_before;
             timing.end = Stats::Now();
         });
+        // The split's back runs it after the entry it is on. The tick sent through the GPU
+        // thread's queue still runs it without the split.
+        VideoCommon::GpuSplit::Get().RequestTick();
         gpu_thread.TickGPU(is_async);
         WaitForSyncOperation(fence);
         Stats::RecordReactive(raster_area, core, request, timing, Stats::Now());
