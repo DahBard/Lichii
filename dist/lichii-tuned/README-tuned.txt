@@ -31,6 +31,9 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
  * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
    load-acquires) and reads the game's clock without leaving the generated code.
+ * Ocarina's occlusion checks (about 1,400 "is this visible?" questions a frame) are answered
+   "visible" at once instead of by the GPU: on this Radeon they cost most of the frame, and
+   answering them doubled the frame rate (LICHII_FAKE_OCCLUSION=0 runs them again).
  * Ocarina's built-in Dynamic FPS mod takes each frame's own time instead of an average of the
    last 8 frames, so the game no longer runs fast for a moment after a slow stretch
    (LICHII_DYNFPS_SMOOTHING=8 brings the average back).
@@ -70,12 +73,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
- trace-wfi-defer.bat          the game's waits for idle no longer end the GPU render pass
-                              (LICHII_WFI_DEFER=1), logged like perf-trace.bat; watch for
-                              missing or flickering effects
- trace-fake-occlusion.bat     the game's occlusion checks always answer "visible" and the GPU
-                              runs no occlusion queries (LICHII_FAKE_OCCLUSION=4096), logged
-                              like perf-trace.bat; watch for glows or flares through walls
+ trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
+                              logged like perf-trace.bat: slower, for comparison
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
