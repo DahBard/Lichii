@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <span>
 
@@ -108,6 +109,37 @@ constexpr std::array BUILTIN_PATCHES{
         .state_size = 16,
     },
 };
+
+// The Dynamic FPS routine replaces the game's per-frame time step with the measured frame time,
+// averaged over about 8 frames. After slow frames the average stays long for a while, so the game
+// runs faster than real time until it settles. LICHII_DYNFPS_SMOOTHING=<1|2|4|8> sets how many
+// frames it averages over (1: each frame's own time). LICHII_DYNFPS_MIN_FPS=<5-60> sets the lowest
+// frame rate kept at real speed (10 in this build, 20 in Dark's mod); below it the game slows down.
+void TuneDynamicFps(std::vector<u8>& out, size_t routine_offset) {
+    const size_t routine = sizeof(Loader::NSOHeader) + routine_offset;
+    if (const char* const value = std::getenv("LICHII_DYNFPS_SMOOTHING")) {
+        const int frames = std::atoi(value);
+        if (frames == 1 || frames == 2 || frames == 4 || frames == 8) {
+            const u32 shift = frames == 1 ? 0 : frames == 2 ? 1 : frames == 4 ? 2 : 3;
+            const u32 average = 0x8B8E018CU | (shift << 10); // add x12, x12, x14, asr #shift
+            std::memcpy(out.data() + routine + 0x44, &average, sizeof(average));
+            LOG_INFO(Loader, "    - Dynamic FPS averages the frame time over {} frame(s)", frames);
+        } else {
+            LOG_WARNING(Loader, "    - LICHII_DYNFPS_SMOOTHING={} ignored: use 1, 2, 4 or 8", value);
+        }
+    }
+    if (const char* const value = std::getenv("LICHII_DYNFPS_MIN_FPS")) {
+        const int fps = std::atoi(value);
+        if (fps >= 5 && fps <= 60) {
+            // mov x14, #fps: the measured frame time is capped at CNTFRQ / fps.
+            const u32 cap = 0xD280000EU | (static_cast<u32>(fps) << 5);
+            std::memcpy(out.data() + routine + 0x24, &cap, sizeof(cap));
+            LOG_INFO(Loader, "    - Dynamic FPS keeps real speed down to {} fps", fps);
+        } else {
+            LOG_WARNING(Loader, "    - LICHII_DYNFPS_MIN_FPS={} ignored: use 5 to 60", value);
+        }
+    }
+}
 
 enum class TitleVersionFormat : u8 {
     ThreeElements, ///< vX.Y.Z
@@ -615,6 +647,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         }
         LOG_INFO(Loader, "    - Applying built-in patch \"{}\" ({} records) to {}", patch.name,
                  patch.records.size(), name);
+        if (patch.records.data() == DYNAMIC_FPS_RECORDS.data()) {
+            TuneDynamicFps(out, DYNAMIC_FPS_RECORDS[1].module_offset);
+        }
     }
 
     if (out.size() < sizeof(Loader::NSOHeader)) {
