@@ -735,6 +735,22 @@ private:
     }
 
     ReadTrapTracker read_trapped_ranges;
+
+    /// A Switch 2 title's Preflushable mark (EDEN_NX2_PREFLUSH=1) expires unless the CPU reads its
+    /// pages again: a mark sends every later GPU write over them to a download at every fence, and
+    /// Ocarina of Time reads hundreds of pages a few times each, so marks kept for good grew its
+    /// downloads from 0.5 to 1.5 GiB/s in two minutes (r18). A page read again soon after its mark
+    /// expired keeps the next one twice as long, up to 64 times.
+    struct PreflushMark {
+        u64 size{};
+        u64 expires{};  ///< frame_tick the mark is removed at
+        u32 lifetime{}; ///< in frames
+    };
+    std::unordered_map<DAddr, PreflushMark> preflush_marks;
+    /// Marks that expired lately: when, and their lifetime, which a new mark soon after doubles.
+    std::unordered_map<DAddr, std::pair<u64, u32>> preflush_expired;
+    void NotePreflushMark(DAddr address, u64 size);
+    void ExpirePreflushMarks();
     /// Ranges the guest CPU read after GPU writes. A read that must flush downloads the GPU
     /// writes in all of them, so the reads that usually follow it find nothing left to flush.
     Common::RangeSet<DAddr> cpu_read_ranges;

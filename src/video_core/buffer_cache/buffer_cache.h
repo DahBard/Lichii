@@ -161,6 +161,9 @@ void BufferCache<P>::TickFrame() {
     } else if (total_used_memory >= minimum_memory) {
         RunGarbageCollector(total_used_memory >= critical_memory);
     }
+    if (frame_tick % 8 == 0) {
+        ExpirePreflushMarks();
+    }
     ++frame_tick;
     delayed_destruction_ring.Tick();
 
@@ -168,6 +171,54 @@ void BufferCache<P>::TickFrame() {
         runtime.FreeDeferredStagingBuffer(buffer);
     }
     async_buffers_death_ring.clear();
+}
+
+/// LICHII_PREFLUSH_FRAMES=<n>: frames a Switch 2 title's Preflushable mark lasts at first (default
+/// 120); 0 keeps marks for good, as before.
+inline u32 PreflushMarkFrames() {
+    static const u32 frames = [] {
+        const char* value = std::getenv("LICHII_PREFLUSH_FRAMES");
+        return value != nullptr ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 120U;
+    }();
+    return frames;
+}
+
+template <class P>
+void BufferCache<P>::NotePreflushMark(DAddr address, u64 size) {
+    const u32 base = PreflushMarkFrames();
+    if (base == 0) {
+        return;
+    }
+    u32 lifetime = base;
+    if (const auto it = preflush_expired.find(address); it != preflush_expired.end()) {
+        if (frame_tick - it->second.first <= it->second.second) {
+            lifetime = (std::min)(it->second.second * 2, base * 64);
+        }
+        preflush_expired.erase(it);
+    }
+    PreflushMark& mark = preflush_marks[address];
+    mark.size = (std::max)(mark.size, size);
+    mark.lifetime = (std::max)(mark.lifetime, lifetime);
+    mark.expires = frame_tick + mark.lifetime;
+}
+
+template <class P>
+void BufferCache<P>::ExpirePreflushMarks() {
+    for (auto it = preflush_marks.begin(); it != preflush_marks.end();) {
+        if (it->second.expires > frame_tick) {
+            ++it;
+            continue;
+        }
+        memory_tracker.UnmarkRegionAsPreflushable(it->first, it->second.size);
+        // The mark kept the trap disarmed: the next GPU write over these pages arms it again.
+        read_trapped_ranges.Subtract(it->first, it->second.size);
+        preflush_expired.insert_or_assign(it->first, std::pair{frame_tick, it->second.lifetime});
+        it = preflush_marks.erase(it);
+    }
+    for (auto it = preflush_expired.begin(); it != preflush_expired.end();) {
+        it = frame_tick - it->second.first > it->second.second ? preflush_expired.erase(it)
+                                                               : std::next(it);
+    }
 }
 
 template <class P>
@@ -296,6 +347,10 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
         if (preflush) {
             memory_tracker.MarkRegionAsPreflushable(
                 device_addr_start_aligned, device_addr_end_aligned - device_addr_start_aligned);
+            if (nx2_preflush && Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+                NotePreflushMark(device_addr_start_aligned,
+                                 device_addr_end_aligned - device_addr_start_aligned);
+            }
         } else {
             if constexpr (USE_MEMORY_MAPS) {
                 cpu_read_ranges.Add(area->start_address, area->end_address - area->start_address);
