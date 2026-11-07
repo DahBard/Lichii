@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-06 (end of the first session), for the next Claude session.
+State of the work on 2026-11-07 (end of the second session), for the next Claude session.
 
 ## Goal
 
@@ -28,28 +28,44 @@ he tests and sends `eden_log.txt`, analyze, next build.
   `lichii-pgo-*.profraw`) is commented out; profiles put in `lichii-tuned/pgo/` (raw or zipped) are
   merged 4:1 with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only
   behind the same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` (36 commits over 588bfa6). Its full history is
-  `lichii-tuned/tuned4.bundle`: in any Lichii clone, `git fetch lichii-tuned/tuned4.bundle
-  tuned4:tuned4`. The patch is `git diff --binary 588bfa6 tuned4`; check it with
-  `git apply --check` on a clean 588bfa6 checkout before committing it.
-- The first session had no git push access to the fork, so it committed the patch through the
-  GitHub web upload page in Chrome. With the repository attached to the session, push instead.
-  `tuned4` itself was never pushed: push it as its own branch (it doesn't trigger builds).
+- Source of the patch: branch `tuned4` of DahBard/Lichii (49 commits over 588bfa6; pushing it
+  doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
+  (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
+  is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
+  checkout before committing it.
+- Before committing a new patch, run `python3 -I lichii-tuned/check_patch_warnings.py <tuned4
+  checkout>`. It compiles the changed files with clang and GCC and reports warnings on added
+  lines that the msvc variant treats as errors (shadowing, signed/unsigned compares, unused
+  locals and captures, unhandled enumerators, video_core conversions). The pgo builds don't
+  catch them: `common/x64/xbyak.h` turns -Wshadow and -Wconversion off for the rest of every
+  file that includes it. Qt, Windows-only and test files need a look by hand.
+- The cloud session's network blocks GitHub archive downloads (so a full CMake configure fails)
+  and the Actions log host; git clones work. Read job logs with the GitHub MCP `get_job_logs`
+  tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
 
-Upstream nx2 up to `09b78bd2df`, plus open upstream pull requests:
+Upstream nx2 up to `09b78bd2df` (still zortos293/Lichii's nx2 head on 2026-11-07), plus open
+upstream pull requests at their heads as of 2026-11-07 00:00 UTC:
 
 - #319 "Ocarina of Time anti-aliasing: No sharpening" bypasses the game's tensor AA network
   (AMD runs its HMMA math in software); #300 builds those HMMA pipelines off the wait path on AMD.
-- #337 white flashes at GPU accuracy Low, #292 fog haze, #329 leaf holes, #321 held draws build
-  their pipeline inline, #299 Dynamic FPS down to 10 fps, #259 opt-in preflush (`EDEN_NX2_PREFLUSH=1`).
-- #345 (5 commits) precise macro DMA reads and cheaper semaphore acquires on the split GPU front
-  (its author measured ~48% of the front draining the back in Ocarina). Large; if round 3 is
-  unstable, drop it first.
+- #337 white flashes at GPU accuracy Low, #292 fog haze plus (round 4) the same 256 MiB cap for
+  graphics table pointers (Kokiri Forest water and foliage turned black after an area change on
+  an RX 7800 XT), #329 leaf holes, #321 held draws build their pipeline inline, #299 Dynamic FPS
+  down to 10 fps, #259 opt-in preflush (`EDEN_NX2_PREFLUSH=1`).
+- #345 (9 commits) precise macro DMA reads and cheaper semaphore acquires on the split GPU front
+  (its author measured ~48% of the front draining the back in Ocarina). Round 4 added its four
+  review fixes: no more learned acquires (r9 skipped acquires that had succeeded before, which
+  could run the commands after an unmet one), semaphore fast paths only when no queued or
+  undownloaded write can change the value, command pages rechecked after every writer wait,
+  write tracking keyed by device address. Large; if a round is unstable, drop it first.
 - #346 denormal controls, #353 render target write mask (violet halos on AMD), #354 bindless
-  handle tracking for the clustered lighting shadow lookups (green tint growing on AMD),
-  #376 texture cache collector downloads with one GPU wait, #378 source part (`EDEN_AMD_FP16=1`).
+  handle tracking for the clustered lighting shadow lookups (green tint growing on AMD; round 4
+  added texture array sampler limits, arrays only with nonuniform indexing, and dual vertex
+  program fixes), #376 texture cache collector downloads with one GPU wait (round 4 added its
+  review fix: r9 could flush a full batch inside Cleanup and delete images the LRU walk still
+  pointed to), #378 source part (`EDEN_AMD_FP16=1`).
 
 Own changes:
 
@@ -71,6 +87,8 @@ Own changes:
   (`externals/cmake-modules/UseLTO.cmake`).
 - Package extras in `dist/lichii-tuned/`: `README-tuned.txt`, `perf-trace.bat`
   (`EDEN_NX2_GPU_PROFILE=1`, `EDEN_DKB_FRAME_TRACE=1`) and A/B launchers ab-1 to ab-11.
+- MSVC build fix (round 4): four declarations from #319, #345 and #376 that hid a class member
+  or a local are renamed.
 
 ## Test results so far
 
@@ -91,15 +109,22 @@ Own changes:
     log "Patch topology not used with tessellation".
   - 28-61 full GPU waits (Finish) a second costing 140-170 ms/s; sites are logged from round 3b.
   - Guest cores 4 and 5 use ~40-43 ms of CPU per frame in the 17 fps area.
+- Run #9 (round 3b): `pgo` built; `pgo-lto` was still building at 00:00 UTC; `msvc` failed at
+  914/1880 on C4458 (#319's `state` in kepler_compute.cpp) and C4456/C4457 (#345's
+  `[source, count]` in maxwell_3d.cpp), fixed in round 4. Rounds 3 and 3b are untested.
 
 ## Next steps
 
-1. Run #9 ("Round 3b") on the fork's Actions page: when `pgo-lto` / `pgo` finish, have the owner
-   test r9-pgo-lto (judge from the second launch; the first recompiles shaders) with
-   `perf-trace.bat` at the same spots, and compare with the numbers above.
+1. Run #10 (round 4: round 3b, the PR updates above and the MSVC fix): when `pgo-lto` / `pgo`
+   finish (they queue behind run #9's), have the owner test r10-pgo-lto rather than r9, which
+   has the unsound #345 acquires and the #376 collector bug. Judge from the second launch (the
+   first recompiles shaders), run `perf-trace.bat` at the same spots, and compare with the
+   numbers above. If `msvc` fails, add the case to `check_patch_warnings.py`.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
    try `ab-8-skip-unbuilt-draws.bat` for first-time shaders and `ab-4-strict-placement.bat`;
-   PGO training on Ocarina; per `AGENTS.md`, check Eglantine (Djihads80/Eglantine) for fixes to
-   port; compare `msvc` against `pgo` if glitches remain.
+   PGO training on Ocarina; compare `msvc` against `pgo` if glitches remain.
+4. Each round, port new commits from the included pull requests (#354 was still changing late
+   on 2026-11-06): `git fetch https://github.com/zortos293/Lichii refs/pull/<n>/head` and compare
+   patch ids with tuned4. Per `AGENTS.md`, also check Eglantine (Djihads80/Eglantine).
