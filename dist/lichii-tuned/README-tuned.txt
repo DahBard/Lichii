@@ -31,6 +31,8 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
  * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
    load-acquires) and reads the game's clock without leaving the generated code.
+ * On AMD's driver GPU work is submitted every 512 draws instead of 128 (each submission costs
+   more there), and large new textures are unswizzled on up to four helper threads.
  * Ocarina's occlusion checks (about 1,400 "is this visible?" questions a frame) are answered
    "visible" at once instead of by the GPU: on this Radeon they cost most of the frame, and
    answering them doubled the frame rate (LICHII_FAKE_OCCLUSION=0 runs them again).
@@ -68,7 +70,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
  trace-preflush.bat           ab-7 with the logging of perf-trace.bat
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
- trace-flush4096.bat          submits GPU work every 4096 draws instead of every 128
+ trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
                               (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
