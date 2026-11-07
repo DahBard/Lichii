@@ -1367,7 +1367,9 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
         // Reused between calls (a macro never calls another: methods >= 0xe00 are refused below);
         // filled only for calls that are interpreted.
         auto& fifo = native_fifo;
-        native_interpreter.active_dram = &maxwell3d.GetNativeDataRam();
+        // The channel's data RAM is the split's front's while it runs macros (split_writes).
+        native_interpreter.active_dram =
+            split_writes != nullptr ? &native_interpreter.dram : &maxwell3d.GetNativeDataRam();
         // EDEN_NX2_MME_RECORD=<file>: write the first 200000 calls (u32 start, u32 count, the
         // parameters) and then the macro code to <file>.code, to check interpreter changes
         // offline against the previous interpreter. EDEN_NX2_MME_RECORD_SKIP=<n>: skip the first
@@ -1398,6 +1400,9 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
         bool read_memory = false;
         const auto emit = [&](u32 address, u32 value) {
                 if (address >= 0xe00) return false;
+                if (split_writes != nullptr && !(*split_writes)[address]) [[unlikely]] {
+                    ++split_unexpected_writes;
+                }
                 if (address == 0x556) {
                     // SET_RENDER_ENABLE_OVERRIDE: 0 use the render-enable condition, 1 always,
                     // 2 never. Log a histogram every 20000 macro writes (pop-in diagnostics).
@@ -1497,12 +1502,20 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
             }
             native_jit->Prepare(native_code, native_code_generation);
             fifo.assign(parameters.begin(), parameters.end());
-            const auto result = native_jit->Execute(
-                method, fifo, std::span<u32>{*native_interpreter.active_dram},
-                [&](u32 address) {
-                    return address < Maxwell3D::Regs::NUM_REGS ? maxwell3d.GetRegisterValue(address) : 0U;
-                },
-                emit);
+            const auto read_register = [&](u32 address) {
+                return address < Maxwell3D::Regs::NUM_REGS ? maxwell3d.GetRegisterValue(address) : 0U;
+            };
+            auto result = native_jit->Execute(method, fifo,
+                                              std::span<u32>{*native_interpreter.active_dram},
+                                              read_register, emit);
+            if (!result.success && !result.side_effects &&
+                result.error == TuringMacroInterpreter::OutsideCodeError) {
+                // As on the split's front (FrontRunMacro), whose macros that read memory run here
+                // (split_writes): a call the compiled program rejected before it wrote anything
+                // runs on the interpreter, which decodes the uploaded words as they are.
+                fifo.assign(parameters.begin(), parameters.end());
+                result = native_interpreter.Execute(native_code, method, fifo, read_register, emit);
+            }
             if (!result.success) {
                 native_execution_failed = true;
                 LOG_ERROR(HW_GPU, "Native MME (JIT) failed: start={:#x}, consumed={}/{}, error={}",
