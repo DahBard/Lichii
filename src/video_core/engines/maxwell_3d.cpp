@@ -1035,6 +1035,9 @@ struct Maxwell3D::FrontState {
     /// A method the draw manager handles was sent since the back last ran DrawDeferred: only
     /// then can it have a deferred instanced draw to issue at the end of a macro.
     bool draw_pending{true};
+    /// The back holds state writes in its method sink, which its next executable method consumes
+    /// (issuing a deferred draw a changed one ends). Front starts once the sink is consumed.
+    bool sink_pending{};
     bool skip_same{}; ///< SkipSameValueWrites() && FrontSkipSame(), read once
     u32 dma_reads{};
     /// Constant buffer words sent inline, keyed by device address like the split's write
@@ -1160,8 +1163,10 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
         // Draw macros write these for every instance (~500,000 same values a second in Ocarina of
         // Time). They only store the value, so an unchanged one is the same as a state write.
         // topology_override is not part of an instance loop: any write to it ends a deferred draw.
+        // Kept while state writes wait in the back's sink: it would consume them before the next
+        // engine's work.
         if (IsStoreOnlyExecutable(method) && DrawManager::IsInstanceLoopMethod(method) &&
-            fs.regs[method] == value && shadow_kept && fs.skip_same) {
+            fs.regs[method] == value && shadow_kept && fs.skip_same && !fs.sink_pending) {
             if (Profile::Enabled()) [[unlikely]] {
                 Profile::Add(Profile::Counter::SameValueWrites, 1);
             }
@@ -1204,9 +1209,12 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
         }
     }
     if (from_macro) {
+        // Direct writes consume the sink first.
         split.MacroWrite(this, method, argument);
+        fs.sink_pending = false;
     } else {
         split.Method(this, method, argument, is_last_call, nullptr);
+        fs.sink_pending = !execution_mask[method];
     }
     if (execution_mask[method]) {
         FrontNoteWrites(split, fs, method, 1, &argument);
@@ -1423,6 +1431,7 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
         }
     }
     split.MultiMethod(this, method, base_start, amount, methods_pending, nullptr);
+    fs.sink_pending = false; // The back consumes the sink before a run.
     FrontNoteWrites(split, fs, method, amount, base_start);
 }
 
