@@ -70,9 +70,13 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
+ trace-wfi-defer.bat          the game's waits for idle no longer end the GPU render pass
+                              (LICHII_WFI_DEFER=1), logged like perf-trace.bat; watch for
+                              missing or flickering effects
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
-                              EDEN_DKB_FRAME_TRACE=1)
+                              EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
+                              (LICHII_TRACE_DRAWS_EVERY=4), since timing them slows that frame
 
 Each start replaces the log, so copy it after every run you want to compare.
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
