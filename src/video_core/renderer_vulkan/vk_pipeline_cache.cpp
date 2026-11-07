@@ -1070,48 +1070,76 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         });
         ++state.total;
     }};
+    // Graphics records left out, by reason: a cache recorded on another GPU or with another
+    // dynamic state setting holds pipelines this device can't use (logged after loading).
+    enum DroppedReason : size_t {
+        DropMesh,
+        DropEds1,
+        DropEds2,
+        DropEds2LogicOp,
+        DropEds3Blend,
+        DropEds3Enables,
+        DropColorWriteEnable,
+        DropVertexInput,
+        DropProvokingVertex,
+        DropDuplicate,
+        DropCount,
+    };
+    std::array<size_t, DropCount> dropped{};
+    std::array<size_t, DropCount> dropped_with_feature{}; ///< records that had the feature on
+    size_t graphics_records = 0;
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
+        ++graphics_records;
 
         if (!device.IsExtMeshShaderSupported() &&
             std::ranges::any_of(envs, [](const FileEnvironment& env) {
                 return env.ShaderStage() == Shader::Stage::Task ||
                        env.ShaderStage() == Shader::Stage::Mesh;
             })) {
+            ++dropped[DropMesh];
             return;
         }
 
-        if ((key.state.extended_dynamic_state != 0) !=
-                dynamic_features.has_extended_dynamic_state ||
-            (key.state.extended_dynamic_state_2 != 0) !=
-                dynamic_features.has_extended_dynamic_state_2 ||
-            (key.state.extended_dynamic_state_2_logic_op != 0) !=
-                dynamic_features.has_extended_dynamic_state_2_logic_op ||
-            (key.state.extended_dynamic_state_3_blend != 0) !=
-                dynamic_features.has_extended_dynamic_state_3_blend ||
-            (key.state.extended_dynamic_state_3_enables != 0) !=
-                dynamic_features.has_extended_dynamic_state_3_enables ||
-            (key.state.color_write_enable_dynamic != 0) !=
-                dynamic_features.has_color_write_enable ||
-            (key.state.dynamic_vertex_input != 0) !=
-                dynamic_features.has_dynamic_vertex_input) {
-            return;
+        const std::array<std::pair<bool, bool>, DropVertexInput - DropEds1 + 1> features{{
+            {key.state.extended_dynamic_state != 0, dynamic_features.has_extended_dynamic_state},
+            {key.state.extended_dynamic_state_2 != 0,
+             dynamic_features.has_extended_dynamic_state_2},
+            {key.state.extended_dynamic_state_2_logic_op != 0,
+             dynamic_features.has_extended_dynamic_state_2_logic_op},
+            {key.state.extended_dynamic_state_3_blend != 0,
+             dynamic_features.has_extended_dynamic_state_3_blend},
+            {key.state.extended_dynamic_state_3_enables != 0,
+             dynamic_features.has_extended_dynamic_state_3_enables},
+            {key.state.color_write_enable_dynamic != 0, dynamic_features.has_color_write_enable},
+            {key.state.dynamic_vertex_input != 0, dynamic_features.has_dynamic_vertex_input},
+        }};
+        for (size_t index = 0; index < features.size(); ++index) {
+            const auto [recorded, here] = features[index];
+            if (recorded != here) {
+                ++dropped[DropEds1 + index];
+                dropped_with_feature[DropEds1 + index] += recorded ? 1 : 0;
+                return;
+            }
         }
 
         const bool key_requests_provoking_last = key.state.provoking_vertex_last != 0;
         if (key_requests_provoking_last && !dynamic_features.has_provoking_vertex_last_mode) {
+            ++dropped[DropProvokingVertex];
             return;
         }
 
         const bool key_uses_transform_feedback = key.state.xfb_enabled != 0;
         if (key_uses_transform_feedback && key_requests_provoking_last &&
             !dynamic_features.has_provoking_vertex_tf_preserve) {
+            ++dropped[DropProvokingVertex];
             return;
         }
 
         const u64 hash = key.Hash();
         if (!disk_pipelines.insert(hash).second) {
+            ++dropped[DropDuplicate];
             return;
         }
         // Pipelines the last sessions used are built at boot; with LICHII_KEEP_PIPELINES, the
@@ -1175,6 +1203,40 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     compute_envs.clear();
 
     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
+    if (const size_t total_dropped = std::accumulate(dropped.begin(), dropped.end(), size_t{});
+        total_dropped != 0) {
+        static constexpr std::array<const char*, DropCount> reasons{
+            "need mesh shaders",
+            "extended dynamic state",
+            "extended dynamic state 2",
+            "extended dynamic state 2 logic op",
+            "extended dynamic state 3 blending",
+            "extended dynamic state 3 enables",
+            "dynamic color write enable",
+            "vertex input dynamic state",
+            "need the last provoking vertex mode",
+            "duplicates",
+        };
+        std::string detail;
+        for (size_t index = 0; index < DropCount; ++index) {
+            if (dropped[index] == 0) {
+                continue;
+            }
+            detail += detail.empty() ? ": " : ", ";
+            if (index >= DropEds1 && index <= DropVertexInput) {
+                // A record is left out for the first feature it differs in, so all of these
+                // differ the same way: on when recorded and off with this GPU and settings, or
+                // the reverse.
+                detail += fmt::format("{} recorded with {} {}", dropped[index], reasons[index],
+                                      dropped_with_feature[index] != 0 ? "on (off here)"
+                                                                       : "off (on here)");
+            } else {
+                detail += fmt::format("{} {}", dropped[index], reasons[index]);
+            }
+        }
+        LOG_WARNING(Render_Vulkan, "Pipeline cache: {} of {} cached graphics pipelines left out{}",
+                    total_dropped, graphics_records, detail);
+    }
     if (skipped_pipelines != 0) {
         LOG_INFO(
             Render_Vulkan,
