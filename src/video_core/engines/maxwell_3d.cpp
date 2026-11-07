@@ -33,6 +33,7 @@
 #include "video_core/nx2.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/query_cache/fake_occlusion.h"
@@ -1734,6 +1735,8 @@ void Maxwell3D::FrontNoteReport(VideoCommon::GpuSplit& split, const FrontState& 
     }
     const bool payload = report.query.report == Regs::ReportSemaphore::Report::Payload;
     split.NoteSemaphoreWrite(*device, report.payload, payload);
+    VideoCommon::Nx2AcquireStats::NoteRelease(*device,
+                                              VideoCommon::Nx2AcquireStats::Releaser::Report3D);
     if (report.query.short_query == 0) {
         // 64 bits (a timestamp follows).
         split.NoteSemaphoreWrite(*device + 4, 0, payload);
