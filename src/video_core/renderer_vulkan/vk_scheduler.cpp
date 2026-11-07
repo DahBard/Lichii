@@ -678,6 +678,7 @@ void Scheduler::ReportWorkTimes() {
         double max_ms{};
         u32 count{};
         std::array<u32, 3> max_size{};
+        bool mesh{};
     };
     std::map<std::pair<u64, u64>, Totals> by_shaders;
     double total_ms{};
@@ -692,6 +693,7 @@ void Scheduler::ReportWorkTimes() {
         const WorkTrace& item = trace_work_items[i];
         Totals& totals = by_shaders[{item.hash, item.fragment_hash}];
         totals.total_ms += ms;
+        totals.mesh = item.mesh;
         ++totals.count;
         if (ms > totals.max_ms) {
             totals.max_ms = ms;
@@ -709,9 +711,16 @@ void Scheduler::ReportWorkTimes() {
     std::string slowest;
     for (const auto& [shaders, totals] : sorted) {
         const auto& [hash, fragment_hash] = shaders;
-        slowest += fragment_hash == 0
-                       ? fmt::format(" s6:{:016x}", hash)
-                       : fmt::format(" s1:{:016x}+s5:{:016x}", hash, fragment_hash);
+        if (totals.mesh) {
+            // m1: the task or mesh shader of a mesh pipeline.
+            slowest += fragment_hash == 0
+                           ? fmt::format(" m1:{:016x}", hash)
+                           : fmt::format(" m1:{:016x}+s5:{:016x}", hash, fragment_hash);
+        } else {
+            slowest += fragment_hash == 0
+                           ? fmt::format(" s6:{:016x}", hash)
+                           : fmt::format(" s1:{:016x}+s5:{:016x}", hash, fragment_hash);
+        }
         slowest += fmt::format("={:.3f}ms/{}x(max {:.3f}ms size {}x{}x{})", totals.total_ms,
                                totals.count, totals.max_ms, totals.max_size[0],
                                totals.max_size[1], totals.max_size[2]);
@@ -785,9 +794,10 @@ void Scheduler::TraceGpuSubmission() {
             }
             LOG_INFO(Render_Vulkan,
                      "DKB gpu_submission renderer_frame={} tick={} gpu_ms={:.3f} "
-                     "draw_attempts={} dispatch_attempts={} shaders={} untracked_uses={}",
+                     "draw_attempts={} mesh_draws={} dispatch_attempts={} shaders={} "
+                     "untracked_uses={}",
                      trace_sample_frame, work.tick, duration_ms, work.draw_attempts,
-                     work.dispatch_attempts, shaders, work.untracked_uses);
+                     work.mesh_draws, work.dispatch_attempts, shaders, work.untracked_uses);
         }
         ReportWorkTimes();
         trace_gpu_tick = 0;

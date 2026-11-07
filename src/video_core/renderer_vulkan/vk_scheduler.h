@@ -83,16 +83,20 @@ public:
     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
-    /// submission. A draw passes its vertex and fragment hashes, a dispatch its compute hash.
+    /// submission. A draw passes its vertex (or task/mesh) and fragment hashes, a dispatch its
+    /// compute hash.
     template <typename Func>
     void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
-                      std::array<u32, 3> size, Func&& work) {
+                      std::array<u32, 3> size, Func&& work, bool mesh = false) {
+        if (mesh && trace_gpu_recording) {
+            ++trace_work.mesh_draws;
+        }
         if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
             work();
             return;
         }
         const u32 query = trace_work_count * 2;
-        trace_work_items[trace_work_count++] = {hash, fragment_hash, size};
+        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, mesh};
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
         work();
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
@@ -461,6 +465,7 @@ private:
         };
         u64 tick{};
         u32 draw_attempts{};
+        u32 mesh_draws{};
         u32 dispatch_attempts{};
         u32 num_shaders{};
         u32 untracked_uses{};
@@ -472,8 +477,10 @@ private:
     struct WorkTrace {
         u64 hash{};
         u64 fragment_hash{};
-        /// Dispatch grid, or vertex and instance counts of a draw; zero when indirect.
+        /// Dispatch grid, or vertex and instance counts of a draw (task groups of a mesh draw);
+        /// zero when indirect.
         std::array<u32, 3> size{};
+        bool mesh{};
     };
     vk::QueryPool trace_work_pool;
     std::vector<WorkTrace> trace_work_items;

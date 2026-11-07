@@ -804,11 +804,14 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
         }
 
         if (mesh_draw) {
-            scheduler.Record([this, groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, groups = draw_params.num_vertices,
+                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
+                scheduler.TraceGpuWork(
+                    cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
+                    [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); }, true);
             });
             return;
         }
@@ -876,12 +879,15 @@ void RasterizerVulkan::DrawIndirect() {
         const auto& offset = indirect_buffer.second;
         if (params.is_byte_count) {
             scheduler.Record([this, buffer_obj = buffer->Handle(), offset,
-                              stride = params.stride](vk::CommandBuffer cmdbuf) {
+                              stride = params.stride,
+                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
-                                                static_cast<u32>(stride));
+                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
+                    cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
+                                                    static_cast<u32>(stride));
+                });
             });
             return;
         }
@@ -890,20 +896,24 @@ void RasterizerVulkan::DrawIndirect() {
             const auto& draw_buffer = count.first;
             const auto& offset_base = count.second;
             scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(),
-                              buffer_obj = buffer->Handle(), offset_base, offset,
-                              params](vk::CommandBuffer cmdbuf) {
+                              buffer_obj = buffer->Handle(), offset_base, offset, params,
+                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                if (params.is_indexed) {
-                    cmdbuf.DrawIndexedIndirectCount(
-                        buffer_obj, offset, draw_buffer_obj, offset_base,
-                        static_cast<u32>(params.max_draw_counts), static_cast<u32>(params.stride));
-                } else {
-                    cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj, offset_base,
-                                             static_cast<u32>(params.max_draw_counts),
-                                             static_cast<u32>(params.stride));
-                }
+                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
+                    if (params.is_indexed) {
+                        cmdbuf.DrawIndexedIndirectCount(buffer_obj, offset, draw_buffer_obj,
+                                                        offset_base,
+                                                        static_cast<u32>(params.max_draw_counts),
+                                                        static_cast<u32>(params.stride));
+                    } else {
+                        cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj,
+                                                 offset_base,
+                                                 static_cast<u32>(params.max_draw_counts),
+                                                 static_cast<u32>(params.stride));
+                    }
+                });
             });
             return;
         }
