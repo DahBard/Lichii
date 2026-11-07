@@ -346,6 +346,11 @@ Own changes:
   boot, so the owner keeps a copy. With 22,000 records, `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` builds
   them all at boot (~0.45 MB of driver memory each); without it 4,096 build at boot and the rest
   in the background.
+- r20 boot with that cache (owner keeps `EDEN_NX2_PRELOAD_ALL_PIPELINES=1`, 16 GB VRAM): "started
+  from the version 53 cache", all 21,062 graphics records from another driver, and all 21,062 left
+  out as "recorded with extended dynamic state 2 logic op on (off here)"; Total Pipeline Count
+  1707 (the compute ones). eb2b411de: a key holds op 0 while the logic op is off (Refresh and at
+  load), so those records turn into this device's form unless their logic op is on.
 - Sharkiix (2026-11-07): Shakoquo/Lichii-sharkiix-version, AMD- and Ocarina-focused, tested on an RX
   9060 XT. No history of its own: v1/v2 are Lichii `99ac3d59` plus one commit (faster tensor
   emulation, semaphore acquire resumes, texture cache GC min age, the sampler and blend fixes), 3.0
