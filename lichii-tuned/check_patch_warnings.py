@@ -103,8 +103,9 @@ def main() -> int:
             target.write_text("".join(
                 l for l in text.splitlines(keepends=True)
                 if not re.search(r'diagnostic ignored "-W(shadow|conversion)"', l)))
-        paths = ["-I", overlay, "-I", "src", "-I", "src/video_core", "-I", "externals",
-                 "-I", "externals/glad/include", "-I", "externals/tz", *includes]
+        paths = ["-I", overlay, "-I", "src", "-I", "src/video_core", "-I", "src/dynarmic/src",
+                 "-I", "src/dynarmic/src/dynarmic", "-I", "externals", "-I",
+                 "externals/glad/include", "-I", "externals/tz", *includes]
 
         def compile_unit(unit: str, flags: list[str]):
             extra = ["-Wconversion", "-Wno-sign-conversion"] if unit.startswith(

@@ -71,10 +71,10 @@ index 0502b3f..48e0ad1 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000..da7f173
+index 0000000..045a844
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,87 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -106,6 +106,11 @@ index 0000000..da7f173
 +   threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
 +   every cached pipeline is compiled at boot, not just the ones the last sessions used.
 +   Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
++ * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
++   load-acquires) and reads the game's clock without leaving the generated code.
++ * Ocarina's built-in Dynamic FPS mod takes each frame's own time instead of an average of the
++   last 8 frames, so the game no longer runs fast for a moment after a slow stretch
++   (LICHII_DYNFPS_SMOOTHING=8 brings the average back).
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -137,12 +142,11 @@ index 0000000..da7f173
 +                              pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
 + trace-preflush.bat           ab-7 with the logging of perf-trace.bat
 + trace-fp16.bat               ab-9 with the logging of perf-trace.bat
-+ trace-dynfps-raw.bat         Ocarina's Dynamic FPS follows each frame's own time instead of an
-+                              8-frame average (LICHII_DYNFPS_SMOOTHING=1): the average makes the
-+                              game run fast for a moment after slow frames; logs like perf-trace
-+ trace-dynfps-official.bat    Dynamic FPS keeps real speed only down to 20 fps as in official
-+                              builds (LICHII_DYNFPS_MIN_FPS=20; this build: 10 fps), so the game
-+                              slows down below 20 fps; logs like perf-trace.bat
++ trace-flush4096.bat          submits GPU work every 4096 draws instead of every 128
++                              (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
++ trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
++                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
++                              like perf-trace.bat
 + perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
 +                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
 +                              EDEN_DKB_FRAME_TRACE=1)
@@ -285,29 +289,16 @@ index 0000000..7f0dcdb
 +rem EDEN_DKB_FRAME_TRACE=1); the log is %APPDATA%\eden\log\eden_log.txt.
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-dynfps-official.bat b/dist/lichii-tuned/trace-dynfps-official.bat
+diff --git a/dist/lichii-tuned/trace-flush4096.bat b/dist/lichii-tuned/trace-flush4096.bat
 new file mode 100644
-index 0000000..db81d68
+index 0000000..57a9743
 --- /dev/null
-+++ b/dist/lichii-tuned/trace-dynfps-official.bat
-@@ -0,0 +1,6 @@
++++ b/dist/lichii-tuned/trace-flush4096.bat
+@@ -0,0 +1,5 @@
 +@echo off
-+rem Dynamic FPS keeps real speed only down to 20 fps, as in official builds
-+rem (LICHII_DYNFPS_MIN_FPS=20; this build: 10 fps), with the logging of perf-trace.bat.
-+rem Below 20 fps the game slows down.
-+set LICHII_DYNFPS_MIN_FPS=20&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-dynfps-raw.bat b/dist/lichii-tuned/trace-dynfps-raw.bat
-new file mode 100644
-index 0000000..6c74d55
---- /dev/null
-+++ b/dist/lichii-tuned/trace-dynfps-raw.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem Dynamic FPS takes each frame's own time instead of an 8-frame average
-+rem (LICHII_DYNFPS_SMOOTHING=1), with the logging of perf-trace.bat. The average keeps the
-+rem game running fast for a moment after slow frames; this should not.
-+set LICHII_DYNFPS_SMOOTHING=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++rem Submits GPU work every 4096 draws instead of every 128 (EDEN_NX2_FLUSH_DRAWS=4096),
++rem with the logging of perf-trace.bat: fewer, larger submissions to the GPU.
++set EDEN_NX2_FLUSH_DRAWS=4096&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-fp16.bat b/dist/lichii-tuned/trace-fp16.bat
 new file mode 100644
@@ -319,6 +310,18 @@ index 0000000..a9068a7
 +rem ab-9-amd-fp16.bat with the logging of perf-trace.bat: float16 shader math stays on the
 +rem AMD driver (EDEN_AMD_FP16=1). Look for wrong colors.
 +set EDEN_AMD_FP16=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-old-jit.bat b/dist/lichii-tuned/trace-old-jit.bat
+new file mode 100644
+index 0000000..3432164
+--- /dev/null
++++ b/dist/lichii-tuned/trace-old-jit.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem The emulated CPU as before round 7: memory barriers as fences and the counter read
++rem through a host call (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), with the logging of
++rem perf-trace.bat. Compare with perf-trace.bat.
++set LICHII_JIT_TSO=0&& set LICHII_JIT_INLINE_CNTPCT=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-preflush.bat b/dist/lichii-tuned/trace-preflush.bat
 new file mode 100644
@@ -1300,6 +1303,45 @@ index 0000000..6ba3b63
 +void SetCurrentThreadCoreRole(CoreRole role, const char* thread_name);
 +
 +} // namespace Common::Windows
+diff --git a/src/core/arm/dynarmic/arm_dynarmic_64.cpp b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
+index b489e79..825ff41 100644
+--- a/src/core/arm/dynarmic/arm_dynarmic_64.cpp
++++ b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
+@@ -354,6 +354,34 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
+     config.wall_clock_cntpct = m_uses_wall_clock;
+     config.enable_cycle_counting = !m_uses_wall_clock;
+ 
++#if defined(ARCHITECTURE_x86_64)
++    // x86-64 keeps loads and stores in order: DMB LD and DMB ST emit nothing and load-acquires are
++    // plain loads instead of LOCK XADD. LICHII_JIT_TSO=0 keeps the fences.
++    static const bool tso_barriers = [] {
++        const char* const value = std::getenv("LICHII_JIT_TSO");
++        return value == nullptr || value[0] != '0';
++    }();
++    config.x64_tso_barriers = tso_barriers;
++    // CNTPCT_EL0 inline from the TSC, the value GetClockTicks returns at the normal CPU clock
++    // without core speed sync, keeping GetCNTPCT's pause for polling loops (EDEN_NX2_CNTPCT_PAUSE).
++    // LICHII_JIT_INLINE_CNTPCT=0 calls GetCNTPCT instead.
++    static const bool inline_cntpct = [] {
++        const char* const value = std::getenv("LICHII_JIT_INLINE_CNTPCT");
++        return value == nullptr || value[0] != '0';
++    }();
++    if (inline_cntpct && m_uses_wall_clock && Common::g_wall_clock.IsNative() &&
++        Settings::values.cpu_clock.GetValue() == Settings::CpuClock::Normal &&
++        !Settings::values.sync_core_speed.GetValue()) {
++        static const bool pause_spins = [] {
++            const char* const value = std::getenv("EDEN_NX2_CNTPCT_PAUSE");
++            return value == nullptr || value[0] != '0';
++        }();
++        config.inline_cntpct_factor =
++            Common::g_wall_clock.cntpct_rdtsc_factor.load(std::memory_order_relaxed);
++        config.inline_cntpct_spin_ticks = pause_spins ? m_cb->m_spin_ticks : 0;
++    }
++#endif
++
+     // Code cache size
+ #if defined(ARCHITECTURE_arm64) || defined(__sun__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__OpenBSD__)
+     config.code_cache_size = std::uint32_t(128_MiB);
 diff --git a/src/core/core.cpp b/src/core/core.cpp
 index 7b33e18..22725ea 100644
 --- a/src/core/core.cpp
@@ -1334,7 +1376,7 @@ index dfc3f6f..aab922f 100644
              has_started = true;
  
 diff --git a/src/core/file_sys/patch_manager.cpp b/src/core/file_sys/patch_manager.cpp
-index 8602887..28aaba7 100644
+index 8602887..0e3ca2f 100644
 --- a/src/core/file_sys/patch_manager.cpp
 +++ b/src/core/file_sys/patch_manager.cpp
 @@ -7,6 +7,7 @@
@@ -1356,28 +1398,30 @@ index 8602887..28aaba7 100644
      0x01, 0x0E, 0xEB, 0xCB, 0x81, 0x8B, 0x9A, 0x4C, 0x05, 0x40, 0xF9, 0x4C, 0x00, 0x00, 0xB5,
      0xEC, 0x03, 0x0B, 0xAA, 0x6E, 0x01, 0x0C, 0xCB, 0x8C, 0x0D, 0x8E, 0x8B, 0x4C, 0x05, 0x00,
      0xF9, 0x82, 0x01, 0x23, 0x9E, 0xA3, 0x01, 0x23, 0x9E, 0x42, 0x18, 0x23, 0x1E, 0x42, 0x08,
-@@ -107,6 +110,37 @@ constexpr std::array BUILTIN_PATCHES{
+@@ -107,6 +110,39 @@ constexpr std::array BUILTIN_PATCHES{
      },
  };
  
 +// The Dynamic FPS routine replaces the game's per-frame time step with the measured frame time,
 +// averaged over about 8 frames. After slow frames the average stays long for a while, so the game
-+// runs faster than real time until it settles. LICHII_DYNFPS_SMOOTHING=<1|2|4|8> sets how many
-+// frames it averages over (1: each frame's own time). LICHII_DYNFPS_MIN_FPS=<5-60> sets the lowest
-+// frame rate kept at real speed (10 in this build, 20 in Dark's mod); below it the game slows down.
++// runs faster than real time until it settles. This build takes each frame's own time instead;
++// LICHII_DYNFPS_SMOOTHING=<1|2|4|8> sets how many frames it averages over (8: Dark's mod).
++// LICHII_DYNFPS_MIN_FPS=<5-60> sets the lowest frame rate kept at real speed (10 in this build,
++// 20 in Dark's mod); below it the game slows down.
 +void TuneDynamicFps(std::vector<u8>& out, size_t routine_offset) {
 +    const size_t routine = sizeof(Loader::NSOHeader) + routine_offset;
++    int frames = 1;
 +    if (const char* const value = std::getenv("LICHII_DYNFPS_SMOOTHING")) {
-+        const int frames = std::atoi(value);
-+        if (frames == 1 || frames == 2 || frames == 4 || frames == 8) {
-+            const u32 shift = frames == 1 ? 0 : frames == 2 ? 1 : frames == 4 ? 2 : 3;
-+            const u32 average = 0x8B8E018CU | (shift << 10); // add x12, x12, x14, asr #shift
-+            std::memcpy(out.data() + routine + 0x44, &average, sizeof(average));
-+            LOG_INFO(Loader, "    - Dynamic FPS averages the frame time over {} frame(s)", frames);
-+        } else {
++        frames = std::atoi(value);
++        if (frames != 1 && frames != 2 && frames != 4 && frames != 8) {
 +            LOG_WARNING(Loader, "    - LICHII_DYNFPS_SMOOTHING={} ignored: use 1, 2, 4 or 8", value);
++            frames = 1;
 +        }
 +    }
++    const u32 shift = frames == 1 ? 0 : frames == 2 ? 1 : frames == 4 ? 2 : 3;
++    const u32 average = 0x8B8E018CU | (shift << 10); // add x12, x12, x14, asr #shift
++    std::memcpy(out.data() + routine + 0x44, &average, sizeof(average));
++    LOG_INFO(Loader, "    - Dynamic FPS averages the frame time over {} frame(s)", frames);
 +    if (const char* const value = std::getenv("LICHII_DYNFPS_MIN_FPS")) {
 +        const int fps = std::atoi(value);
 +        if (fps >= 5 && fps <= 60) {
@@ -1394,7 +1438,7 @@ index 8602887..28aaba7 100644
  enum class TitleVersionFormat : u8 {
      ThreeElements, ///< vX.Y.Z
      FourElements,  ///< vX.Y.Z.W
-@@ -613,6 +647,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
+@@ -613,6 +649,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
          }
          LOG_INFO(Loader, "    - Applying built-in patch \"{}\" ({} records) to {}", patch.name,
                   patch.records.size(), name);
@@ -1570,6 +1614,185 @@ index fd289eb..8c558eb 100644
  
          if (current_page_table->fastmem_arena) {
              Common::MemoryPermission perm{};
+diff --git a/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp b/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp
+index 2307226..ac67282 100644
+--- a/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp
++++ b/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp
+@@ -559,6 +559,32 @@ void A64EmitX64::EmitA64GetCNTFRQ(A64EmitContext& ctx, IR::Inst* inst) {
+ }
+ 
+ void A64EmitX64::EmitA64GetCNTPCT(A64EmitContext& ctx, IR::Inst* inst) {
++    if (conf.wall_clock_cntpct && conf.inline_cntpct_factor != 0) {
++        // The high half of TSC * factor, without the register spills of a host call.
++        const Xbyak::Reg64 low = ctx.reg_alloc.ScratchGpr(code, HostLoc::RAX);
++        const Xbyak::Reg64 high = ctx.reg_alloc.ScratchGpr(code, HostLoc::RDX);
++        const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr(code);
++        code.lfence();
++        code.rdtsc();
++        code.shl(high, 32);
++        code.or_(low, high);
++        code.mov(tmp, conf.inline_cntpct_factor);
++        code.mul(tmp);
++        if (conf.inline_cntpct_spin_ticks != 0) {
++            // Two reads this close together are a polling loop: pause, as GetCNTPCT does.
++            Xbyak::Label done;
++            code.mov(tmp, high);
++            code.sub(tmp, qword[code.ABI_JIT_PTR + offsetof(A64JitState, last_cntpct)]);
++            code.mov(qword[code.ABI_JIT_PTR + offsetof(A64JitState, last_cntpct)], high);
++            code.cmp(tmp, static_cast<u32>(conf.inline_cntpct_spin_ticks));
++            code.jae(done);
++            code.pause();
++            code.pause();
++            code.L(done);
++        }
++        ctx.reg_alloc.DefineValue(code, inst, high);
++        return;
++    }
+     ctx.reg_alloc.HostCall(code, inst);
+     if (!conf.wall_clock_cntpct) {
+         code.UpdateTicks();
+diff --git a/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp b/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp
+index bb07212..7b03dea 100644
+--- a/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp
++++ b/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp
+@@ -258,7 +258,10 @@ private:
+         // LocationDescriptor ctor() does important ops (like tflags) do not skip
+         auto const arch_descriptor = A64::LocationDescriptor{descriptor};
+         ir_block.Reset(arch_descriptor);
+-        A64::Translate(ir_block, arch_descriptor, get_code, {conf.define_unpredictable_behaviour, conf.wall_clock_cntpct});
++        A64::Translate(ir_block, arch_descriptor, get_code,
++                       {.define_unpredictable_behaviour = conf.define_unpredictable_behaviour,
++                        .wall_clock_cntpct = conf.wall_clock_cntpct,
++                        .elide_load_store_barriers = conf.x64_tso_barriers});
+         Optimization::Optimize(ir_block, conf, polyfill_options);
+         return emitter.Emit(ir_block).entrypoint;
+     }
+diff --git a/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h b/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h
+index c3d8b04..c7fa569 100644
+--- a/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h
++++ b/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h
+@@ -56,6 +56,9 @@ struct A64JitState {
+     std::array<u64, RSB_SIZE> rsb_location_descriptors;
+     std::array<u64, RSB_SIZE> rsb_codeptrs;
+ 
++    // The last inline CNTPCT_EL0 read, to tell a polling loop (UserConfig::inline_cntpct_spin_ticks).
++    u64 last_cntpct = 0;
++
+     u32 GetPstate() const {
+         return NZCV::FromX64(cpsr_nzcv);
+     }
+diff --git a/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc b/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc
+index 689e507..a2dbcad 100644
+--- a/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc
++++ b/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc
+@@ -86,6 +86,8 @@ template<std::size_t bitsize, auto callback>
+ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
+     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+     const bool ordered = IsOrdered(args[2].GetImmediateAccType());
++    // On x86-64 a plain load already acquires (store-releases keep their XCHG).
++    const bool locked_read = ordered && (bitsize == 128 || !conf.x64_tso_barriers);
+     const auto fastmem_marker = ShouldFastmem(ctx, inst);
+ 
+     if (!conf.page_table && !fastmem_marker) {
+@@ -126,7 +128,7 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
+         bool require_abort_handling = false;
+         const auto src_ptr = EmitFastmemVAddr(code, ctx, *abort, vaddr, require_abort_handling);
+ 
+-        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered);
++        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, locked_read);
+ 
+         ctx.deferred_emits.emplace_back([=, this, &ctx] {
+             code.L(*abort);
+@@ -141,7 +143,7 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
+         // Use page table
+         ASSERT(conf.page_table);
+         const auto src_ptr = EmitVAddrLookup(code, ctx, bitsize, *abort, vaddr);
+-        EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered);
++        EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, locked_read);
+ 
+         ctx.deferred_emits.emplace_back([=, this, &ctx] {
+             code.L(*abort);
+@@ -374,7 +376,9 @@ void AxxEmitX64::EmitExclusiveReadMemoryInline(AxxEmitContext& ctx, IR::Inst* in
+ 
+         const auto src_ptr = EmitFastmemVAddr(code, ctx, *abort, vaddr, require_abort_handling);
+ 
+-        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered);
++        // The exclusive store compares with a locked CMPXCHG, so a plain load is enough here.
++        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr,
++                                                         bitsize == 128 || !conf.x64_tso_barriers);
+ 
+         AddFastmemPatch(location, code.getCurr(), wrapped_fn, *fastmem_marker, conf.recompile_on_exclusive_fastmem_failure);
+ 
+diff --git a/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h b/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h
+index 61033eb..2b6ba5e 100644
+--- a/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h
++++ b/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h
+@@ -38,6 +38,9 @@ struct TranslationOptions {
+     /// If this is false, we treat the instruction as a NOP.
+     /// If this is true, we emit an ExceptionRaised instruction.
+     bool hook_hint_instructions = true;
++
++    /// If this is true, DMB LD and DMB ST emit no IR: the host keeps loads and stores in order.
++    bool elide_load_store_barriers = false;
+ };
+ 
+ /**
+diff --git a/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp b/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp
+index c60fdc3..f8b801a 100644
+--- a/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp
++++ b/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp
+@@ -86,7 +86,13 @@ bool TranslatorVisitor::DSB(Imm<4> /*CRm*/) {
+     return true;
+ }
+ 
+-bool TranslatorVisitor::DMB(Imm<4> /*CRm*/) {
++bool TranslatorVisitor::DMB(Imm<4> CRm) {
++    // CRm<1:0> is the access type: 01 orders loads (DMB LD), 10 stores (DMB ST), 11 both. Other
++    // encodings act as full barriers.
++    const u32 access = CRm.ZeroExtend() & 3U;
++    if (options.elide_load_store_barriers && (access == 1U || access == 2U)) {
++        return true;
++    }
+     ir.DataMemoryBarrier();
+     return true;
+ }
+diff --git a/src/dynarmic/src/dynarmic/interface/A32/config.h b/src/dynarmic/src/dynarmic/interface/A32/config.h
+index 49063ed..7e3b413 100644
+--- a/src/dynarmic/src/dynarmic/interface/A32/config.h
++++ b/src/dynarmic/src/dynarmic/interface/A32/config.h
+@@ -239,6 +239,9 @@ struct UserConfig {
+     /// to avoid writting certain unnecessary code only needed for cycle timers.
+     bool wall_clock_cntpct = false;
+ 
++    /// x86-64 hosts: load-acquires are plain loads (see A64::UserConfig::x64_tso_barriers).
++    bool x64_tso_barriers = false;
++
+     /// This allows accurately emulating protection fault handlers. If true, we check
+     /// for exit after every data memory access by the emulated program.
+     bool check_halt_on_memory_access = false;
+diff --git a/src/dynarmic/src/dynarmic/interface/A64/config.h b/src/dynarmic/src/dynarmic/interface/A64/config.h
+index 859aeba..8dade0c 100644
+--- a/src/dynarmic/src/dynarmic/interface/A64/config.h
++++ b/src/dynarmic/src/dynarmic/interface/A64/config.h
+@@ -293,6 +293,18 @@ struct UserConfig {
+     /// to avoid writting certain unnecessary code only needed for cycle timers.
+     bool wall_clock_cntpct = false;
+ 
++    /// x86-64 hosts keep loads and stores in order (total store order): DMB LD and DMB ST emit
++    /// nothing, and load-acquires are plain loads. Store-releases keep their XCHG, so a
++    /// store-release followed by a load-acquire stays ordered.
++    bool x64_tso_barriers = false;
++
++    /// x86-64 hosts with an invariant TSC: CNTPCT_EL0 reads are the high 64 bits of
++    /// TSC * inline_cntpct_factor, computed inline instead of calling GetCNTPCT (0: call it).
++    /// Two reads less than inline_cntpct_spin_ticks apart pause twice, as GetCNTPCT does for
++    /// polling loops (0: never pause).
++    std::uint64_t inline_cntpct_factor = 0;
++    std::uint64_t inline_cntpct_spin_ticks = 0;
++
+     /// This allows accurately emulating protection fault handlers. If true, we check
+     /// for exit after every data memory access by the emulated program.
+     bool check_halt_on_memory_access = false;
 diff --git a/src/frontend_common/config.cpp b/src/frontend_common/config.cpp
 index 698385e..8186377 100644
 --- a/src/frontend_common/config.cpp
@@ -6613,7 +6836,7 @@ index 08f00f2..80f25db 100644
      DynamicFeatures dynamic_features;
      PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
-index 628dd72..c6a2ace 100644
+index 628dd72..0c16f22 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 @@ -7,6 +7,7 @@
@@ -6651,7 +6874,79 @@ index 628dd72..c6a2ace 100644
      }
  
      query_cache.NotifySegment(true);
-@@ -933,6 +938,18 @@ void RasterizerVulkan::DrawIndirect() {
+@@ -799,11 +804,14 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
+         }
+ 
+         if (mesh_draw) {
+-            scheduler.Record([this, groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
++            scheduler.Record([this, groups = draw_params.num_vertices,
++                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                 if (scheduler.GraphicsPipelineMissing()) {
+                     return;
+                 }
+-                cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
++                scheduler.TraceGpuWork(
++                    cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
++                    [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); }, true);
+             });
+             return;
+         }
+@@ -871,12 +879,15 @@ void RasterizerVulkan::DrawIndirect() {
+         const auto& offset = indirect_buffer.second;
+         if (params.is_byte_count) {
+             scheduler.Record([this, buffer_obj = buffer->Handle(), offset,
+-                              stride = params.stride](vk::CommandBuffer cmdbuf) {
++                              stride = params.stride,
++                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                 if (scheduler.GraphicsPipelineMissing()) {
+                     return;
+                 }
+-                cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
+-                                                static_cast<u32>(stride));
++                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
++                    cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
++                                                    static_cast<u32>(stride));
++                });
+             });
+             return;
+         }
+@@ -885,20 +896,24 @@ void RasterizerVulkan::DrawIndirect() {
+             const auto& draw_buffer = count.first;
+             const auto& offset_base = count.second;
+             scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(),
+-                              buffer_obj = buffer->Handle(), offset_base, offset,
+-                              params](vk::CommandBuffer cmdbuf) {
++                              buffer_obj = buffer->Handle(), offset_base, offset, params,
++                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                 if (scheduler.GraphicsPipelineMissing()) {
+                     return;
+                 }
+-                if (params.is_indexed) {
+-                    cmdbuf.DrawIndexedIndirectCount(
+-                        buffer_obj, offset, draw_buffer_obj, offset_base,
+-                        static_cast<u32>(params.max_draw_counts), static_cast<u32>(params.stride));
+-                } else {
+-                    cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj, offset_base,
+-                                             static_cast<u32>(params.max_draw_counts),
+-                                             static_cast<u32>(params.stride));
+-                }
++                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
++                    if (params.is_indexed) {
++                        cmdbuf.DrawIndexedIndirectCount(buffer_obj, offset, draw_buffer_obj,
++                                                        offset_base,
++                                                        static_cast<u32>(params.max_draw_counts),
++                                                        static_cast<u32>(params.stride));
++                    } else {
++                        cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj,
++                                                 offset_base,
++                                                 static_cast<u32>(params.max_draw_counts),
++                                                 static_cast<u32>(params.stride));
++                    }
++                });
+             });
+             return;
+         }
+@@ -933,6 +948,18 @@ void RasterizerVulkan::DrawIndirect() {
      buffer_cache.SetDrawIndirect(nullptr);
  }
  
@@ -6670,7 +6965,7 @@ index 628dd72..c6a2ace 100644
  void RasterizerVulkan::TraceDrawFailure(std::string_view reason) {
      if (!Common::DkbFrameTrace::Enabled()) {
          return;
-@@ -1094,7 +1111,7 @@ void RasterizerVulkan::DrawTexture() {
+@@ -1094,7 +1121,7 @@ void RasterizerVulkan::DrawTexture() {
      texture_cache.SynchronizeDescriptors(false);
      texture_cache.UpdateRenderTargets(false);
  
@@ -6679,7 +6974,7 @@ index 628dd72..c6a2ace 100644
  
      query_cache.NotifySegment(true);
      query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64, maxwell3d->regs.zpass_pixel_count_enable);
-@@ -1511,6 +1528,14 @@ void RasterizerVulkan::ResetCounter(VideoCommon::QueryType type) {
+@@ -1511,6 +1538,14 @@ void RasterizerVulkan::ResetCounter(VideoCommon::QueryType type) {
  void RasterizerVulkan::Query(GPUVAddr gpu_addr, VideoCommon::QueryType type,
                               VideoCommon::QueryPropertiesFlags flags, u32 payload, u32 subreport) {
      query_cache.CounterReport(gpu_addr, type, flags, payload, subreport);
@@ -6694,7 +6989,7 @@ index 628dd72..c6a2ace 100644
  }
  
  void RasterizerVulkan::BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr,
-@@ -1707,6 +1732,22 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
+@@ -1707,6 +1742,22 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
      pipeline_cache.InvalidateRegion(addr, size);
  }
  
@@ -6717,7 +7012,7 @@ index 628dd72..c6a2ace 100644
  bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {
      if (addr == 0 || size == 0) return true;
      {
-@@ -1767,6 +1808,38 @@ void RasterizerVulkan::ReleaseFences(bool force) {
+@@ -1767,6 +1818,38 @@ void RasterizerVulkan::ReleaseFences(bool force) {
      fence_manager.WaitPendingFences(force);
  }
  
@@ -6756,7 +7051,7 @@ index 628dd72..c6a2ace 100644
  void RasterizerVulkan::FlushAndInvalidateRegion(DAddr addr, u64 size,
                                                  VideoCommon::CacheType which) {
      if (Settings::IsGPULevelHigh()) {
-@@ -2331,7 +2404,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
+@@ -2331,7 +2414,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
      return DmaBufferImageCopy<true>(copy_info, buffer_operand, image_operand);
  }
  
@@ -6765,7 +7060,7 @@ index 628dd72..c6a2ace 100644
      auto& regs = maxwell3d->regs;
      auto& flags = maxwell3d->dirty.flags;
      const auto topology = maxwell3d->draw_manager.draw_state.topology;
-@@ -2403,7 +2476,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
+@@ -2403,7 +2486,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
      }
  
      if (device.IsExtExtendedDynamicState3BlendingSupported()) {
@@ -6774,7 +7069,7 @@ index 628dd72..c6a2ace 100644
      } else if (device.IsExtColorWriteEnableSupported()) {
          UpdateColorWriteEnable(regs);
      }
-@@ -3039,12 +3112,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
+@@ -3039,12 +3122,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
      scheduler.Record([op](vk::CommandBuffer cmdbuf) { cmdbuf.SetLogicOpEXT(op); });
  }
  
@@ -6796,7 +7091,7 @@ index 628dd72..c6a2ace 100644
          std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> setup_masks{};
          for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
              const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
-@@ -3061,6 +3140,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
+@@ -3061,6 +3150,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
              if (mask.A) {
                  current |= VK_COLOR_COMPONENT_A_BIT;
              }
@@ -6882,7 +7177,7 @@ index c33b0ed..ac33832 100644
      struct IndirectTrace {
          vk::Buffer readback;
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-index 19bbcd9..424f505 100644
+index 19bbcd9..74f2ef0 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 @@ -14,6 +14,7 @@
@@ -6962,6 +7257,103 @@ index 19bbcd9..424f505 100644
  
      const auto TryPopQueue{[this](auto& work) -> bool {
          if (work_queue.empty()) {
+@@ -643,6 +678,7 @@ void Scheduler::ReportWorkTimes() {
+         double max_ms{};
+         u32 count{};
+         std::array<u32, 3> max_size{};
++        bool mesh{};
+     };
+     std::map<std::pair<u64, u64>, Totals> by_shaders;
+     double total_ms{};
+@@ -657,6 +693,7 @@ void Scheduler::ReportWorkTimes() {
+         const WorkTrace& item = trace_work_items[i];
+         Totals& totals = by_shaders[{item.hash, item.fragment_hash}];
+         totals.total_ms += ms;
++        totals.mesh = item.mesh;
+         ++totals.count;
+         if (ms > totals.max_ms) {
+             totals.max_ms = ms;
+@@ -674,9 +711,16 @@ void Scheduler::ReportWorkTimes() {
+     std::string slowest;
+     for (const auto& [shaders, totals] : sorted) {
+         const auto& [hash, fragment_hash] = shaders;
+-        slowest += fragment_hash == 0
+-                       ? fmt::format(" s6:{:016x}", hash)
+-                       : fmt::format(" s1:{:016x}+s5:{:016x}", hash, fragment_hash);
++        if (totals.mesh) {
++            // m1: the task or mesh shader of a mesh pipeline.
++            slowest += fragment_hash == 0
++                           ? fmt::format(" m1:{:016x}", hash)
++                           : fmt::format(" m1:{:016x}+s5:{:016x}", hash, fragment_hash);
++        } else {
++            slowest += fragment_hash == 0
++                           ? fmt::format(" s6:{:016x}", hash)
++                           : fmt::format(" s1:{:016x}+s5:{:016x}", hash, fragment_hash);
++        }
+         slowest += fmt::format("={:.3f}ms/{}x(max {:.3f}ms size {}x{}x{})", totals.total_ms,
+                                totals.count, totals.max_ms, totals.max_size[0],
+                                totals.max_size[1], totals.max_size[2]);
+@@ -750,9 +794,10 @@ void Scheduler::TraceGpuSubmission() {
+             }
+             LOG_INFO(Render_Vulkan,
+                      "DKB gpu_submission renderer_frame={} tick={} gpu_ms={:.3f} "
+-                     "draw_attempts={} dispatch_attempts={} shaders={} untracked_uses={}",
++                     "draw_attempts={} mesh_draws={} dispatch_attempts={} shaders={} "
++                     "untracked_uses={}",
+                      trace_sample_frame, work.tick, duration_ms, work.draw_attempts,
+-                     work.dispatch_attempts, shaders, work.untracked_uses);
++                     work.mesh_draws, work.dispatch_attempts, shaders, work.untracked_uses);
+         }
+         ReportWorkTimes();
+         trace_gpu_tick = 0;
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.h b/src/video_core/renderer_vulkan/vk_scheduler.h
+index f977051..a680297 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.h
++++ b/src/video_core/renderer_vulkan/vk_scheduler.h
+@@ -83,16 +83,20 @@ public:
+     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
+     void TraceComputePipeline(u64 hash);
+     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
+-    /// submission. A draw passes its vertex and fragment hashes, a dispatch its compute hash.
++    /// submission. A draw passes its vertex (or task/mesh) and fragment hashes, a dispatch its
++    /// compute hash.
+     template <typename Func>
+     void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
+-                      std::array<u32, 3> size, Func&& work) {
++                      std::array<u32, 3> size, Func&& work, bool mesh = false) {
++        if (mesh && trace_gpu_recording) {
++            ++trace_work.mesh_draws;
++        }
+         if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
+             work();
+             return;
+         }
+         const u32 query = trace_work_count * 2;
+-        trace_work_items[trace_work_count++] = {hash, fragment_hash, size};
++        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, mesh};
+         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
+         work();
+         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
+@@ -461,6 +465,7 @@ private:
+         };
+         u64 tick{};
+         u32 draw_attempts{};
++        u32 mesh_draws{};
+         u32 dispatch_attempts{};
+         u32 num_shaders{};
+         u32 untracked_uses{};
+@@ -472,8 +477,10 @@ private:
+     struct WorkTrace {
+         u64 hash{};
+         u64 fragment_hash{};
+-        /// Dispatch grid, or vertex and instance counts of a draw; zero when indirect.
++        /// Dispatch grid, or vertex and instance counts of a draw (task groups of a mesh draw);
++        /// zero when indirect.
+         std::array<u32, 3> size{};
++        bool mesh{};
+     };
+     vk::QueryPool trace_work_pool;
+     std::vector<WorkTrace> trace_work_items;
 diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
 index 65f8478..c148a2a 100644
 --- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp

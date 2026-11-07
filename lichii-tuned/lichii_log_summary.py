@@ -70,7 +70,7 @@ def main(path):
         if m:
             gpu_work_samples += 1
             for key, total, count, peak in re.findall(
-                    r"(s\d:[0-9a-f]+(?:\+s\d:[0-9a-f]+)?)=([\d.]+)ms/(\d+)x\(max ([\d.]+)ms", m.group(1)):
+                    r"([sm]\d:[0-9a-f]+(?:\+s\d:[0-9a-f]+)?)=([\d.]+)ms/(\d+)x\(max ([\d.]+)ms", m.group(1)):
                 entry = gpu_work[key]
                 entry[0] += float(total)
                 entry[1] += int(count)

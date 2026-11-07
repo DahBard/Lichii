@@ -1,0 +1,91 @@
+# Forks and PRs relevant to AMD / Ocarina performance (research, 2026-11-07)
+
+Method: GitHub search API plus shallow git fetches of PokeDinner, Lichii nx2 and its forks, and FidelityFX SDK v2.4.0, in a cloud session. The Djihads80/Eglantine and zortos293/Lichii pull/issue endpoints are not readable here, only search results (title/body, no comments, no diffs of PRs). "Measured" = numbers the author gives with a method; none were reproduced by me.
+
+## 0. Headline
+
+1. PokeDinner is NOT an AMD-performance fork. It is Franseven's Eglantine fork (git.eden-emu.dev/Franseven/PokeDinner-a-Eglantine-Fork, unreachable from here; GitHub mirrors Apollo422/PokeDinner and 969981/PokeDinner-a-Eglantine-Fork). 563 commits, last 2026-10-31. Eglantine PR #149 (closed) merged its master (c3ce9bcd5b) into Eglantine nx2, so its work is already in Lichii nx2, via Lichii's merges plus 79f284ea (#149). I found no AMD-specific GPU speed work in it. Its AMD items are a heap-budget fix and a TSC fix for AMD CPUs, both already in our tree (see 1).
+2. Strongest actionable lead for the 25-33 ms full-screen pass / submit counts: nothing found names those shader hashes (searched both repos' issues and PRs). Leads are about CPU/sync overhead, not AMD GPU shader cost. Lichii issue #403 (RX 9070 XT + 9800X3D, Windows, build 93) went from ~18 fps to ~29 fps by only setting log filter `*:Error`, high process priority and Xbox Game Bar capture off (author's table, one run each). Check that our logs are not at `*:Info`.
+3. CPU-side: our tree still has `mfence` for every DMB, a `lock xadd` for every ordered load (LDAR/LDAXR/LDXR), and a HostCall for CNTPCT (checked in src/dynarmic/.../a64_emit_x64.cpp and emit_x64_memory.h). 999sian's commit d51b04d8 changes all three (see 3). It is in open PR #161, which is not in our PR list. Round 7 ports the idea (see HANDOFF.md, JIT).
+
+## 1. PokeDinner
+
+Repos: Apollo422/PokeDinner (mirror, master fe1230f4, tags v1.0.0 etc., adds macOS scripts); kel6967/PokeDinner-AMD (branches amd-perf-patch 0c2d5c6f, master, pokedinner-2.1.0-generic31w); WhippyWoo/PokeDinner-DKB (DKB only).
+
+Changes in PokeDinner master relevant to AMD/GPU, all dated 2026-10-28..31 and present in our base as far as I can tell (our tree has the BC3 transcode, heap budget code and page-run tracking):
+- f42b918 (Wael3rd) texture cache thresholds use the main device-local heap budget, because on AMD the host-visible device-local heap was counted twice. Our vulkan_device.cpp GetDeviceMemoryBudget already has this.
+- 25b674e (Takoroka) measure TSC on AMD CPUs (no CPUID 0x15), ~10% of main guest core. Irrelevant to Intel Core Ultra (our tree has EstimateRDTSCFrequency).
+- a1f254c.. ASTC GPU decode + re-compress to BC1/BC3, 2048-texel cap, no GPU wait after ASTC decode (from Eden-NS2). In base.
+- Pipeline work: translated-shader reuse, shared shader modules, native graphics pipelines translated on workers (Wael3rd b59fd99, 452dc27, 9a876a7, shader_recompiler SSA speedups). CPU shader-translation speed, not GPU time.
+- dynarmic: 12c2fcc skip untouched locations at IR instruction end, a2cc455 compact per-block tables, 11aac32 decode ARMv8.1-8.5. No barrier work.
+- vulkan_memory_allocator falls back to host memory when VRAM is full (d39c3b4).
+
+kel6967/PokeDinner-AMD branch amd-perf-patch (9 commits on top of PokeDinner 2.0.0, 2026-11-01, author gabrielskaminski, "patches 0014-0019"). Diff read in full. No measured gains stated.
+- fd5ac1a/892af54: on VK_DRIVER_ID_AMD_PROPRIETARY, back Switch 2 sparse regions whole (`g_nx2_sparse_lazy_supported=false`, env EDEN_NX2_SPARSE_LAZY=1 forces lazy) because amdvlk64 divides by zero on sparse images (Mario Kart World), plus a zero imageGranularity fallback (Eglantine PR #221/#219). Our tree has EDEN_NX2_SPARSE_LAZY but no AMD default-off; check whether our base has the granularity fix. Possible side effect to test: lazy sparse binding on AMD may cost time in OoT, unknown.
+- 15/16: buffer_cache skips redundant uniform-buffer rebinds and no-op state updates, skips storage/texture-buffer binds when the enabled mask is 0, Maxwell3D::ProcessCBBind returns early when the binding is unchanged.
+- 17: GraphicsPipelineCacheKey::operator== compares unique_hashes first.
+- 18: FindBuffer bounds check. 19: batch shader-cache InvalidateRegions (one mutex acquire). 48aebe4: AMD logic-op attribute scan only when logic_op.enable.
+These overlap in intent with Lichii #184 (merged "perf9" paths: constant-buffer batching, index rebind suppression, native bank checks) and #412 (merged). Low expected value for a GPU-bound frame; cheap to port.
+
+## 2. Candidates, ordered by expected impact for our case
+
+Status column: IN = in our list, BASE = in nx2 09b78bd or earlier as far as I can see, NEW = not in base.
+
+GPU-bound pass (25-33 ms, 4 draws; tessellated 18-26 ms) on AMD
+- No fork or PR addresses these hashes. Closest: Lichii #319 (IN, AA network bypass; AMD runs HMMA in software), #300 (IN), #223 rakefire-impala "AMD Mobile GPU successful in-game launch" (open, 82 commits, 142 files, RX 5500M): stand-in copy for Ocarina's upscaling networks on AMD, EDEN_NX2_TENSOR=<hashes> to run gameplay network 6bd913e1f34e83eb for real, tensor pipelines built in the background. NEW (large; mostly overlaps #300/#319). Branch rakefire-impala/Lichii AMD-ingame-fix 385e47f410.
+- Lichii #378 (IN, EDEN_AMD_FP16=1): float16 kept on AMD driver; author's target RX 6600 (RDNA2), no numbers. Worth A/B on RDNA4, which has packed FP16.
+- Lichii #210 (closed) / #273 (closed, BASE): AMD shader no-opt allowlist, depth sampling float, fragment shuffle via broadcast. #273 says "broadcast fallback can increase shader cost". Our round-5 native fragment shuffle test blacked the screen.
+- Lichii #354 (IN), #353 (IN): AMD correctness.
+- Lichii #421, #423 (open): foliage/grass binding budgets; #423 raises SSBO budget to 64 (`EDEN_NX2_SSBO64`), #395 and #410 (merged in nx2 after our base) near-hedge/foliage. Correctness, may add GPU work.
+- Lichii #288 (open, Kajcsi): skip uploads a join copy overwrites whole; OoT shadow map resized every frame in Kokiri, uploads were 160-170 ms/s on GPU back thread, fps 54-57 (RTX 4090). NEW. Directly relevant to Kokiri.
+- Lichii #268 (open): texture cache 5/8 of budget before collecting; for 16 GB cards, MKW measured 120 ms/s texture upload. Our tuned build already scales thresholds to 60%.
+- Lichii #296 (open): cheaper ASTC uploads (from SmileyTatsu). NEW, low value for OoT.
+- Lichii #415 (open): mark native compute storage bindings only as far as the shader's stores reach; #408 "stop mid-game pipeline rebuilds and slow compute builds (ports of #174, #250, #288, #319..." open; #411 pipeline libraries + shader warm-up from game files. NEW; read their bodies before choosing (not fetched).
+
+Render pass / submit counts (we see 1.4-2.5k passes, 500-760 submits/s)
+- Lichii #161 (999sian, open). Author's text: native submission budget 128 draws -> 4096 outside MoltenVK, FragmentBarrier through DeferFragmentBarrier, EDEN_NX2_FENCE_FLUSH_US 5000, immediate SubmitNx2ListCopies flush: vkQueueSubmit ~960/s -> ~22/s, render passes ~5,887/s -> ~255/s. The same PR states these figures came from a locally modified build, not a controlled benchmark of the PR head; its stage table (Kokiri 30.0 -> 40.5 fps for the submission change alone, i9-class/ i7-9700 Windows, GPU unspecified) is "selected observations". Other testers: ~20 fps, and 31-35 -> 36 fps median on i9-12900KF/RTX 3060 Ti. Status: partial. Our tree has DeferFragmentBarrier already and DefaultNativeBudget = 128 (submission_policy.h); #194/#184 (closed) set "native desktop defaults of 128 draws and 500 us". Runtime override exists: `EDEN_NX2_FLUSH_DRAWS=<n>` (vk_rasterizer.cpp FlushWork). Cheapest experiment: A/B `EDEN_NX2_FLUSH_DRAWS=4096` through the debug server/launcher; compare submits/s and GPU ms.
+- Eglantine #494 (closed, rdenno): batched queue submissions (Hyrule Warriors); #639 (closed): fix for crashes it caused (back submits while another thread uses the scheduler). Merged into Eglantine nx2 -> likely BASE, with the #639 fix; verify.
+- Eglantine #361 (closed, Sssnowyyy): no render-pass break after buffer uploads when uploads are mapped; ~6 ms GPU frametime on Apple/tiled GPUs. Desktop benefit unknown, probably small on RDNA4. Probably BASE.
+- Lichii #345 (IN), #147 (IN), #376 (IN): sync/readback batching.
+- Lichii #231/#179 (open): resolve waiting semaphore acquires without draining the back (4,700 acquires/s in OoT, ~380 ms/s of front-thread time, claims by author; measurement on i9-13900K family). `EDEN_NX2_SEM_FAST`. Overlaps #345 (IN); do not stack blindly (Frizti's tree turned SEM_FAST on, then off again: c5c6a4b0, bcb57076).
+- Lichii #178 (open): skip instance-loop writes the back ignores; +0.6% on 4090 Kokiri, +6% on a CPU-bound 30 fps case (Zarigis). #250 (open): PageFilter to skip empty cache invalidations (OoT does ~88,000 per second), +3.4% (RTX 4090 + i9-13900K, 51.96 -> 54.2 fps). #175 (open, mja00): 4-way storage-buffer range cache, "biggest perf improvement" but no numbers. Eglantine #670 (closed, Duck912): 4096-entry per-thread MaxContinuousRange cache, claimed +~20% at Kokiri spawn on NVIDIA (GPU thread 44% in page-table walking); Lichii #146/#223 do page-run tracking at map time (BASE, `Nx2Perf` gated). Check `MaxContinuousRange` in our build is the cached path.
+- Lichii #418 (open, from Frizti bcb5707): pin GPU/GPUBack threads to their own cores; Frizti reports 51.3 -> 55.6 median on 7800X3D at Lake Hylia (his number, not measured on Lichii). Our tuned hybrid-CPU placement covers the Windows side; #232 merged in nx2 since base.
+- Lichii #267 (open, RsMan-Dev): "60 FPS on 9950X3D + RTX 4080, 1.5x res, heaviest Kokiri spot", stack of ports; useful as a recipe of which PRs mattered.
+- Frizti/Lichii oot-gather-fix (72e5ad6c, 2026-11-07, ~45 commits over nx2 09b78bd): host frame pacer genlocked to display (EDEN_NX2_HOST_PACE), "look the draw's pipeline up once" (23f40d5d), skip buffer cache lock for dirty checks on never-GPU-written pages (6247fd51; same idea merged as #413), query_cache subtraction skips, fewer shader stalls (keep pipelines < 8000, skip unbuilt native draws), preflush OoT CPU readbacks (d65fd98e) then don't (fbc7b112). Released as frizti-v3. Mostly NVIDIA/Ryzen.
+- nyakuoff/Lichii-oot: perf/batch-cpu-readback-ranges (= Lichii #147, IN), perf/cache-continuous-gpu-ranges (= #146, BASE), feat/fps-limit.
+- callme-sy/Lichii-Superbuild (nx2 + curated patch; changelog v2-v7): includes "Nolar AMD fixes", GPU thread wake on queued commands (500 us poll instead of 1 ms, "sharkiix port"), async native discard #224 (measured "draws held for unbuilt pipelines 816 ms -> 0-8.7 ms per 10 s" by its author). Patch file: patches/superbuild.patch on branch superbuild. justr4mzi/hortensia aggregates SmileyTatsu/Selevet/Orchid/chuppatricky; not inspected.
+- Lichii #166 (open): opt-in split-pipeline switches (EDEN_NX2_PIPELINE_ASYNC, TEX_UPLOAD_ASYNC); 30 fps on i5-12400F + RTX 4060.
+- Lichii #264, #243, #204, #330: not read.
+
+Other AMD-related reports on Lichii (symptom data, not fixes)
+- #212 (open): OoT RX 9070 XT + 5800X3D on RADV, 28-35 fps, 35 ms frame, GPU 41%, "blocked on the GPU fence 0 us"; CPUCore_4/5 at ~80%, GPU thread 70%. Same shape as our CPU-bound main thread.
+- #403 (open): RX 9070 XT + 9800X3D Windows build 93: ~18 fps defaults, 29 fps with `*:Error` log filter + high priority + Game Bar off; one thread at 99%.
+- #191 (open): per-fence Preflushable downloads ~430 MB/s on RTX 5060 Laptop; skipping gives +27%, batching /64 +51-55% draws/s on the back thread but overexposes. Mitigation direction only.
+- #356 (RX 9000 at 10 fps), #322 (NaNs in far-distance draw pass #72 on 9070 XT), #165/#285 (7900 XTX).
+
+## 3. Dynarmic / x86 host JIT
+
+- Lichii #161 commit d51b04d8 (999sian, 2026-11-05), diff read: (a) `DMB` CRm access type LD (1) or ST (2) emits nothing on x86-64 (frontend/A64/translate/impl/system.cpp); full/ISH DMB still mfence. (b) `EmitReadMemoryMov`: 8/16/32/64-bit ordered reads (LDAR/LDAXR/LDXR) become plain MOV/MOVZX instead of `lock xadd [addr],0`; 128-bit keeps cmpxchg16b; stores keep XCHG for STLR. (c) inline `MRS CNTPCT_EL0`: rdtsc; shl/or; sub base; mul by 64-bit factor, result in rdx (config.inline_cntpct_tsc_base/factor, switch EDEN_NX2_INLINE_CNTPCT=0 disables); skips CNTPCT spin pause on non-SMT CPUs; HostTiming at Critical priority; Unsafe_IgnoreStandardFPCRValue/CodeSpeed under Unsafe accuracy. Measured claim: guest_core_2 17.4 -> 11.5 ms/frame (author's PR text, local dev build, no matched baseline). Risks I see: plain MOV for LDXR/LDAXR must not be used where dynarmic's exclusive monitor relies on the locked access (check fastmem_exclusive_access path), and the inline factor is captured at JIT creation (breaks if the clock is recalibrated). Not in our base (mfence, lock xadd and HostCall are still in our checkout).
+- Eglantine #717 (open, brandonbunnelle): lock-free exclusive monitor (LDXR loads before publishing the reservation, STXR with per-slot lock cmpxchg). Claims the global monitor lock was the whole CPU slowdown for OoT vistas (bisect: ignoring the monitor recovered FPS; Auto accuracy already enables Unsafe_IgnoreGlobalMonitor). No numbers. Correctness-sensitive. Worth a look since our main guest cores are CPU-bound; check whether our accuracy setting already ignores the monitor.
+- PokeDinner 12c2fcc/a2cc455 (Takoroka): small JIT compile-time/memory trims. Eglantine #207 (closed): commit x64 code cache incrementally. Eglantine #525: CI dynarmic tests only.
+- Lichii #174 (open): unroll K8 group of software HMMA (shader side).
+
+## 4. FSR 4 / FSR 3.1
+
+Facts (sources below):
+- AMD FSR SDK 2.4 (tag v2.4.0 of GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, announced Oct 2026) adds Vulkan support for the ML upscaler ("FSR Upscaling (ML)", 4.1.2) and frame generation. ML upscaling is integrated through the "FSR API" (ffx api) and the signed binary distribution; I confirmed signedbin/ in the repo contains amd_fidelityfx_loader_vk.dll/.lib, amd_fidelityfx_upscaler_dx12.dll, amd_fidelityfx_upscaler_vk.dll and amd_fidelityfx_framegeneration_vk.dll, header Kits/FidelityFX/api/include/vk/ffx_api_vk.hpp, docs Kits/FidelityFX/docs/techniques/super-resolution-ml.md (note: "FSR Upscaling 4 requires integration using the AMD FSR API and use of the signed binary distribution"). Samples: sample sources are MIT; the SDK binaries' license (Kits/FidelityFX/docs/license.md) permits redistribution in binary form only, no reverse engineering.
+- Hardware: gamingonlinux/Khronos/PCGH report ML 4.1.2 now on RX 6000/7000/9000 and selected Ryzen iGPUs (INT8 models), RDNA4 uses FP8. Reference timings in the SDK docs for RX 9070 XT, FP8, performance mode: 3840x2160 1316 us, 1920x1080 352 us (AMD numbers). So RDNA4-only no longer holds as of SDK 2.4; older articles (TweakTown) predate it.
+- Inputs: color, depth, motion vectors, exposure, jitter (same contract as FSR 3.1 temporal upscaler; details in the doc's "Providing motion vectors" and "Depth buffer configurations").
+- Existing Vulkan games are not auto-upgraded by the driver; integration needed. OptiScaler added an FSR 4 path for Vulkan titles through a DX12 bridge before SDK 2.4 (wccftech link).
+Emulator integrations found: none for FSR 4. Lichii/Eglantine have FSR 3 upscaling and FSR3 frame generation (PokeDinner dafacbb "Added FSR 3 Upscaling and Frame Generation" by Djihads80; Eglantine #346 "FSR 3.1 implementation for DLSS games", #465 "Run Fire Emblem's own DLSS network, with FSR 3.1 as the fallback"; Lichii #194 closed FSR3 frame-gen fixes, #298 closed LSFG 3.1), and NVIDIA DLSS in place of OoT's AA network (Lichii #253, #387). Searches for FSR4/FidelityFX PRs in both repos found nothing beyond those. Feasibility: the Vulkan ffx API takes VkImages for color/depth/motion vectors, so a drop-in beside the DLSS replacement path (#253/#387) is plausible, but motion vector convention and jitter from OoT's guest need checking; not tested by anyone I found.
+
+Sources: https://www.gamingonlinux.com/2026/10/amd-fsr-sdk-2-4-is-out-with-fsr-upscaling-4-1-2-for-older-hardware-and-vulkan-support/ ; https://www.khronos.org/news/permalink/amd-fsr-sdk-2.4-brings-fsr-4-upscaling-and-frame-generation-to-vulkan ; https://www.pcgameshardware.de/FidelityFX-Super-Resolution-Software-277617/News/FSR-4-1-Vulkan-SDK-2-4-Treiber-Updade-FSR-3-1-1558170/ ; https://wccftech.com/optiscaler-adds-fsr-4-support-to-vulkan-titles-before-amd-could/ ; https://gpuopen.com/learn/amd-fsr4-gpuopen-release/ ; https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK (v2.4.0). (I could only read the SDK repo; the news pages came from search snippets, gamingonlinux fetch was blocked.)
+
+## 5. Suggested order of experiments (my judgement)
+
+1. Verify log filter / priority (issue #403) and Game Bar; cheap, 11 fps claimed.
+2. `EDEN_NX2_FLUSH_DRAWS=4096` A/B (no rebuild). Compare submits/s, render passes/s, GPU ms.
+3. Port d51b04d8 dynarmic parts (DMB LD/ST elision, plain-MOV ordered loads, inline CNTPCT) for the CPU-bound main thread; review LDXR risk. Consider Eglantine #717 after.
+4. Add #250, #178, #288, #175 (small, independent, measured only on NVIDIA/Zen).
+5. Treat the 25-33 ms full-screen pass as an unknown: capture with the frame dump / RenderDoc, A/B EDEN_AMD_FP16=1, and EDEN_NX2_REJECT_HASH on those programs; nothing upstream explains it.
+6. FSR 4 is a separate feature project (SDK 2.4 Vulkan, binary-only DLLs).

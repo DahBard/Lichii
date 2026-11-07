@@ -5,17 +5,23 @@ State of the work on 2026-11-07 (end of the second session), for the next Claude
 ## Goal
 
 Make [Lichii](https://github.com/zortos293/Lichii) (Switch / Switch 2 emulator; Eden / Eglantine
-fork) run as fast and as cleanly as possible on the owner's setup, and iterate with him: build,
-he tests and sends `eden_log.txt`, analyze, next build.
+fork) run as fast and as cleanly as possible on the owner's setup, and iterate with the owner:
+build, the owner tests and sends `eden_log.txt`, analyze, next build.
+
+**Primary goal (set by the owner on 2026-11-07):** a constant 60 fps with the game rendering
+2560x1440 and FSR 4 upscaling to 4K. Every round should move toward it, by optimizing and by
+researching other Switch 2 emulator forks for what Lichii lacks, especially on AMD. Smaller issues
+(movement speed, single glitches) come second.
 
 - Windows 11, Intel Core Ultra 7 255H laptop (Arrow Lake-H: 6 P-cores, 8 E-cores on the shared
-  L3, 2 low-power E-cores on the SoC tile), AMD Radeon RX 9070 XT over OCuLink (PCIe 4.0 x4),
-  monitor on the 9070 XT. AMD driver 2.0.416, Vulkan 1.4.359.
-- Game: The Legend of Zelda: Ocarina of Time (Switch 2), program id `0400486024DEC000`. Runs in
-  handheld mode, 2560x1440 layout with a 1920x1080 crop, resolution 1x.
-- He wants the recommended speed settings as defaults, and asked for shaders to be compiled
-  before playing.
-- His log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
+  L3, 2 low-power E-cores on the SoC tile, no SMT), AMD Radeon RX 9070 XT over OCuLink (PCIe 4.0
+  x4), monitor on the 9070 XT. AMD driver 2.0.416, Vulkan 1.4.359.
+- Game: The Legend of Zelda: Ocarina of Time (Switch 2), program id `0400486024DEC000`, resolution
+  1x. Docked the game renders 2560x1440; handheld it renders 1920x1080 inside the 2560x1440
+  layout. The "1X (720p/1080p)" scale label is Switch 1 wording.
+- The owner wants the recommended speed settings as defaults, and asked for shaders to be
+  compiled before playing.
+- The log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
 
 ## How builds are made
 
@@ -29,7 +35,7 @@ he tests and sends `eden_log.txt`, analyze, next build.
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (54 commits over 588bfa6; pushing it
+- Source of the patch: branch `tuned4` of DahBard/Lichii (58 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
@@ -95,12 +101,21 @@ Own changes:
 - Round 5's `EDEN_AMD_FRAGMENT_SHUFFLE=1` (native fragment shuffles on AMD; since #273 they run
   as broadcast loops because a driver crashed on one Ocarina shader, Eglantine #618) was dropped
   in round 6: black screen on this card, and the heavy passes don't shuffle.
-- `LICHII_DYNFPS_SMOOTHING=<1|2|4|8>` and `LICHII_DYNFPS_MIN_FPS=<5-60>` (round 6) rewrite two
-  instructions of the Dynamic FPS routine after it is applied: the average of the measured frame
-  time (`add x12, x12, x14, asr #3` at +0x44, 8 frames; 1 = each frame's own time) and the cap
-  (`mov x14, #10` at +0x24; Dark's mod: 20). Without the mod the game steps 1/60 s per frame.
-- `trace-preflush.bat`, `trace-fp16.bat`, `trace-dynfps-raw.bat` (smoothing 1) and
-  `trace-dynfps-official.bat` (min fps 20) run those switches with the perf-trace variables.
+- Dynamic FPS (round 6, default since round 7): `LICHII_DYNFPS_SMOOTHING=<1|2|4|8>` (default 1)
+  and `LICHII_DYNFPS_MIN_FPS=<5-60>` rewrite two instructions of the routine after it is applied:
+  the average of the measured frame time (`add x12, x12, x14, asr #N` at +0x44; Dark's mod
+  averages 8 frames) and the cap (`mov x14, #10` at +0x24; Dark's mod: 20). Each frame's own time
+  felt smoothest to the owner; the 20 fps floor felt worse. Without the mod the game steps 1/60 s
+  per frame (slow motion).
+- JIT (round 7, x86-64): DMB LD/ST emit nothing, 8-64-bit load-acquires and inline exclusive
+  loads are plain MOVs instead of LOCK XADD (STLR keeps XCHG), and CNTPCT_EL0 is computed inline
+  as high64(lfence;rdtsc * WallClock::cntpct_rdtsc_factor) with GetCNTPCT's polling pause kept
+  via `A64JitState::last_cntpct`. Idea from upstream #161 (d51b04d8), whose inline counter used
+  the Switch 1 rate. `LICHII_JIT_TSO=0` / `LICHII_JIT_INLINE_CNTPCT=0` restore the old code.
+- GPU trace (round 7): mesh, indirect count and byte count draws are timed too; mesh draws show
+  as `m1:<task/mesh>+s5:<fragment>` in `DKB gpu_work` and as `mesh_draws=` per sampled submission.
+- Launchers with the perf-trace variables: `trace-preflush.bat`, `trace-fp16.bat`,
+  `trace-flush4096.bat` (`EDEN_NX2_FLUSH_DRAWS=4096`), `trace-old-jit.bat` (round 7's JIT off).
 
 ## Test results so far
 
@@ -170,18 +185,35 @@ Own changes:
   ~15, GPU 34-72 ms per frame): strict placement doesn't help. The mod's 8-frame average keeps
   a long step after slow frames, which runs the game up to 2-3x real time for ~0.5 s each time
   the frame rate recovers (more with #299's 100 ms cap); round 6's switches test that.
+- Run #12 (round 6) built `pgo` and `pgo-lto`. Each frame's own time felt smoothest; Dark's 20 fps
+  floor slowed down and sped up constantly. That run was handheld: the game rendered 1920x1080, yet
+  GPU time per frame stayed at 35-67 ms (median 36 in gameplay) against 34-77 ms docked at 1440p,
+  and guest core 4 used 41.7 ms per frame. The few-draw full-screen pass fell to 12 ms (~30 ms at
+  1440p), but the rest of the GPU time is spread over ~40 submissions per frame at ~1 ms each, so it
+  is mostly not pixel cost: per-submission and render pass overhead (1,400-2,500 render pass ends
+  per second) and untimed mesh draws are the suspects.
+- Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's
+  Eglantine fork) is not an AMD performance fork and was merged into Eglantine (#149). Lichii
+  issue #403 (RX 9070 XT, build 93): ~18 -> ~29 fps after log filter `*:Error`, high process
+  priority and Xbox Game Bar capture off. FSR SDK 2.4.0 (October 2026) runs the FSR 4 ML
+  upscaler on Vulkan through AMD's signed `amd_fidelityfx_loader_vk.dll` /
+  `amd_fidelityfx_upscaler_vk.dll` (binary redistribution only), RX 6000 and newer; it takes
+  color, depth, motion vectors and jitter like FSR 3.1. No emulator has integrated it; Lichii's
+  DLSS replacement of Ocarina's AA network (#253, #387) is the place to add it.
+  Details and links: `lichii-tuned/research-forks-amd.md`.
 
 ## Next steps
 
-1. Run #12 (round 6), mod on: `perf-trace.bat` against `trace-dynfps-raw.bat` and
-   `trace-dynfps-official.bat` in the same spots; the owner judges movement speed. If raw (or 2
-   frames) removes the speed-ups without visible judder, make it the default. Then a handheld
-   (1080p) perf-trace run: the heavy views are GPU-bound at 1440p. fp16 stays off; preflush is
-   safe here but showed no fps gain yet. To see what makes the heavy passes slow on AMD, dump
-   them (`EDEN_NX2_SHADER_DUMP`). `EDEN_NX2_READ_TRAPS=0` drops the traps entirely (stale reads
-   possible). Port candidates: upstream #264 (read traps armed once, +1-2 fps on an RTX 4090),
-   #267's grass-on-sword-swing (32 storage buffers) and missing-sunlight fixes, and nx2's
-   commits since build 93.
+1. Run #13 (round 7), docked, same Kokiri spots: `perf-trace.bat` (new JIT), `trace-old-jit.bat`
+   (compare guest core 4 ms per frame) and `trace-flush4096.bat` (submits and render passes per
+   second, GPU span against busy time). Read the `m1:` entries and `mesh_draws=` to see whether
+   mesh draws are the untimed GPU time. For normal play, log filter `*:Error` and Xbox Game Bar
+   capture off (#403). Next: cut render pass ends at their biggest sources (`Render pass ends`
+   lines: vk_rasterizer.cpp:1871, vk_query_cache.cpp:1640, ...); if mesh draws dominate, look at
+   their task/mesh workgroup sizes on AMD; FSR 4 through the DLSS replacement path. A Radeon
+   GPU Profiler capture of one Kokiri frame would show barriers and per-draw cost directly.
+   fp16 stays off; preflush is safe but showed no gain yet. Port candidates: upstream #264,
+   #267's grass-on-sword-swing and sunlight fixes, nx2's commits since build 93.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
