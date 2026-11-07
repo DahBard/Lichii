@@ -29,6 +29,9 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
    every cached pipeline is compiled at boot, not just the ones the last sessions used.
    Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
+ * Ocarina's built-in Dynamic FPS mod takes each frame's own time instead of an average of the
+   last 8 frames, so the game no longer runs fast for a moment after a slow stretch
+   (LICHII_DYNFPS_SMOOTHING=8 brings the average back).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -60,12 +63,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
  trace-preflush.bat           ab-7 with the logging of perf-trace.bat
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
- trace-dynfps-raw.bat         Ocarina's Dynamic FPS follows each frame's own time instead of an
-                              8-frame average (LICHII_DYNFPS_SMOOTHING=1): the average makes the
-                              game run fast for a moment after slow frames; logs like perf-trace
- trace-dynfps-official.bat    Dynamic FPS keeps real speed only down to 20 fps as in official
-                              builds (LICHII_DYNFPS_MIN_FPS=20; this build: 10 fps), so the game
-                              slows down below 20 fps; logs like perf-trace.bat
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1)
