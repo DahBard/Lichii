@@ -175,3 +175,20 @@ Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d54
   APU scheduling), Anka (NUP decompression cache), Elysium, MiauLichiiFork, Kitsu, Vendichii.
 - Guide: riyadhHDA/wichforks lists forks by GPU and game; it names Orchid for AMD and Lichii /
   Frizti for OoT.
+
+## 8. Round 13 (2026-11-07 night)
+
+- **zortos293/Lichii nx2** at `92f021240`: four commits since `d5494116`. #606 runs NVIDIA DLSS
+  Super Resolution for Ocarina with camera motion vectors from depth
+  (`vk_ocarina_camera_motion.cpp`) and jitter: the inputs an FSR 3.1 or FSR 4 path for Ocarina
+  needs too. #569 draws task/mesh pipelines through compute without `VK_EXT_mesh_shader`, #616 is
+  the AA network bypass as merged, #574 is CI. All merged into tuned4 with the 98 before them.
+- **Open #591** (jpkto): a new cache version starts from the newest compatible older cache
+  (54 from 53, then 52), so #432's bump doesn't throw caches away. Ported.
+- **Frizti**: still no release after `frizti-v3`. Its drain-free acquire polls (547ce11b4 +
+  f362e5a5f) are ported onto #345's front (`StableSemaphore` instead of #179's
+  `SemaphoreReadableNow`; the fence release is deferred to the back, since `GpuSplit::Run` is a
+  full drain here). Its macro DMA read snapshots (8ac3666f7) are not: they cut the same report-
+  page drains that round 13 removes for answered occlusion reports.
+- **Kitsu**: new commits are UI only (console-style home, box art); its exit-hang fix 4276c9c7d
+  is in.
