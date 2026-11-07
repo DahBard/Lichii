@@ -29,6 +29,8 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
    every cached pipeline is compiled at boot, not just the ones the last sessions used.
    Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
+ * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
+   load-acquires) and reads the game's clock without leaving the generated code.
  * Ocarina's built-in Dynamic FPS mod takes each frame's own time instead of an average of the
    last 8 frames, so the game no longer runs fast for a moment after a slow stretch
    (LICHII_DYNFPS_SMOOTHING=8 brings the average back).
@@ -63,6 +65,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
  trace-preflush.bat           ab-7 with the logging of perf-trace.bat
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
+ trace-flush4096.bat          submits GPU work every 4096 draws instead of every 128
+                              (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
+ trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
+                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
+                              like perf-trace.bat
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1)
