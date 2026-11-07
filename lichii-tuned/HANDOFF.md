@@ -192,6 +192,8 @@ Own changes:
   1440p), but the rest of the GPU time is spread over ~40 submissions per frame at ~1 ms each, so it
   is mostly not pixel cost: per-submission and render pass overhead (1,400-2,500 render pass ends
   per second) and untimed mesh draws are the suspects.
+- Run #13 (round 7) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r13-pgo`,
+  `lichii-tuned-r13-pgo-lto`).
 - Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
   not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
   build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
@@ -209,9 +211,10 @@ Own changes:
   viewport, camera motion vectors from depth), and the tree already runs AMD's FSR 3.1 in place of
   other games' DLSS (`vk_fsr3_upscaler.cpp`). Going from 1440p to 4K at that point also needs the
   resolution scaler to scale only the images after the network. The owner's settings use the
-  ScaleForce window filter and FXAA; the FSR window filter (FSR 1) or Lichii's "FSR 3" present
-  filter (its own optical flow, not AMD's FSR 3) can scale 1440p to 4K today. Details and links:
-  `lichii-tuned/research-forks-amd.md`.
+  ScaleForce window filter and FXAA; the window filters "FSR 1" and "FSR 1 Soft"
+  (`ScalingFilter::Fsr3`: Lichii's own optical flow and accumulation, not AMD's FSR 3) can scale
+  1440p to 4K today. No window filter is AMD's FSR 3.1: that only stands in for a game's own DLSS
+  call, which Ocarina doesn't make. Details and links: `lichii-tuned/research-forks-amd.md`.
 
 ## Next steps
 
