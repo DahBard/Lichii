@@ -25,6 +25,7 @@
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/nx2_drain_check.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Tegra::Engines {
@@ -110,6 +111,15 @@ bool PollWithoutDrain() {
     return enabled;
 }
 
+// EDEN_NX2_DRAIN_CHECK: whether an acquire (or a suspended one's poll) met its value before the
+// drain as well as after it, and whether the GPU had released a semaphore at the address.
+void NoteAcquireCheck(DmaPusher& dma_pusher, GPUVAddr address, bool poll, bool met_before,
+                      bool met_after) {
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
+    const bool released = device && VideoCommon::Nx2DrainCheck::WasReleased(*device);
+    VideoCommon::Nx2DrainCheck::NoteAcquire(poll, released, met_before, met_after);
+}
+
 // The fence manager records into the scheduler and downloads the CPU's writes over GPU data:
 // the back's state, which a drained back still uses from its idle hook (it submits).
 void ReleaseFences(DmaPusher& dma_pusher) {
@@ -161,11 +171,19 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
             }
         }
     }
+    const bool check = VideoCommon::Nx2DrainCheck::g_enabled;
+    const bool met_before =
+        check &&
+        pending_acquire->Matches(dma_pusher.memory_manager.Read<u32>(pending_acquire->address));
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadSemaphoreWord asks are its state).
     DrainBack();
     pending_acquire->last_drain = std::chrono::steady_clock::now();
     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
+    if (check) [[unlikely]] {
+        NoteAcquireCheck(dma_pusher, pending_acquire->address, true, met_before,
+                         pending_acquire->Matches(current));
+    }
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
         if (static std::atomic<u32> rescued{};
             !pending_acquire->Matches(current) && rescued.fetch_add(1) < 64) {
@@ -472,10 +490,17 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 return;
             }
         }
+        const bool check = VideoCommon::Nx2DrainCheck::g_enabled;
+        const bool met_before =
+            check && acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address));
         const auto drain_start = std::chrono::steady_clock::now();
         DrainBack();
         if (auto* stats = AcquireStats::Get()) stats->drain_ns += NsSince(drain_start);
-        if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+        const bool met = acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address));
+        if (check) [[unlikely]] {
+            NoteAcquireCheck(dma_pusher, acquire.address, false, met_before, met);
+        }
+        if (met) {
             if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterDrain);
             return;
         }

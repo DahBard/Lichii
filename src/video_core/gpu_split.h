@@ -208,6 +208,8 @@ public:
     /// the writers a command list fetched now is ordered after. Returns whether any of it was
     /// still queued.
     bool WaitForSyncedWriters();
+    /// Whether compute or copy work sent so far is still queued (EDEN_NX2_DRAIN_CHECK).
+    [[nodiscard]] bool WritersPending() const;
 
     /// Work that may write guest memory at addresses the front does not track was just sent.
     /// `source` names the sender for EDEN_NX2_MME_DMA_STATS.
