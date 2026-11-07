@@ -35,7 +35,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (88 commits over 588bfa6; pushing it
+- Source of the patch: branch `tuned4` of DahBard/Lichii (115 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
@@ -66,8 +66,14 @@ CPU-bound frame: #481 (RangeSet as a sorted array, ~5% of the back thread), #478
 FrontNoteWrites), #463 (no uploads of stale guest memory; MarkStale before Evict and ClearStaleImage
 in our batched collector's FlushPending), #448 (AMD: uneven-mip ASTC stays RGBA8, dark terrain
 lines), #421 (OoT foliage tables). Not taken: #446 (our #345 loop seldom sleeps: PendingSleep 2.2
-ms/s, present fence wait 0), #465, #235, #231, #243, #434. Plus open upstream pull requests at their
-heads as of 2026-11-07 00:00 UTC:
+ms/s, present fence wait 0), #465, #235, #231, #243, #434. Round 12 (after the fork survey in
+research-forks-amd.md section 7) added 25 nx2 commits from `9fa4a71..d5494116` that apply cleanly:
+stability #310, #485, #427, #495, #435, #444, #438, #439, #365, #330, #331, #436, #333, performance
+#250, #428, #404, pipeline cache #192, #550, shader fixes #279, #311, #429, #433, #425, #189, #199;
+and from open #573 the AMD 512-draw submission budget, compute e0a992208d87eeb8 unoptimized and
+parallel unswizzles. Not taken yet: #432 (cache version bump), HMMA cooperative matrices, the
+clang-cl PGO profile, #440, #178, #245, #351, #186 (conflicts). Plus open upstream pull requests at
+their heads as of 2026-11-07 00:00 UTC:
 
 - #319 "Ocarina of Time anti-aliasing: No sharpening" bypasses the game's tensor AA network
   (AMD runs its HMMA math in software); #300 builds those HMMA pipelines off the wait path on AMD.
@@ -321,16 +327,16 @@ Own changes:
 
 ## Next steps
 
-1. Run #17 (round 11), docked, 1x, ScaleForce, the same Kokiri spots: `perf-trace.bat`, then
-   `trace-strict.bat` (guest cores on P-cores now that the CPU side is the limit) and
-   `trace-preflush.bat` (removes the 49 read-trap GPU waits a second); watch for new glitches from
-   #463 (stale uploads skipped: wrong textures or flashes after area changes) and #488. Compare the
-   back thread's ms/s and zones with r16. Next on the CPU side: the rest of the split front's waits
-   on the back (#231, #243 are large: port only their measured parts), the bind stage buffers zone,
-   PGO training on Ocarina (the pgo-train variant; the back thread is all emulator code). For 4K:
-   port #253's jitter and motion vectors and feed the FSR 3.1 path, then FSR 4 through the SDK 2.4
-   DLLs; until then the game renders at 1x and the window filter scales it (the owner prefers
-   ScaleForce).
+1. Run #18 (round 12; the owner had not tested r17 yet, r18 includes it), docked, 1x, ScaleForce,
+   the same Kokiri spots: `perf-trace.bat`, `trace-strict.bat`, `trace-preflush.bat`; watch for
+   wrong textures or flashes after area changes (#463) and for crashes. Then the big step: merge
+   upstream nx2 (`d5494116` or newer) into tuned4: 27 files and 53 conflict hunks in a test merge;
+   keep #345's split front and our hybrid placement or move to upstream's #232/#418 thread pinning.
+   After that: Frizti v3's drain-free acquires (front waits 251 ms/s in r16) and DMA snapshots
+   against #345's versions; measure #345's per-bind native bank memcmp with
+   `EDEN_NX2_MME_DMA_STATS=1` (Firefly's upload replaces it); build with clang-cl to use upstream's
+   Ocarina PGO profile; #432 with #591 so caches survive; HMMA cooperative matrices for the "Game"
+   AA mode. For 4K: #253's jitter and motion vectors into the FSR 3.1 path, then FSR 4.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);

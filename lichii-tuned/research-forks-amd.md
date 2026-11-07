@@ -121,3 +121,51 @@ Other combined forks seen: justr4mzi/hortensia ("the best of the Eglantine forks
 Selevet, Orchid, SmileyTatsu, chuppatricky...) in one build"), jordenjacobsen-ai/Lichii-Frizti-
 v3-plus (Frizti v3 + Linux, AMD and Ocarina foliage fixes). Upstream #412 already ports Frizti
 and Selevet back-thread savings.
+
+## 7. Fork survey, 2026-11-07 evening (for AMD, Intel hybrid CPUs and stability)
+
+Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d5494116`.
+
+- **zortos293/Lichii nx2**: 85 commits since `9fa4a71` (one day). Merged many PRs tuned4 carried
+  (#329, #346, #353, #299, #481, #478, #465, #446). New: #521/#583 HMMA on 16x16x16
+  cooperative matrices (RDNA4: the AA network 24.4 -> 8.1 ms, "41 -> 60 fps" with the network
+  on; we bypass it, so only the "Game" AA mode gains), #475 (NVIDIA 16x8x16), #432 NaN-defined
+  min/max (bumps the pipeline cache version 53 -> 54: all caches rebuild; #591 open would keep
+  v53 caches), #526/#518 clang-cl + ThinLTO + an Ocarina PGO profile (`lichii-windows.profdata`,
+  MSVC ABI, LLVM 22.1.8: does not match our MinGW build's names), stability fixes (#310 JIT code
+  commit on Windows, #485 decommit race crash, #440, #427, #495, #435, #444, #438, #439, #365
+  Overwolf hooks, #330, #331), #250 cache invalidation filter (+3% Kokiri on NVIDIA), #192 mesh
+  and guarded pipelines in the disk cache, #550. A test merge into tuned4: 27 files, 53 conflict
+  hunks (thread.cpp hybrid placement vs #232/#418/#530, the split front vs #345, shader
+  recompiler storage buffers, texture cache).
+- **Open upstream PRs**: #573 (sanchodecuba11-del, RX 9070 XT, driver 2.0.416, Kokiri): AMD
+  query copies without WAIT_BIT (9 -> 22 fps; superseded here by answering occlusion reports),
+  texture collector at 3/5 of the budget (already ours), compute e0a992208d87eeb8 unoptimized,
+  512 draws per submission on AMD (35 -> 50 fps at the Deku Tree), parallel unswizzles. #579
+  pipeline libraries + warm-up from play history (first-visit stutter; 30-45 min warm-up). #559
+  (no fps change). #570 occlusion reset threshold (OoT water flicker). #591, #575, #589.
+- **Frizti/Lichii v3** (`frizti-v3` tag; also merged by tomk134/lichii-custom, Kitsu,
+  Vendichii, Firefly, Lichii-Ally): drain-free semaphore acquire resolution (547ce11b4 +
+  f362e5a5f, port of #231: acquire drains 4165/s -> 50/s), macro DMA read snapshots (8ac3666f7,
+  EvilOOT's fix), preflushed reads flush on demand (049f87818), pinned split GPU threads,
+  genlocked host pacing and low-latency 30 fps, fewer shader stalls (pipelines < 8000, skip
+  unbuilt native draws). Most conflict with #345 in tuned4.
+- **Kradnah/Firefly** (OoT): 64 KiB uniform bank uploads without page protection churn
+  (bd87a1a37, ~11% of the back thread upstream; tuned4's #345 compares bank pages with memcmp on
+  every bind instead), skip upload scans of unwritten buffers (f5c4496f8), cheaper back-thread
+  bookkeeping (8052143d9).
+- **justr4mzi/hortensia** (combined): notsapinho's pipeline reuse while no key register changed
+  (dc10c9537), clean-range rescans skipped (cbe9a2c59), linear uploads from guest memory; AMD:
+  37b01132333ef8df unoptimized (driver 2.0.353), DK Bananza RDNA pipeline crash fix (632c2c50f).
+- **MythosOfs/Orchid**: AMD-only, developed on an RX 9070 XT (RADV). Moved on to Yoshi, Wonder and
+  Xenoblade; `upstream/amd-vk-hardening` has robustness fixes (query copy destinations
+  disjoint, tessellation pipelines the driver would refuse).
+- **Djihads80/Eglantine**: kraibse's AMD port of #273 (stalling compute shaders, misaligned SSBO
+  splits, depth sampling, CAS retries).
+- **No change since the last look**: Sharkiix (3.1.1), PokeDinner (GitHub mirror stale since
+  2026-11-04; the Eden Forgejo is blocked from the cloud session), kel6967/PokeDinner-AMD.
+- Others seen: SmileyTatsu (cheaper ASTC uploads = upstream #296, texture memory limit setting),
+  Selevet performance builds 7-10 (OoT), Lichii-Superbuild (curated PGO), Lichii-Ally (Zen 5
+  APU scheduling), Anka (NUP decompression cache), Elysium, MiauLichiiFork, Kitsu, Vendichii.
+- Guide: riyadhHDA/wichforks lists forks by GPU and game; it names Orchid for AMD and Lichii /
+  Frizti for OoT.
