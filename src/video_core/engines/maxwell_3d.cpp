@@ -11,6 +11,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include "common/assert.h"
@@ -29,6 +30,7 @@
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/query_cache/fake_occlusion.h"
 #include "video_core/query_cache/frame_trace.h"
 #include "video_core/query_dma.h"
 #include "video_core/rasterizer_interface.h"
@@ -1270,6 +1272,34 @@ bool Maxwell3D::DeviceWords(GPUVAddr begin, u32 count, Func&& func) {
     return true;
 }
 
+namespace {
+/// Whether the report a report_semaphore.query word sends may stay pending in the query cache
+/// (written at its fence or once a host query result arrives) instead of being written when the
+/// back runs it, as the query cache decides in CounterReport. Only such reports make the front's
+/// MME DMA reads of their pages drain the back to write them out: with Ocarina of Time's occlusion
+/// reports answered at once, those drains were ~300 ms of every second of the front (r18).
+/// LICHII_REPORT_DRAIN=all drains for every report page, as before.
+bool ReportMayStayPending(u32 query) {
+    static const bool all = [] {
+        const char* value = std::getenv("LICHII_REPORT_DRAIN");
+        return value != nullptr && std::string_view{value} == "all";
+    }();
+    using Operation = Maxwell3D::Regs::ReportSemaphore::Operation;
+    const auto operation = static_cast<Operation>(query & 3);
+    if (operation != Operation::Release && operation != Operation::ReportOnly) {
+        return false; // acquires and traps write nothing
+    }
+    const bool short_query = ((query >> 28) & 1) != 0;
+    if (all || Settings::IsGPULevelHigh() || (operation == Operation::Release && short_query)) {
+        return true; // written when its fence signals
+    }
+    const auto type = static_cast<VideoCommon::QueryType>((query >> 23) & 0x1f);
+    return type != VideoCommon::QueryType::Payload &&
+           !(type == VideoCommon::QueryType::ZPassPixelCount64 &&
+             VideoCommon::FakeOcclusionSamples() != 0);
+}
+} // Anonymous namespace
+
 void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
                                 u32 amount, const u32* values) {
     constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
@@ -1350,9 +1380,18 @@ void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& fs, u3
         const GPUVAddr begin = address(MAXWELL3D_REG_INDEX(report_semaphore.address_high),
                                        MAXWELL3D_REG_INDEX(report_semaphore.address_low));
         note(begin, begin + 16);
-        for (const GPUVAddr page : {begin, begin + 15}) {
-            if (const auto device = memory_manager.GpuToCpuAddress(page)) {
-                Tegra::Nx2MarkReportPages(*device, 1);
+        // The register holds the word the back runs (in Replay, the shadow RAM's); a run of
+        // several reports to one method checks each word too.
+        constexpr u32 query = MAXWELL3D_REG_INDEX(report_semaphore.query);
+        bool pending = ReportMayStayPending(fs.regs[query]);
+        for (u32 i = 0; method == query && i < amount && !pending; ++i) {
+            pending = ReportMayStayPending(values[i]);
+        }
+        if (pending) {
+            for (const GPUVAddr page : {begin, begin + 15}) {
+                if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+                    Tegra::Nx2MarkReportPages(*device, 1);
+                }
             }
         }
     }

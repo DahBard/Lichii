@@ -124,6 +124,7 @@ add_library(video_core STATIC
     present.h
     pte_kind.h
     query_cache/bank_base.h
+    query_cache/fake_occlusion.h
     query_cache/query_base.h
     query_cache/query_cache_base.h
     query_cache/query_cache.h
