@@ -1088,10 +1088,67 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     std::array<size_t, DropCount> dropped{};
     std::array<size_t, DropCount> dropped_with_feature{}; ///< records that had the feature on
     size_t graphics_records = 0;
+    size_t other_driver = 0;      ///< records from another driver or driver version
+    size_t to_vertex_input = 0;   ///< records turned into the dynamic vertex input form
+    size_t color_write_flips = 0; ///< records whose color write enable form was changed
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
         ++graphics_records;
+
+        // A record holds guest code and the pipeline state, translated and built for this device
+        // whatever recorded it, but its key also holds the recording driver and the states that
+        // device set dynamically. A key with another driver never met a runtime key, so every
+        // such pipeline was built again in game (a shared 22,000-pipeline Ocarina cache from
+        // Lichii build 86 on an RX 9070 XT). Take this driver's, and give state this device sets
+        // dynamically the form its runtime keys have.
+        auto& fixed = key.state;
+        if (fixed.driver_id != dynamic_features.driver_id ||
+            fixed.driver_version != dynamic_features.driver_version) {
+            ++other_driver;
+            fixed.driver_id = dynamic_features.driver_id;
+            fixed.driver_version = dynamic_features.driver_version;
+        }
+        if (fixed.dynamic_vertex_input == 0 && dynamic_features.has_dynamic_vertex_input) {
+            // As Refresh: the attribute types alone (from VK_EXT_vertex_input_dynamic_state off,
+            // e.g. NVIDIA drivers before 580.119.02); the rest of the vertex input is dynamic.
+            static constexpr std::array<u32, 8> type_classes{0, 1, 1, 2, 3, 1, 1, 1};
+            u64 types = 0;
+            for (size_t index = 0; index < fixed.attributes.size(); ++index) {
+                const auto& attribute = fixed.attributes[index];
+                if (attribute.enabled != 0) {
+                    types |= u64{type_classes[attribute.type.Value()]} << (index * 2);
+                }
+            }
+            fixed.dynamic_vertex_input.Assign(1);
+            fixed.attribute_types = types;
+            fixed.attributes = {};
+            fixed.binding_divisors = {};
+            if (fixed.extended_dynamic_state != 0) {
+                fixed.vertex_strides = {};
+            }
+            ++to_vertex_input;
+        }
+        if ((fixed.color_write_enable_dynamic != 0) != dynamic_features.has_color_write_enable &&
+            fixed.extended_dynamic_state_3_blend == 0) {
+            // With dynamic color write enable, an attachment that writes no channel keeps all
+            // four in the key. The other way can't tell such an attachment from one that writes
+            // all four; most do.
+            if (dynamic_features.has_color_write_enable) {
+                for (auto& attachment : fixed.attachments) {
+                    if (attachment.mask_r == 0 && attachment.mask_g == 0 &&
+                        attachment.mask_b == 0 && attachment.mask_a == 0) {
+                        attachment.mask_r.Assign(1);
+                        attachment.mask_g.Assign(1);
+                        attachment.mask_b.Assign(1);
+                        attachment.mask_a.Assign(1);
+                    }
+                }
+            }
+            fixed.color_write_enable_dynamic.Assign(dynamic_features.has_color_write_enable ? 1
+                                                                                             : 0);
+            ++color_write_flips;
+        }
 
         if (!device.IsExtMeshShaderSupported() &&
             std::ranges::any_of(envs, [](const FileEnvironment& env) {
@@ -1236,6 +1293,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         LOG_WARNING(Render_Vulkan, "Pipeline cache: {} of {} cached graphics pipelines left out{}",
                     total_dropped, graphics_records, detail);
+    }
+    if (other_driver != 0 || to_vertex_input != 0 || color_write_flips != 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Pipeline cache: {} of {} cached graphics pipelines from another driver or driver "
+                 "version, {} turned into dynamic vertex input, {} into this device's color write "
+                 "enable form",
+                 other_driver, graphics_records, to_vertex_input, color_write_flips);
     }
     if (skipped_pipelines != 0) {
         LOG_INFO(
