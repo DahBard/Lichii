@@ -89,3 +89,35 @@ Sources: https://www.gamingonlinux.com/2026/10/amd-fsr-sdk-2-4-is-out-with-fsr-u
 4. Add #250, #178, #288, #175 (small, independent, measured only on NVIDIA/Zen).
 5. Treat the 25-33 ms full-screen pass as an unknown: capture with the frame dump / RenderDoc, A/B EDEN_AMD_FP16=1, and EDEN_NX2_REJECT_HASH on those programs; nothing upstream explains it.
 6. FSR 4 is a separate feature project (SDK 2.4 Vulkan, binary-only DLLs).
+
+## 6. Sharkiix (2026-11-07)
+
+Repo: Shakoquo/Lichii-sharkiix-version (GitHub user Shakoquo, "SHarkiix"), "mainly for AMD GPUs,
+optimised for Zelda Ocarina of Time", tested on an RX 9060 XT. Fetched with
+`git fetch https://github.com/Shakoquo/lichii-sharkiix-version <branch>`.
+
+- No history of its own. v1/v2 (branch nx2) = zortos293/Lichii 99ac3d59 (2026-11-05) + 28f594ac
+  (faster tensor-op emulation on AMD, semaphore acquire resumes, texture cache GC min age, a
+  sampler without comparison for non-Dref reads, blend state refreshed on every draw without
+  EDS3 blend). v3.0 = "chuppatricky amd testbuild v13 (imported source tree)" + shared shader
+  cache import, Linux build, texture cache cap at 3/4 of 12 GiB+ budgets. v3.1/3.1.1 = "build-11
+  source (fix/ocarina-of-time) as received" + VK_EXT_graphics_pipeline_library on AMD RDNA 3+
+  (EDEN_NX2_GPL, background LTO relinks; crashed RX 6600/6650 XT on driver 2.0.353).
+- Its README tells users to reject s5:c72b6ea746c00433 (ground mist, the mesh draw
+  m1:b41e5eadb0568672) and s5:3ddfb1d7a854c849 (fog/light-shaft composite) because they draw a
+  white veil there. Those are the passes that cost most in sunlit areas in our traces; with #292
+  they render correctly here, so part of Sharkiix's AMD speed is effects turned off.
+- AMD fixes in its imported trees and not in Lichii nx2 (9fa4a71): query copies wait only on the
+  newest query (ported in round 10), NaN-defined FMin/FMax (emit_spirv_floating_point.cpp), a
+  barrier so draws don't read unfinished compute output (vk_rasterizer.cpp, vk_scheduler.cpp), an
+  atomics spin on a non-coherent cache line (spirv_emit_context.cpp), global memory helpers that
+  overflowed AMD's compiler, render targets the fragment shader never writes, AMD safe compile
+  (EDEN_NX2_AMD_SAFE_COMPILE) and VK_AMD_buffer_marker breadcrumbs.
+- Verdict: don't migrate. Each release replaces the whole tree with someone else's snapshot, its
+  base is older than ours and has more glitches, and the occlusion fix (round 9/10) already gives
+  more than its query change. Port single fixes with credit.
+
+Other combined forks seen: justr4mzi/hortensia ("the best of the Eglantine forks (Lichii,
+Selevet, Orchid, SmileyTatsu, chuppatricky...) in one build"), jordenjacobsen-ai/Lichii-Frizti-
+v3-plus (Frizti v3 + Linux, AMD and Ocarina foliage fixes). Upstream #412 already ports Frizti
+and Selevet back-thread savings.

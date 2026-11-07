@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/build-check.yml b/.github/workflows/build-check.yml
-index 34ea64f..c8daa66 100644
+index 34ea64f6..c8daa661 100644
 --- a/.github/workflows/build-check.yml
 +++ b/.github/workflows/build-check.yml
 @@ -101,3 +101,6 @@ jobs:
@@ -10,7 +10,7 @@ index 34ea64f..c8daa66 100644
 +      - name: Test Linux switch discovery
 +        run: CXX=g++-13 python3 tools/nx2/test_switches.py
 diff --git a/.github/workflows/release-binaries.yml b/.github/workflows/release-binaries.yml
-index 2c33172..f4fbaf0 100644
+index 2c331727..f4fbaf01 100644
 --- a/.github/workflows/release-binaries.yml
 +++ b/.github/workflows/release-binaries.yml
 @@ -411,9 +411,8 @@ jobs:
@@ -44,7 +44,7 @@ index 2c33172..f4fbaf0 100644
              --executable build/release/bin/lichii \
              --executable build/release/bin/eden-cli \
 diff --git a/README.md b/README.md
-index 0502b3f..48e0ad1 100644
+index 0502b3f3..48e0ad1f 100644
 --- a/README.md
 +++ b/README.md
 @@ -16,6 +16,8 @@ Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator wri
@@ -71,10 +71,10 @@ index 0502b3f..48e0ad1 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000..4c7e8fc
+index 00000000..5af9e2c6
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,93 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -108,6 +108,9 @@ index 0000000..4c7e8fc
 +   Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
 + * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
 +   load-acquires) and reads the game's clock without leaving the generated code.
++ * Ocarina's occlusion checks (about 1,400 "is this visible?" questions a frame) are answered
++   "visible" at once instead of by the GPU: on this Radeon they cost most of the frame, and
++   answering them doubled the frame rate (LICHII_FAKE_OCCLUSION=0 runs them again).
 + * Ocarina's built-in Dynamic FPS mod takes each frame's own time instead of an average of the
 +   last 8 frames, so the game no longer runs fast for a moment after a slow stretch
 +   (LICHII_DYNFPS_SMOOTHING=8 brings the average back).
@@ -147,12 +150,8 @@ index 0000000..4c7e8fc
 + trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
 +                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
 +                              like perf-trace.bat
-+ trace-wfi-defer.bat          the game's waits for idle no longer end the GPU render pass
-+                              (LICHII_WFI_DEFER=1), logged like perf-trace.bat; watch for
-+                              missing or flickering effects
-+ trace-fake-occlusion.bat     the game's occlusion checks always answer "visible" and the GPU
-+                              runs no occlusion queries (LICHII_FAKE_OCCLUSION=4096), logged
-+                              like perf-trace.bat; watch for glows or flares through walls
++ trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
++                              logged like perf-trace.bat: slower, for comparison
 + perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
 +                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
 +                              EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
@@ -171,7 +170,7 @@ index 0000000..4c7e8fc
 +Zip them and upload the zip to lichii-tuned/pgo in the fork; the next builds use them.
 diff --git a/dist/lichii-tuned/ab-1-stock-threading.bat b/dist/lichii-tuned/ab-1-stock-threading.bat
 new file mode 100644
-index 0000000..ee3bc60
+index 00000000..ee3bc60c
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-1-stock-threading.bat
 @@ -0,0 +1,4 @@
@@ -181,7 +180,7 @@ index 0000000..ee3bc60
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-10-run-ahead.bat b/dist/lichii-tuned/ab-10-run-ahead.bat
 new file mode 100644
-index 0000000..66de3f8
+index 00000000..66de3f87
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-10-run-ahead.bat
 @@ -0,0 +1,6 @@
@@ -193,7 +192,7 @@ index 0000000..66de3f8
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-11-official-shader-cache.bat b/dist/lichii-tuned/ab-11-official-shader-cache.bat
 new file mode 100644
-index 0000000..5717170
+index 00000000..57171701
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-11-official-shader-cache.bat
 @@ -0,0 +1,5 @@
@@ -204,7 +203,7 @@ index 0000000..5717170
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
 new file mode 100644
-index 0000000..09e1ff8
+index 00000000..09e1ff84
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-2-no-core-placement.bat
 @@ -0,0 +1,4 @@
@@ -214,7 +213,7 @@ index 0000000..09e1ff8
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-3-soft-placement.bat b/dist/lichii-tuned/ab-3-soft-placement.bat
 new file mode 100644
-index 0000000..1ab5862
+index 00000000..1ab5862c
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-3-soft-placement.bat
 @@ -0,0 +1,4 @@
@@ -224,7 +223,7 @@ index 0000000..1ab5862
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-4-strict-placement.bat b/dist/lichii-tuned/ab-4-strict-placement.bat
 new file mode 100644
-index 0000000..2eb5017
+index 00000000..2eb50176
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-4-strict-placement.bat
 @@ -0,0 +1,4 @@
@@ -234,7 +233,7 @@ index 0000000..2eb5017
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-5-no-umwait.bat b/dist/lichii-tuned/ab-5-no-umwait.bat
 new file mode 100644
-index 0000000..9595b82
+index 00000000..9595b829
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-5-no-umwait.bat
 @@ -0,0 +1,4 @@
@@ -244,7 +243,7 @@ index 0000000..9595b82
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-6-official-texture-cache.bat b/dist/lichii-tuned/ab-6-official-texture-cache.bat
 new file mode 100644
-index 0000000..2fe932a
+index 00000000..2fe932a4
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-6-official-texture-cache.bat
 @@ -0,0 +1,4 @@
@@ -254,7 +253,7 @@ index 0000000..2fe932a
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-7-preflush.bat b/dist/lichii-tuned/ab-7-preflush.bat
 new file mode 100644
-index 0000000..eadd6f1
+index 00000000..eadd6f13
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-7-preflush.bat
 @@ -0,0 +1,4 @@
@@ -264,7 +263,7 @@ index 0000000..eadd6f1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
 new file mode 100644
-index 0000000..450bb12
+index 00000000..450bb127
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
 @@ -0,0 +1,6 @@
@@ -276,7 +275,7 @@ index 0000000..450bb12
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-9-amd-fp16.bat b/dist/lichii-tuned/ab-9-amd-fp16.bat
 new file mode 100644
-index 0000000..eb0e734
+index 00000000..eb0e7344
 --- /dev/null
 +++ b/dist/lichii-tuned/ab-9-amd-fp16.bat
 @@ -0,0 +1,5 @@
@@ -287,7 +286,7 @@ index 0000000..eb0e734
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
 new file mode 100644
-index 0000000..7f0dcdb
+index 00000000..7f0dcdb2
 --- /dev/null
 +++ b/dist/lichii-tuned/perf-trace.bat
 @@ -0,0 +1,5 @@
@@ -296,21 +295,9 @@ index 0000000..7f0dcdb
 +rem EDEN_DKB_FRAME_TRACE=1); the log is %APPDATA%\eden\log\eden_log.txt.
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-fake-occlusion.bat b/dist/lichii-tuned/trace-fake-occlusion.bat
-new file mode 100644
-index 0000000..392dc1e
---- /dev/null
-+++ b/dist/lichii-tuned/trace-fake-occlusion.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem Occlusion reports read 4096 samples at once and no GPU occlusion query runs
-+rem (LICHII_FAKE_OCCLUSION=4096): the game thinks everything is visible. Logged like
-+rem perf-trace.bat. Look for lens flares or glows showing through walls and trees.
-+set LICHII_FAKE_OCCLUSION=4096&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-flush4096.bat b/dist/lichii-tuned/trace-flush4096.bat
 new file mode 100644
-index 0000000..57a9743
+index 00000000..57a97434
 --- /dev/null
 +++ b/dist/lichii-tuned/trace-flush4096.bat
 @@ -0,0 +1,5 @@
@@ -321,7 +308,7 @@ index 0000000..57a9743
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-fp16.bat b/dist/lichii-tuned/trace-fp16.bat
 new file mode 100644
-index 0000000..a9068a7
+index 00000000..a9068a7d
 --- /dev/null
 +++ b/dist/lichii-tuned/trace-fp16.bat
 @@ -0,0 +1,5 @@
@@ -332,7 +319,7 @@ index 0000000..a9068a7
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-old-jit.bat b/dist/lichii-tuned/trace-old-jit.bat
 new file mode 100644
-index 0000000..3432164
+index 00000000..3432164a
 --- /dev/null
 +++ b/dist/lichii-tuned/trace-old-jit.bat
 @@ -0,0 +1,6 @@
@@ -344,7 +331,7 @@ index 0000000..3432164
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-preflush.bat b/dist/lichii-tuned/trace-preflush.bat
 new file mode 100644
-index 0000000..15c8666
+index 00000000..15c86660
 --- /dev/null
 +++ b/dist/lichii-tuned/trace-preflush.bat
 @@ -0,0 +1,5 @@
@@ -353,20 +340,19 @@ index 0000000..15c8666
 +rem (EDEN_NX2_PREFLUSH=1), fewer readback stalls, but some flicker was reported.
 +set EDEN_NX2_PREFLUSH=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-wfi-defer.bat b/dist/lichii-tuned/trace-wfi-defer.bat
+diff --git a/dist/lichii-tuned/trace-real-occlusion.bat b/dist/lichii-tuned/trace-real-occlusion.bat
 new file mode 100644
-index 0000000..b9b294a
+index 00000000..68c09072
 --- /dev/null
-+++ b/dist/lichii-tuned/trace-wfi-defer.bat
-@@ -0,0 +1,6 @@
++++ b/dist/lichii-tuned/trace-real-occlusion.bat
+@@ -0,0 +1,5 @@
 +@echo off
-+rem Waits for idle inside a render pass keep it (LICHII_WFI_DEFER=1): later draws break it only
-+rem when they read what it wrote, and the full barrier follows its end. Logged like
-+rem perf-trace.bat. Look for missing or flickering effects.
-+set LICHII_WFI_DEFER=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++rem Runs the GPU occlusion queries Ocarina of Time reports, as before round 10
++rem (LICHII_FAKE_OCCLUSION=0), with the logging of perf-trace.bat. Compare with perf-trace.bat.
++set LICHII_FAKE_OCCLUSION=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
-index 5c75012..4b2d0bb 100644
+index 5c750128..4b2d0bb1 100644
 --- a/dist/nx2_switches.txt
 +++ b/dist/nx2_switches.txt
 @@ -4,6 +4,9 @@
@@ -381,7 +367,7 @@ index 5c75012..4b2d0bb 100644
  
 diff --git a/docs/compatibility-report.md b/docs/compatibility-report.md
 new file mode 100644
-index 0000000..9757bcb
+index 00000000..9757bcb3
 --- /dev/null
 +++ b/docs/compatibility-report.md
 @@ -0,0 +1,50 @@
@@ -437,7 +423,7 @@ index 0000000..9757bcb
 +The preview preloads synthetic experience text for visual inspection. Real dialogs do not preselect a compatibility rating or populate progress and details. Do not submit synthetic fixtures to the live website to test connectivity.
 diff --git a/docs/nx2/oot-network-bypass.md b/docs/nx2/oot-network-bypass.md
 new file mode 100644
-index 0000000..73fd295
+index 00000000..73fd2953
 --- /dev/null
 +++ b/docs/nx2/oot-network-bypass.md
 @@ -0,0 +1,62 @@
@@ -504,7 +490,7 @@ index 0000000..73fd295
 +- The heavy dispatch between the prepass and the network still runs; its result goes unused.
 +- Vulkan only: other backends never learn the tonemapped image, so the setting has no effect there.
 diff --git a/externals/cmake-modules/UseLTO.cmake b/externals/cmake-modules/UseLTO.cmake
-index b364ef2..35ef3d9 100644
+index b364ef22..35ef3d9f 100644
 --- a/externals/cmake-modules/UseLTO.cmake
 +++ b/externals/cmake-modules/UseLTO.cmake
 @@ -10,12 +10,19 @@ option(ENABLE_LTO "Enable Link-Time Optimization (LTO)" OFF)
@@ -535,7 +521,7 @@ index b364ef2..35ef3d9 100644
 \ No newline at end of file
 +endif()
 diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
-index 56709cf..73f2da7 100644
+index 56709cf4..73f2da71 100644
 --- a/src/common/CMakeLists.txt
 +++ b/src/common/CMakeLists.txt
 @@ -90,6 +90,8 @@ add_library(
@@ -569,7 +555,7 @@ index 56709cf..73f2da7 100644
  
 diff --git a/src/common/pgo_training.cpp b/src/common/pgo_training.cpp
 new file mode 100644
-index 0000000..307a95f
+index 00000000..307a95f4
 --- /dev/null
 +++ b/src/common/pgo_training.cpp
 @@ -0,0 +1,72 @@
@@ -647,7 +633,7 @@ index 0000000..307a95f
 +} // namespace Common::PgoTraining
 diff --git a/src/common/pgo_training.h b/src/common/pgo_training.h
 new file mode 100644
-index 0000000..cfe86ce
+index 00000000..cfe86ce0
 --- /dev/null
 +++ b/src/common/pgo_training.h
 @@ -0,0 +1,14 @@
@@ -665,8 +651,24 @@ index 0000000..cfe86ce
 +void Flush();
 +
 +} // namespace Common::PgoTraining
+diff --git a/src/common/range_sets.inc b/src/common/range_sets.inc
+index ebe7c831..c21fb258 100644
+--- a/src/common/range_sets.inc
++++ b/src/common/range_sets.inc
+@@ -214,6 +214,11 @@ void RangeSet<AddressType>::Add(AddressType base_address, size_t size) {
+ 
+ template <typename AddressType>
+ void RangeSet<AddressType>::Subtract(AddressType base_address, size_t size) {
++    // Most subtractions miss every range (the buffer cache clears several sets per write): the
++    // lookup is far cheaper than the interval set's subtract.
++    if (!Intersects(base_address, size)) {
++        return;
++    }
+     m_impl->Subtract(base_address, size);
+ }
+ 
 diff --git a/src/common/settings.cpp b/src/common/settings.cpp
-index c63943a..cbf65c8 100644
+index c63943a9..cbf65c84 100644
 --- a/src/common/settings.cpp
 +++ b/src/common/settings.cpp
 @@ -46,6 +46,7 @@ SETTING(std::string, false);
@@ -678,7 +680,7 @@ index c63943a..cbf65c8 100644
  SWITCHABLE(AstcDecodeMode, true);
  SWITCHABLE(AstcRecompression, true);
 diff --git a/src/common/settings.h b/src/common/settings.h
-index e5f5029..1b9c984 100644
+index e5f5029d..1b9c9848 100644
 --- a/src/common/settings.h
 +++ b/src/common/settings.h
 @@ -64,6 +64,7 @@ SETTING(std::string, false);
@@ -701,7 +703,7 @@ index e5f5029..1b9c984 100644
      SwitchableSetting<std::string> post_shader_chain{linkage,
                                                       std::string(),
 diff --git a/src/common/settings_enums.h b/src/common/settings_enums.h
-index 133b503..f8573f5 100644
+index 133b503f..f8573f5c 100644
 --- a/src/common/settings_enums.h
 +++ b/src/common/settings_enums.h
 @@ -148,6 +148,7 @@ ENUM(NvdecEmulation, Off, Cpu, Gpu);
@@ -714,7 +716,7 @@ index 133b503..f8573f5 100644
  ENUM(AppletMode, HLE, LLE, Disabled);
 diff --git a/src/common/spin_wait.cpp b/src/common/spin_wait.cpp
 new file mode 100644
-index 0000000..9d76bc2
+index 00000000..9d76bc2a
 --- /dev/null
 +++ b/src/common/spin_wait.cpp
 @@ -0,0 +1,127 @@
@@ -847,7 +849,7 @@ index 0000000..9d76bc2
 +} // namespace Common::SpinWait
 diff --git a/src/common/spin_wait.h b/src/common/spin_wait.h
 new file mode 100644
-index 0000000..5f5a5a4
+index 00000000..5f5a5a45
 --- /dev/null
 +++ b/src/common/spin_wait.h
 @@ -0,0 +1,91 @@
@@ -943,7 +945,7 @@ index 0000000..5f5a5a4
 +
 +} // namespace Common
 diff --git a/src/common/thread.cpp b/src/common/thread.cpp
-index fdf0b2a..bc5baf3 100644
+index fdf0b2a5..bc5baf38 100644
 --- a/src/common/thread.cpp
 +++ b/src/common/thread.cpp
 @@ -5,7 +5,9 @@
@@ -1060,7 +1062,7 @@ index fdf0b2a..bc5baf3 100644
  }
  
 diff --git a/src/common/thread.h b/src/common/thread.h
-index 4a36295..6843bc5 100644
+index 4a362959..6843bc56 100644
 --- a/src/common/thread.h
 +++ b/src/common/thread.h
 @@ -108,6 +108,12 @@ enum class ThreadPlacement : u32 {
@@ -1078,7 +1080,7 @@ index 4a36295..6843bc5 100644
  void SetCurrentThreadToAllCores();
 diff --git a/src/common/windows/hybrid_cpu.cpp b/src/common/windows/hybrid_cpu.cpp
 new file mode 100644
-index 0000000..0c88b1d
+index 00000000..0c88b1d2
 --- /dev/null
 +++ b/src/common/windows/hybrid_cpu.cpp
 @@ -0,0 +1,226 @@
@@ -1310,7 +1312,7 @@ index 0000000..0c88b1d
 +} // namespace Common::Windows
 diff --git a/src/common/windows/hybrid_cpu.h b/src/common/windows/hybrid_cpu.h
 new file mode 100644
-index 0000000..6ba3b63
+index 00000000..6ba3b63a
 --- /dev/null
 +++ b/src/common/windows/hybrid_cpu.h
 @@ -0,0 +1,20 @@
@@ -1335,7 +1337,7 @@ index 0000000..6ba3b63
 +
 +} // namespace Common::Windows
 diff --git a/src/core/arm/dynarmic/arm_dynarmic_64.cpp b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
-index b489e79..825ff41 100644
+index b489e795..825ff417 100644
 --- a/src/core/arm/dynarmic/arm_dynarmic_64.cpp
 +++ b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
 @@ -354,6 +354,34 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
@@ -1374,7 +1376,7 @@ index b489e79..825ff41 100644
  #if defined(ARCHITECTURE_arm64) || defined(__sun__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__OpenBSD__)
      config.code_cache_size = std::uint32_t(128_MiB);
 diff --git a/src/core/core.cpp b/src/core/core.cpp
-index 7b33e18..22725ea 100644
+index 7b33e18f..22725ea9 100644
 --- a/src/core/core.cpp
 +++ b/src/core/core.cpp
 @@ -13,6 +13,7 @@
@@ -1394,7 +1396,7 @@ index 7b33e18..22725ea 100644
  
  bool System::IsShuttingDown() const {
 diff --git a/src/core/core_timing.cpp b/src/core/core_timing.cpp
-index dfc3f6f..aab922f 100644
+index dfc3f6f2..aab922f3 100644
 --- a/src/core/core_timing.cpp
 +++ b/src/core/core_timing.cpp
 @@ -74,7 +74,7 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
@@ -1407,7 +1409,7 @@ index dfc3f6f..aab922f 100644
              has_started = true;
  
 diff --git a/src/core/file_sys/patch_manager.cpp b/src/core/file_sys/patch_manager.cpp
-index 8602887..0e3ca2f 100644
+index 86028878..0e3ca2fc 100644
 --- a/src/core/file_sys/patch_manager.cpp
 +++ b/src/core/file_sys/patch_manager.cpp
 @@ -7,6 +7,7 @@
@@ -1479,8 +1481,30 @@ index 8602887..0e3ca2f 100644
      }
  
      if (out.size() < sizeof(Loader::NSOHeader)) {
+diff --git a/src/core/file_sys/romfs_factory.cpp b/src/core/file_sys/romfs_factory.cpp
+index 51787254..b076a109 100644
+--- a/src/core/file_sys/romfs_factory.cpp
++++ b/src/core/file_sys/romfs_factory.cpp
+@@ -38,11 +38,15 @@ void RomFSFactory::SetPackedUpdate(VirtualFile update_raw_file) {
+ }
+ 
+ VirtualFile RomFSFactory::OpenCurrentProcess(u64 current_process_title_id) const {
++    const auto type = ContentRecordType::Program;
+     if (!updatable) {
+-        return file;
++        // sergio: a NUP already carries its update merged, but LayeredFS mods
++        // (user/load/<title>/<mod>/romfs) still apply; no NCA, so no update step.
++        const PatchManager mods{current_process_title_id, filesystem_controller,
++                                content_provider};
++        return mods.PatchRomFS(nullptr, file, type, nullptr);
+     }
+ 
+-    const auto type = ContentRecordType::Program;
+     const auto nca = content_provider.GetEntry(current_process_title_id, type);
+     const PatchManager patch_manager{current_process_title_id, filesystem_controller,
+                                      content_provider};
 diff --git a/src/core/hle/kernel/physical_core.cpp b/src/core/hle/kernel/physical_core.cpp
-index 4fb59fb..2fd5856 100644
+index 4fb59fb6..2fd5856b 100644
 --- a/src/core/hle/kernel/physical_core.cpp
 +++ b/src/core/hle/kernel/physical_core.cpp
 @@ -9,6 +9,7 @@
@@ -1506,7 +1530,7 @@ index 4fb59fb..2fd5856 100644
          while (!m_is_interrupted.load(std::memory_order_acquire) &&
                 std::chrono::steady_clock::now() < deadline) {
 diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
-index a80387b..05c11ee 100644
+index a80387be..05c11ee0 100644
 --- a/src/core/hle/service/nx2_gsv.h
 +++ b/src/core/hle/service/nx2_gsv.h
 @@ -1750,18 +1750,26 @@ private:
@@ -1554,7 +1578,7 @@ index a80387b..05c11ee 100644
                                          m_previous_fence_id, m_previous_fence_value);
              WaitForFrame(m_previous_fence_id, m_previous_fence_value);
 diff --git a/src/core/hle/service/vi/conductor.cpp b/src/core/hle/service/vi/conductor.cpp
-index fd7233c..357ae0a 100644
+index fd7233cf..357ae0a1 100644
 --- a/src/core/hle/service/vi/conductor.cpp
 +++ b/src/core/hle/service/vi/conductor.cpp
 @@ -7,6 +7,7 @@
@@ -1574,7 +1598,7 @@ index fd7233c..357ae0a 100644
  
      for (auto& [display_id, manager] : m_vsync_managers) {
 diff --git a/src/core/memory.cpp b/src/core/memory.cpp
-index fd289eb..8c558eb 100644
+index fd289eb5..8c558eb9 100644
 --- a/src/core/memory.cpp
 +++ b/src/core/memory.cpp
 @@ -6,6 +6,8 @@
@@ -1646,7 +1670,7 @@ index fd289eb..8c558eb 100644
          if (current_page_table->fastmem_arena) {
              Common::MemoryPermission perm{};
 diff --git a/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp b/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp
-index 2307226..ac67282 100644
+index 23072267..ac67282f 100644
 --- a/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp
 +++ b/src/dynarmic/src/dynarmic/backend/x64/a64_emit_x64.cpp
 @@ -559,6 +559,32 @@ void A64EmitX64::EmitA64GetCNTFRQ(A64EmitContext& ctx, IR::Inst* inst) {
@@ -1683,7 +1707,7 @@ index 2307226..ac67282 100644
      if (!conf.wall_clock_cntpct) {
          code.UpdateTicks();
 diff --git a/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp b/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp
-index bb07212..7b03dea 100644
+index bb072129..7b03dea7 100644
 --- a/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp
 +++ b/src/dynarmic/src/dynarmic/backend/x64/a64_interface.cpp
 @@ -258,7 +258,10 @@ private:
@@ -1699,7 +1723,7 @@ index bb07212..7b03dea 100644
          return emitter.Emit(ir_block).entrypoint;
      }
 diff --git a/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h b/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h
-index c3d8b04..c7fa569 100644
+index c3d8b04d..c7fa569e 100644
 --- a/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h
 +++ b/src/dynarmic/src/dynarmic/backend/x64/a64_jitstate.h
 @@ -56,6 +56,9 @@ struct A64JitState {
@@ -1713,7 +1737,7 @@ index c3d8b04..c7fa569 100644
          return NZCV::FromX64(cpsr_nzcv);
      }
 diff --git a/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc b/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc
-index 689e507..a2dbcad 100644
+index 689e507a..a2dbcad5 100644
 --- a/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc
 +++ b/src/dynarmic/src/dynarmic/backend/x64/emit_x64_memory.cpp.inc
 @@ -86,6 +86,8 @@ template<std::size_t bitsize, auto callback>
@@ -1755,7 +1779,7 @@ index 689e507..a2dbcad 100644
          AddFastmemPatch(location, code.getCurr(), wrapped_fn, *fastmem_marker, conf.recompile_on_exclusive_fastmem_failure);
  
 diff --git a/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h b/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h
-index 61033eb..2b6ba5e 100644
+index 61033eb5..2b6ba5e8 100644
 --- a/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h
 +++ b/src/dynarmic/src/dynarmic/frontend/A64/translate/a64_translate.h
 @@ -38,6 +38,9 @@ struct TranslationOptions {
@@ -1769,7 +1793,7 @@ index 61033eb..2b6ba5e 100644
  
  /**
 diff --git a/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp b/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp
-index c60fdc3..f8b801a 100644
+index c60fdc3a..f8b801a4 100644
 --- a/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp
 +++ b/src/dynarmic/src/dynarmic/frontend/A64/translate/impl/system.cpp
 @@ -86,7 +86,13 @@ bool TranslatorVisitor::DSB(Imm<4> /*CRm*/) {
@@ -1788,7 +1812,7 @@ index c60fdc3..f8b801a 100644
      return true;
  }
 diff --git a/src/dynarmic/src/dynarmic/interface/A32/config.h b/src/dynarmic/src/dynarmic/interface/A32/config.h
-index 49063ed..7e3b413 100644
+index 49063ed6..7e3b413e 100644
 --- a/src/dynarmic/src/dynarmic/interface/A32/config.h
 +++ b/src/dynarmic/src/dynarmic/interface/A32/config.h
 @@ -239,6 +239,9 @@ struct UserConfig {
@@ -1802,7 +1826,7 @@ index 49063ed..7e3b413 100644
      /// for exit after every data memory access by the emulated program.
      bool check_halt_on_memory_access = false;
 diff --git a/src/dynarmic/src/dynarmic/interface/A64/config.h b/src/dynarmic/src/dynarmic/interface/A64/config.h
-index 859aeba..8dade0c 100644
+index 859aeba7..8dade0c7 100644
 --- a/src/dynarmic/src/dynarmic/interface/A64/config.h
 +++ b/src/dynarmic/src/dynarmic/interface/A64/config.h
 @@ -293,6 +293,18 @@ struct UserConfig {
@@ -1825,7 +1849,7 @@ index 859aeba..8dade0c 100644
      /// for exit after every data memory access by the emulated program.
      bool check_halt_on_memory_access = false;
 diff --git a/src/frontend_common/config.cpp b/src/frontend_common/config.cpp
-index 698385e..8186377 100644
+index 698385ed..d130d688 100644
 --- a/src/frontend_common/config.cpp
 +++ b/src/frontend_common/config.cpp
 @@ -134,12 +134,12 @@ void Config::SetUpIni() {
@@ -1871,8 +1895,19 @@ index 698385e..8186377 100644
  #endif
  }
  
+@@ -1105,7 +1124,9 @@ void Config::SetArrayIndex(const int index) {
+     const int array_index = index + 1;
+ 
+     // You can't exceed the known max size of the array by more than 1
+-    ASSERT(array_stack.front().size + 1 >= array_index);
++    // sergio: check the innermost array, not the outermost (nested arrays such as
++    // DisabledAddOns/<n>/disabled asserted on every entry past the outer size).
++    ASSERT(array_stack.back().size + 1 >= array_index);
+ 
+     // Change the config array size to the current index since you may want
+     // to reduce the number of elements that you read back from the config
 diff --git a/src/qt_common/config/shared_translation.cpp b/src/qt_common/config/shared_translation.cpp
-index a720754..b687d6d 100644
+index a7207543..b687d6d6 100644
 --- a/src/qt_common/config/shared_translation.cpp
 +++ b/src/qt_common/config/shared_translation.cpp
 @@ -165,6 +165,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
@@ -1899,8 +1934,110 @@ index a720754..b687d6d 100644
      translations->insert({Settings::EnumMetadata<Settings::AspectRatio>::Index(),
                            {
                                PAIR(AspectRatio, R16_9, tr("Default (16:9)")),
+diff --git a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
+index f435ccfe..c49039b9 100644
+--- a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
++++ b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
+@@ -305,12 +305,21 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+         bool requires_shadow = false;
+         for (u32 bit : {16U, 24U, 32U, 64U}) {
+             if (opcode == 0x81c) break;
+-            if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0x986 && opcode != 0x987 && opcode != 0xf66 && opcode != 0x988 && opcode != 0x927) continue;
++            // Bits 32-39 name a register in register forms and in these opcodes: TEX/TLD, the
++            // stores, and the data operand of ISBEWR (0x927), RED (0x98e) and SURED (0x59f), all
++            // three listed with operand 32 in RegisterPressure.
++            if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0x986 && opcode != 0x987 && opcode != 0xf66 && opcode != 0x988 && opcode != 0x927 && opcode != 0x98e && opcode != 0x59f) continue;
+             const u32 reg = insn.Bits(bit, 8);
+             if (reg >= (uses_uniform_bank ? high_uniform_base : 246U) && reg < 255)
+                 requires_shadow = true;
+         }
+         if (requires_shadow) {
++            if (uses_uniform_bank && (high_uniform_base & 3)) {
++                // Shadowing works in aligned groups of four: lower again with the high uniform
++                // base rounded down to a multiple of four (LowerToMaxwell retries).
++                result.high_uniform_registers =
++                    (std::max)(result.high_uniform_registers, (high_uniforms + 3) & ~3U);
++            }
+             if (!uses_uniform_bank || (high_uniform_base & 3))
+                 return fail(index, "native program uses lowering scratch registers");
+             pressure = PrepareRegisterPressure(insn, high_uniform_base);
+@@ -2536,9 +2545,11 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+                 (per_tap && (bindless || depth || insn.Bits(80, 1) || insn.Bits(91, 1))) ||
+                 insn.Bits(89, 1) || mask == 0 ||
+                 (bindless ? (handle >= 246 || insn.Bits(46, 13) || !insn.Bits(91, 1))
+-                          : (insn.Bits(40, 14) > 0x1fff || binding >= 18 ||
+-                             (result.required_texture_buffer != ~0U && result.required_texture_buffer != binding))))
++                          : (insn.Bits(40, 14) > 0x1fff || binding >= 18)))
+                 return fail(index, "native texture gather mode");
++            // A second descriptor buffer is gathered bindless (TLD4.B), its handle loaded from that
++            // buffer, as TEX does; the shaders mixing two buffers were rejected before.
++            const bool second_buffer = !bindless && !bind_texture_buffer(binding);
+             if (per_tap) {
+                 if (!insn.Bits(60, 1) || mask != 15 || source_a + 1 >= register_limit ||
+                     source_b + 1 >= register_limit || (dest != 255 && dest + 1 >= register_limit) ||
+@@ -2642,7 +2653,6 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+                 for (u32 i = 0; i < packed_offsets.size(); ++i)
+                     emit(0x010000000007f000ULL | (248 + i) | (u64{*packed_offsets[i]} << 20));
+             }
+-            if (!bindless) result.required_texture_buffer = binding;
+             // Two coordinates: x in Ra, y in Rb (the coordinate list splits evenly across them);
+             // with an offset, x and y in Ra, Ra+1 and the offset in Rb.
+             const u32 y = !offsets && !per_tap && !depth ? source_b : source_a == 255 ? 255U : source_a + 1;
+@@ -2651,15 +2661,27 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+                  (u64{array ? source_a + 1 : y} << 20));
+             if (array)
+                 emit(0x5c98000000000000ULL | predicate | 252 | (u64{15} << 39) | (u64{source_b} << 20));
+-            if (offsets || depth) {
+-                emit(0x5c98000000000000ULL | predicate | 246 | (u64{15} << 39) | (u64{source_b} << 20));
+-            }
+-            if (bindless) {
++            if (second_buffer) {
++                // TLD4.B meta registers: the handle first, then the offsets (AOFFI one register,
++                // PTP the two packed in R248, R249) and the depth reference. With PTP the handle
++                // goes in R247 so the packed offsets stay where they were written.
++                const u32 meta = per_tap ? 247U : 246U;
++                emit(0x4c98000000070000ULL | meta | (u64{15} << 39) | (u64{insn.Bits(40, 14)} << 20) |
++                     (u64{binding} << 34));
++                if (offsets || depth)
++                    emit(0x5c98000000000000ULL | predicate | 247 | (u64{15} << 39) | (u64{source_b} << 20));
++                emit(0xdec0000000000000ULL | predicate | 250 | (u64{250} << 8) | (u64{meta} << 20) |
++                     (u64{array ? 3U : 2U} << 28) | (u64{mask} << 31) |
++                     (u64{per_tap ? 2U : offsets ? 1U : 0U} << 36) | (u64{insn.Bits(87, 2)} << 38) |
++                     (u64{insn.Bits(90, 1)} << 49) | (u64{depth} << 50) | (u64{7} << 51));
++            } else if (bindless) {
+                 emit(0x5c98000000000000ULL | predicate | 246 | (u64{15} << 39) | (u64{handle} << 20));
+                 emit(0xdec0000000000000ULL | predicate | 250 | (u64{250} << 8) | (u64{246} << 20) |
+                      (u64{array ? 3U : 2U} << 28) | (u64{mask} << 31) | (u64{insn.Bits(87, 2)} << 38) |
+                      (u64{insn.Bits(90, 1)} << 49) | (u64{7} << 51));
+             } else {
++            if (offsets || depth)
++                emit(0x5c98000000000000ULL | predicate | 246 | (u64{15} << 39) | (u64{source_b} << 20));
+             emit(0xc800000000000000ULL | predicate | 250 | (u64{250} << 8) |
+                  (u64{per_tap ? 248U : offsets || depth ? 246U : 255U} << 20) | (u64{array ? 3U : 2U} << 28) | (u64{mask} << 31) |
+                  (u64{insn.Bits(40, 14)} << 36) | (u64{insn.Bits(90, 1)} << 49) | (u64{depth} << 50) | (u64{7} << 51) |
+diff --git a/src/shader_recompiler/frontend/ampere/register_pressure.h b/src/shader_recompiler/frontend/ampere/register_pressure.h
+index 9b96f1e8..d3ec0bef 100644
+--- a/src/shader_recompiler/frontend/ampere/register_pressure.h
++++ b/src/shader_recompiler/frontend/ampere/register_pressure.h
+@@ -148,6 +148,8 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
+     case 0xa10:
+     case 0xc10:
+     case 0x812:
++    case 0xa12: // LOP3.LUT, constant buffer and uniform B: no register in B's field
++    case 0xc12:
+     case 0x824:
+     case 0x823:
+     case 0x831:
+@@ -173,6 +175,7 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
+     case 0x210:
+     case 0x211:
+     case 0x212:
++    case 0x219: // SHF, register form: Rd, low word, shift amount, high word
+         operand(16);
+         operand(24);
+         operand(32);
 diff --git a/src/shader_recompiler/frontend/maxwell/translate_program.cpp b/src/shader_recompiler/frontend/maxwell/translate_program.cpp
-index 4abf1d5..8938fff 100644
+index 4abf1d50..8938fffd 100644
 --- a/src/shader_recompiler/frontend/maxwell/translate_program.cpp
 +++ b/src/shader_recompiler/frontend/maxwell/translate_program.cpp
 @@ -502,8 +502,9 @@ IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b
@@ -1916,7 +2053,7 @@ index 4abf1d5..8938fff 100644
      if (Settings::values.renderer_debug) {
          Optimization::VerificationPass(result);
 diff --git a/src/shader_recompiler/host_translate_info.h b/src/shader_recompiler/host_translate_info.h
-index 1f77b70..8b4d494 100644
+index 1f77b70d..8b4d494b 100644
 --- a/src/shader_recompiler/host_translate_info.h
 +++ b/src/shader_recompiler/host_translate_info.h
 @@ -20,6 +20,8 @@ struct HostTranslateInfo {
@@ -1948,7 +2085,7 @@ index 1f77b70..8b4d494 100644
          ApplyDescriptorLimitFallback(max_descriptor_set_uniform_buffers);
          ApplyDescriptorLimitFallback(max_descriptor_set_uniform_buffers_dynamic);
 diff --git a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
-index ac2d77c..4899814 100644
+index ac2d77c6..48998144 100644
 --- a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
 +++ b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
 @@ -483,9 +483,13 @@ void VisitUsages(Info& info, IR::Inst& inst) {
@@ -1985,10 +2122,129 @@ index ac2d77c..4899814 100644
      case IR::Opcode::FPFloor32:
      case IR::Opcode::FPCeil32:
 diff --git a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
-index 7ca477c..b280deb 100644
+index 7ca477cc..8cd7bad2 100644
 --- a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
 +++ b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
-@@ -1609,10 +1609,11 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+@@ -79,6 +79,11 @@ struct StorageInfo {
+     std::unordered_set<const IR::Inst*> native_dynamic;
+     /// A native access with several candidate pointers was left global.
+     bool native_runtime_bounds{};
++    /// Paired accesses bind the loaded pointers that compete with their pair; cleared when those
++    /// leave too few bindings.
++    bool bind_competing_loaded{true};
++    /// A paired access bound the loaded pointers that compete with its pair.
++    bool competing_loaded_bound{};
+     /// Pointer table entries reached through a phi or select of table pointers, or through a
+     /// table pointer read from a dynamically indexed constant buffer array. They are bound only
+     /// in the bindings the program's other storage buffers leave free (table_budget).
+@@ -149,6 +154,24 @@ bool IsGlobalMemory(const IR::Inst& inst) {
+     }
+ }
+ 
++/// Returns true when the backend can pick a global access's buffer among the bound ones at run time
++bool IsRuntimeRoutable(const IR::Inst& inst) {
++    switch (inst.GetOpcode()) {
++    case IR::Opcode::LoadGlobal32:
++    case IR::Opcode::LoadGlobal64:
++    case IR::Opcode::LoadGlobal128:
++    case IR::Opcode::WriteGlobal32:
++    case IR::Opcode::WriteGlobal64:
++    case IR::Opcode::WriteGlobal128:
++    case IR::Opcode::GlobalAtomicIAdd32:
++    case IR::Opcode::GlobalAtomicUMax32:
++    case IR::Opcode::GlobalAtomicCompareExchange32:
++        return true;
++    default:
++        return false;
++    }
++}
++
+ /// Returns true when the instruction is a global memory instruction
+ bool IsGlobalMemoryWrite(const IR::Inst& inst) {
+     switch (inst.GetOpcode()) {
+@@ -1318,7 +1341,12 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
+         !env.IsCbufStorageBufferPointer(storage_buffer->index, storage_buffer->offset)) {
+         storage_buffer.reset();
+     }
+-    if (native && !storage_buffer && !low_addr.IsImmediate()) {
++    // A paired constant buffer pointer can be only one input of a select or phi whose other input
++    // is a pointer loaded from that buffer (Ocarina of Time's foliage unit placement records are
++    // read from c0[12] or from *c0[12]). Rebasing on the constant buffer pointer then reads the
++    // loaded path's records out of bounds, as zeros, so look for loaded pointers here as well.
++    const bool paired_found = storage_buffer.has_value();
++    if (native && !low_addr.IsImmediate()) {
+         const IR::Inst* const start{low_addr.InstRecursive()};
+         auto it{info.native_candidates.find(start)};
+         if (it == info.native_candidates.end()) {
+@@ -1331,10 +1359,25 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
+             }
+         }
+         const auto& candidates{it->second};
+-        if (candidates.size() > 1 || (!candidates.empty() && info.native_dynamic.contains(start))) {
++        const bool has_loaded_pointer{std::ranges::any_of(
++            candidates, [](const StorageBufferAddr& c) { return c.indirect != ~0U; })};
++        if (paired_found &&
++            (!has_loaded_pointer || !info.bind_competing_loaded || !IsRuntimeRoutable(inst))) {
++            // No pointer loaded from memory competes with the paired one, or the access cannot
++            // stay global: keep the pair.
++        } else if (candidates.size() > 1 || paired_found ||
++                   (!candidates.empty() && info.native_dynamic.contains(start))) {
+             // Bind every candidate and keep the access global; the backend picks the buffer at
+             // run time. Rebasing on one of them drops the other path's accesses.
+             bool accepted{};
++            if (paired_found) {
++                // The paired pointer is the other input of the select or phi; bind it too.
++                info.competing_loaded_bound = true;
++                info.set.insert(*storage_buffer);
++                if (IsGlobalMemoryWrite(inst)) {
++                    info.writes.insert(*storage_buffer);
++                }
++            }
+             for (const StorageBufferAddr& candidate : candidates) {
+                 if (std::ranges::find(info.table_candidates, candidate) !=
+                     info.table_candidates.end()) {
+@@ -1366,7 +1409,7 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
+                 return;
+             }
+             // Only table entries, and no free binding for them: as if none had been found.
+-        } else if (candidates.size() == 1) {
++        } else if (candidates.size() == 1 && !paired_found) {
+             // The one pointer the address is built from. The NVN search below only takes 16-byte
+             // aligned slots, so for a pointer at an 8-byte slot it can return a dimension or stride
+             // the address arithmetic reads instead, and the access then lands in the wrong buffer.
+@@ -1563,6 +1606,8 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+     }
+     TrackingConditions conditions{program};
+     StorageInfo info;
++    // Without 64-bit integers the backend cannot route global accesses among bound buffers.
++    info.bind_competing_loaded = host_info.support_int64;
+     info.iterator_words = CollectIteratorWords(program);
+     info.atomic_pointers = CollectAtomicPointers(program);
+     const auto collect = [&] {
+@@ -1577,11 +1622,22 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+         }
+     };
+     collect();
++    if (info.competing_loaded_bound && info.set.size() > Info::MAX_SSBOS) {
++        // Not enough bindings for the loaded pointers that compete with paired ones: keep the
++        // pairs, as if no loaded pointer competed.
++        StorageInfo paired;
++        paired.iterator_words = std::move(info.iterator_words);
++        paired.atomic_pointers = std::move(info.atomic_pointers);
++        paired.bind_competing_loaded = false;
++        info = std::move(paired);
++        collect();
++    }
+     if (info.tables_seen && info.set.size() < Info::MAX_SSBOS) {
+         // Again with pointer table entries, in the bindings the first pass left free.
+         StorageInfo with_tables;
+         with_tables.iterator_words = std::move(info.iterator_words);
+         with_tables.atomic_pointers = std::move(info.atomic_pointers);
++        with_tables.bind_competing_loaded = info.bind_competing_loaded;
+         with_tables.tables_enabled = true;
+         with_tables.table_budget = Info::MAX_SSBOS - info.set.size();
+         info = std::move(with_tables);
+@@ -1609,10 +1665,11 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
      }
  }
  
@@ -2001,7 +2257,7 @@ index 7ca477c..b280deb 100644
      for (auto& desc : source.storage_buffers_descriptors) {
          auto it{std::ranges::find_if(descriptors, [&desc](const auto& existing) {
              return desc.cbuf_index == existing.cbuf_index &&
-@@ -1621,10 +1622,13 @@ void JoinStorageInfo(Info& base, Info& source) {
+@@ -1621,10 +1678,13 @@ void JoinStorageInfo(Info& base, Info& source) {
          })};
          if (it != descriptors.end()) {
              it->is_written |= desc.is_written;
@@ -2016,7 +2272,7 @@ index 7ca477c..b280deb 100644
  
  } // namespace Shader::Optimization
 diff --git a/src/shader_recompiler/ir_opt/passes.h b/src/shader_recompiler/ir_opt/passes.h
-index 2c559b2..9f0dd6b 100644
+index 2c559b2e..9f0dd6bf 100644
 --- a/src/shader_recompiler/ir_opt/passes.h
 +++ b/src/shader_recompiler/ir_opt/passes.h
 @@ -6,6 +6,9 @@
@@ -2055,7 +2311,7 @@ index 2c559b2..9f0dd6b 100644
  
  } // namespace Shader::Optimization
 diff --git a/src/shader_recompiler/ir_opt/texture_pass.cpp b/src/shader_recompiler/ir_opt/texture_pass.cpp
-index e8369a9..9ec3ba7 100644
+index e8369a9f..9ec3ba73 100644
 --- a/src/shader_recompiler/ir_opt/texture_pass.cpp
 +++ b/src/shader_recompiler/ir_opt/texture_pass.cpp
 @@ -5,6 +5,8 @@
@@ -2757,7 +3013,7 @@ index e8369a9..9ec3ba7 100644
  }
  
 diff --git a/src/shader_recompiler/shader_info.h b/src/shader_recompiler/shader_info.h
-index 2ed83d0..a89ccfa 100644
+index 2ed83d01..a89ccfab 100644
 --- a/src/shader_recompiler/shader_info.h
 +++ b/src/shader_recompiler/shader_info.h
 @@ -232,7 +232,9 @@ struct TextureDescriptor {
@@ -2818,10 +3074,26 @@ index 2ed83d0..a89ccfa 100644
              const u32 false_value = pop(), true_value = pop(), condition = pop();
              push(condition != 0 ? true_value : false_value);
 diff --git a/src/tests/CMakeLists.txt b/src/tests/CMakeLists.txt
-index d910722..9183f78 100644
+index d9107222..9763f180 100644
 --- a/src/tests/CMakeLists.txt
 +++ b/src/tests/CMakeLists.txt
-@@ -95,6 +95,7 @@ add_executable(tests
+@@ -65,6 +65,7 @@ add_executable(tests
+     video_core/spirv_fragment_shuffle.cpp
+     video_core/multi_range_refresh.cpp
+     video_core/command_fetch_order.cpp
++    video_core/gpu_written_pages.cpp
+     video_core/command_writer.cpp
+     video_core/split_fence_wait.cpp
+     video_core/command_snapshot_suspensions.cpp
+@@ -75,6 +76,7 @@ add_executable(tests
+     common/queue_lifetime.cpp
+     common/queue_timed_wait.cpp
+     common/range_set_move.cpp
++    common/range_set_subtract.cpp
+     video_core/uniform_cache_history.cpp
+     video_core/x8d24_conversion.cpp
+     video_core/ampere_ported_half_compare.cpp
+@@ -95,6 +97,7 @@ add_executable(tests
      video_core/ampere_matrix.cpp
      video_core/spirv_software_matrix.cpp
      video_core/spirv_builtin_capabilities.cpp
@@ -2829,9 +3101,84 @@ index d910722..9183f78 100644
      common/bit_field.cpp
      common/cityhash.cpp
      common/container_hash.cpp
+diff --git a/src/tests/common/range_set_subtract.cpp b/src/tests/common/range_set_subtract.cpp
+new file mode 100644
+index 00000000..87ca1031
+--- /dev/null
++++ b/src/tests/common/range_set_subtract.cpp
+@@ -0,0 +1,69 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <array>
++#include <random>
++
++#include <catch2/catch_test_macros.hpp>
++
++#include "common/range_sets.h"
++#include "common/range_sets.inc"
++
++namespace {
++
++constexpr u64 SPACE = 512;
++
++std::array<bool, SPACE> Contents(const Common::RangeSet<u64>& set) {
++    std::array<bool, SPACE> contents{};
++    set.ForEach([&](u64 begin, u64 end) {
++        for (u64 address = begin; address < end; ++address) {
++            contents[address] = true;
++        }
++    });
++    return contents;
++}
++
++} // Anonymous namespace
++
++TEST_CASE("RangeSet::Subtract leaves neighbours of the range alone", "[range_sets]") {
++    Common::RangeSet<u64> set;
++    set.Add(100, 50);
++    set.Subtract(150, 10);
++    set.Subtract(90, 10);
++    set.Subtract(0, 0);
++    set.Subtract(120, 0);
++    std::array<bool, SPACE> expected{};
++    for (u64 address = 100; address < 150; ++address) {
++        expected[address] = true;
++    }
++    REQUIRE(Contents(set) == expected);
++    set.Subtract(149, 1);
++    set.Subtract(90, 11);
++    expected[149] = false;
++    expected[100] = false;
++    REQUIRE(Contents(set) == expected);
++
++    Common::RangeSet<u64> empty;
++    empty.Subtract(0, SPACE);
++    REQUIRE(empty.Empty());
++}
++
++TEST_CASE("RangeSet::Subtract matches a per-address model", "[range_sets]") {
++    std::mt19937_64 rng{0x0400486024DEC000ULL};
++    Common::RangeSet<u64> set;
++    std::array<bool, SPACE> model{};
++    for (int step = 0; step < 20000; ++step) {
++        const u64 base = rng() % SPACE;
++        const u64 size = rng() % (SPACE - base + 1);
++        const bool add = rng() % 3 == 0;
++        if (add) {
++            set.Add(base, size);
++        } else {
++            set.Subtract(base, size);
++        }
++        for (u64 address = base; address < base + size; ++address) {
++            model[address] = add;
++        }
++        REQUIRE(Contents(set) == model);
++    }
++}
 diff --git a/src/tests/qt_compatibility/CMakeLists.txt b/src/tests/qt_compatibility/CMakeLists.txt
 new file mode 100644
-index 0000000..51e18c2
+index 00000000..51e18c22
 --- /dev/null
 +++ b/src/tests/qt_compatibility/CMakeLists.txt
 @@ -0,0 +1,27 @@
@@ -2864,7 +3211,7 @@ index 0000000..51e18c2
 +set_tests_properties(compatibility_report PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 diff --git a/src/tests/qt_compatibility/compatibility_report.cpp b/src/tests/qt_compatibility/compatibility_report.cpp
 new file mode 100644
-index 0000000..8c7fafe
+index 00000000..8c7fafe9
 --- /dev/null
 +++ b/src/tests/qt_compatibility/compatibility_report.cpp
 @@ -0,0 +1,708 @@
@@ -3576,8 +3923,93 @@ index 0000000..8c7fafe
 +}
 +
 +#include "compatibility_report.moc"
+diff --git a/src/tests/video_core/ampere_ported_textures.cpp b/src/tests/video_core/ampere_ported_textures.cpp
+index 81e37f51..980b031b 100644
+--- a/src/tests/video_core/ampere_ported_textures.cpp
++++ b/src/tests/video_core/ampere_ported_textures.cpp
+@@ -386,3 +386,47 @@ TEST_CASE("Ampere array depth comparisons support nonlegacy descriptor bindings"
+     REQUIRE(std::equal(alternate.begin(), alternate.end(), begin));
+     REQUIRE(begin + alternate.size() + 1 == mixed.instructions.end());
+ }
++
++TEST_CASE("Ampere gathers from a second descriptor buffer lower to Maxwell TLD4.B",
++          "[video_core][ampere][gather]") {
++    // The depth gather binds descriptor buffer 2; the gathers after it read buffer 14, whose
++    // handle at c[14][0x10] is loaded with MOV and passed as the first TLD4.B meta register.
++    const Instruction depth{{0x180c7b63, 0x30800e1c, 0x001e4f0e, 0x000f4200}};
++    const u64 pred = 7ULL << 16;
++    const u64 handle = 0x4c98000000070000ULL | (15ULL << 39) | (4ULL << 20) | (14ULL << 34);
++    const auto tld4b = [&](u32 meta, u32 offset_type) -> u64 {
++        return 0xdec0000000000000ULL | pred | 250 | (250ULL << 8) | (u64{meta} << 20) |
++               (2ULL << 28) | (15ULL << 31) | (u64{offset_type} << 36) | (1ULL << 49) |
++               (7ULL << 51);
++    };
++    const std::array<u64, 4> results{Copy(pred, 10, 250), Copy(pred, 11, 251), Copy(pred, 8, 252),
++                                     Copy(pred, 9, 253)};
++    const auto check = [&](const auto& lowered, u32 index, const auto& expected) {
++        INFO(lowered.error);
++        REQUIRE(lowered);
++        REQUIRE(lowered.required_texture_buffer == 2);
++        const auto begin = lowered.instructions.begin() + lowered.source_instruction_offsets[index];
++        REQUIRE(std::equal(expected.begin(), expected.end(), begin));
++        REQUIRE(std::equal(results.begin(), results.end(), begin + expected.size()));
++    };
++    // Plain and AOFFI: the handle in R246, the offset register after it.
++    const Instruction plain{{0x040a7b63, 0x33800408, 0x041e0f08, 0x100fc200}};
++    check(LowerToMaxwell(std::array{depth, plain, Exit}), 1,
++          std::array<u64, 4>{Copy(pred, 250, 4), Copy(pred, 251, 8), handle | 246, tld4b(246, 0)});
++    auto aoffi = plain;
++    aoffi.words[2] |= 1U << 12;
++    check(LowerToMaxwell(std::array{depth, aoffi, Exit}), 1,
++          std::array<u64, 5>{Copy(pred, 250, 4), Copy(pred, 251, 5), handle | 246, Copy(pred, 247, 8),
++                     tld4b(246, 1)});
++    // PTP: the handle in R247, so the packed offsets stay in R248 and R249.
++    const auto per_tap = PerTapProgram();
++    check(LowerToMaxwell(std::array{depth, per_tap[0], per_tap[1], per_tap[2], Exit}), 3,
++          std::array<u64, 6>{MoveImmediate(7ULL << 16, 248, 0xff00ff00),
++                     MoveImmediate(7ULL << 16, 249, 0x01000001), Copy(pred, 250, 4),
++                     Copy(pred, 251, 5), handle | 247, tld4b(247, 2)});
++    // Gathers from the bound buffer keep the bound TLD4.
++    const auto same = LowerToMaxwell(std::array{plain, plain, Exit});
++    INFO(same.error);
++    REQUIRE(same);
++    REQUIRE((same.instructions[same.source_instruction_offsets[1] + 2] >> 56) == 0xc8);
++}
+diff --git a/src/tests/video_core/ampere_ported_uniform_vote.cpp b/src/tests/video_core/ampere_ported_uniform_vote.cpp
+index 82240dd3..768a2cb4 100644
+--- a/src/tests/video_core/ampere_ported_uniform_vote.cpp
++++ b/src/tests/video_core/ampere_ported_uniform_vote.cpp
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
++#include <algorithm>
+ #include <array>
+ #include <catch2/catch_test_macros.hpp>
+ 
+@@ -89,12 +90,18 @@ TEST_CASE("Ampere uniform votes reach UR28 to UR62 through the high uniform mirr
+     REQUIRE(lowered.instructions.size() == 3);
+     REQUIRE(lowered.instructions[0] == Vote(214, 7, 7, 1));
+     REQUIRE(lowered.instructions[1] == Vote(180, 7, 7, 1));
+-    // The mirrors are reserved: a native register the high bank shadows is rejected.
++    // The mirrors are reserved: a native register inside them (R214, while UR28 alone would sit
++    // at R214) is shadowed. Shadowing needs an aligned base, so the program is lowered again with
++    // the mirrors at R212: the vote reads UR28 there and the native move writes its shadow, R210.
+     const auto shadowed = LowerToMaxwell(std::array{
+         Instruction{{0x00d67802, 0x3f800000, 0x00000f00, 0x000fe400}},
+         Instruction{{0x001c7886, 0, 0x038e0100, 0x000fe400}}, Exit});
+-    REQUIRE_FALSE(shadowed);
+-    REQUIRE(shadowed.error == "native program uses lowering scratch registers");
++    INFO(shadowed.error);
++    REQUIRE(shadowed);
++    REQUIRE(std::ranges::find(shadowed.instructions, Vote(212, 7, 7, 1)) !=
++            shadowed.instructions.end());
++    REQUIRE(std::ranges::find(shadowed.instructions, 0x0103f8000007f0d2ULL) !=
++            shadowed.instructions.end());
+ }
+ 
+ TEST_CASE("Ampere uniform votes keep the source predicate and its negation",
 diff --git a/src/tests/video_core/buffer_cache_ports.cpp b/src/tests/video_core/buffer_cache_ports.cpp
-index 46db489..99e077e 100644
+index 46db4893..99e077e7 100644
 --- a/src/tests/video_core/buffer_cache_ports.cpp
 +++ b/src/tests/video_core/buffer_cache_ports.cpp
 @@ -225,9 +225,6 @@ struct BufferCacheTestAccess {
@@ -3655,9 +4087,100 @@ index 46db489..99e077e 100644
      REQUIRE(data[0x10122] == 0x6b);
 -    REQUIRE(data[0x10123] == 0);
  }
+diff --git a/src/tests/video_core/gpu_written_pages.cpp b/src/tests/video_core/gpu_written_pages.cpp
+new file mode 100644
+index 00000000..29de1949
+--- /dev/null
++++ b/src/tests/video_core/gpu_written_pages.cpp
+@@ -0,0 +1,35 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <catch2/catch_test_macros.hpp>
++
++#include "video_core/nx2.h"
++
++TEST_CASE("Nx2MayBeGpuWritten sees every page a GPU write marked", "[video_core][nx2]") {
++    constexpr u64 page = u64{1} << Tegra::Nx2WrittenPageBits;
++    constexpr u64 base = 0x10000000;
++    Tegra::Nx2ClearGpuWrittenPages();
++    CHECK_FALSE(Tegra::Nx2MayBeGpuWritten(base, 64 * page));
++
++    Tegra::Nx2MarkGpuWritten(base + 3 * page + 100, 8);
++    CHECK(Tegra::Nx2MayBeGpuWritten(base + 3 * page, 1));
++    CHECK(Tegra::Nx2MayBeGpuWritten(base + 4 * page - 1, 1));
++    CHECK(Tegra::Nx2MayBeGpuWritten(base, 3 * page + 1));
++    CHECK(Tegra::Nx2MayBeGpuWritten(base + 3 * page - 4, 8));
++    CHECK(Tegra::Nx2MayBeGpuWritten(base, 64 * page));
++    CHECK_FALSE(Tegra::Nx2MayBeGpuWritten(base, 3 * page));
++    CHECK_FALSE(Tegra::Nx2MayBeGpuWritten(base + 4 * page, 60 * page));
++    CHECK_FALSE(Tegra::Nx2MayBeGpuWritten(base + 3 * page, 0));
++
++    Tegra::Nx2MarkGpuWritten(base + 63 * page + page - 1, 2);
++    CHECK(Tegra::Nx2MayBeGpuWritten(base + 64 * page, 1));
++    CHECK_FALSE(Tegra::Nx2MayBeGpuWritten(base + 65 * page, page));
++
++    const u64 bitmap_end = Tegra::g_nx2_gpu_written_pages.size() * 64 * page;
++    CHECK(Tegra::Nx2MayBeGpuWritten(bitmap_end - 4, 8));
++    CHECK(Tegra::Nx2MayBeGpuWritten(bitmap_end, page));
++    CHECK(Tegra::Nx2MayBeGpuWritten(~u64{0} - 3, 8));
++
++    Tegra::Nx2ClearGpuWrittenPages();
++    CHECK_FALSE(Tegra::Nx2MayBeGpuWritten(base, 64 * page));
++}
+diff --git a/src/tests/video_core/nx2_perf_draw_binds.cpp b/src/tests/video_core/nx2_perf_draw_binds.cpp
+index d6668d5d..db575b9c 100644
+--- a/src/tests/video_core/nx2_perf_draw_binds.cpp
++++ b/src/tests/video_core/nx2_perf_draw_binds.cpp
+@@ -230,6 +230,45 @@ TEST_CASE("Nx2Perf draw-binds: UsageTracker run matches the old Track", "[video_
+     REQUIRE(std::ranges::equal(tracker.Pages(), old.pages));
+ }
+ 
++TEST_CASE("Nx2Perf draw-binds: skipped UsageTracker resets match full resets", "[video_core]") {
++    constexpr u64 buffer_size = 4ULL << 20;
++    VideoCommon::UsageTracker tracker{buffer_size};
++    OldUsageTracker old{buffer_size};
++    tracker.Reset();
++    old.Reset();
++    REQUIRE(std::ranges::equal(tracker.Pages(), old.pages));
++
++    tracker.Track(PAGE, 3 * WORD + 64);
++    old.Track(PAGE, 3 * WORD + 64);
++    tracker.Reset();
++    old.Reset();
++    tracker.Reset();
++    old.Reset();
++    REQUIRE(std::ranges::all_of(tracker.Pages(), [](u64 word) { return word == 0; }));
++    REQUIRE_FALSE(tracker.IsUsed(PAGE, 64));
++    tracker.Track(PAGE, 3 * WORD + 64);
++    old.Track(PAGE, 3 * WORD + 64);
++    REQUIRE(std::ranges::equal(tracker.Pages(), old.pages));
++    REQUIRE(tracker.IsUsed(PAGE + WORD, 64));
++
++    std::mt19937_64 rng{0x040074A01BF12000ULL};
++    for (int step = 0; step < 20000; ++step) {
++        if (rng() % 3 == 0) {
++            tracker.Reset();
++            old.Reset();
++        } else {
++            const u64 offset = (rng() % (buffer_size / 64)) * 64;
++            u64 size = 64 * (1 + rng() % 4096);
++            if ((offset + size) % PAGE == 0) {
++                size += 64;
++            }
++            tracker.Track(offset, size);
++            old.Track(offset, size);
++        }
++        REQUIRE(std::ranges::equal(tracker.Pages(), old.pages));
++    }
++}
++
+ TEST_CASE("Nx2Perf draw-binds: clean words", "[video_core]") {
+     FakeRasterizer rasterizer;
+     auto tracker = std::make_unique<Tracker>(rasterizer);
 diff --git a/src/tests/video_core/spirv_min_max_denorms.cpp b/src/tests/video_core/spirv_min_max_denorms.cpp
 new file mode 100644
-index 0000000..d47d2be
+index 00000000..d47d2be6
 --- /dev/null
 +++ b/src/tests/video_core/spirv_min_max_denorms.cpp
 @@ -0,0 +1,155 @@
@@ -3816,8 +4339,181 @@ index 0000000..d47d2be
 +    fixture.profile.has_broken_fp32_denorm_flush = true;
 +    CheckModes(fixture, false, false);
 +}
+diff --git a/src/tests/video_core/storage_buffer_pointer_tracking.cpp b/src/tests/video_core/storage_buffer_pointer_tracking.cpp
+index e93d18ef..d5a44d8b 100644
+--- a/src/tests/video_core/storage_buffer_pointer_tracking.cpp
++++ b/src/tests/video_core/storage_buffer_pointer_tracking.cpp
+@@ -2,6 +2,8 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
+ #include <algorithm>
++#include <array>
++#include <optional>
+ #include <vector>
+ 
+ #include <catch2/catch_test_macros.hpp>
+@@ -50,6 +52,7 @@ struct KernelProgram {
+     IR::Block loop{pool};
+     IR::Program program;
+     TestEnvironment env;
++    bool int64{true};
+ 
+     KernelProgram() {
+         program.stage = Shader::Stage::Compute;
+@@ -60,6 +63,7 @@ struct KernelProgram {
+     std::vector<u32> TrackedOffsets() {
+         Shader::HostTranslateInfo host{};
+         host.min_ssbo_alignment = 16;
++        host.support_int64 = int64;
+         Shader::Optimization::GlobalMemoryToStorageBufferPass(env, program, host);
+         std::vector<u32> offsets;
+         for (const auto& descriptor : program.info.storage_buffers_descriptors) {
+@@ -334,6 +338,143 @@ TEST_CASE("Loaded global pointers do not inherit the source buffer descriptor",
+     }
+ }
+ 
++/// A native record address that is c0[0x30] or the pointer loaded from *c0[0x30], through a
++/// select or a phi, plus a lane offset. Ocarina of Time's near-leaf pass 539ffb3f650a34ac reads
++/// its foliage unit placement records this way, from c0[12] or from *c0[12].
++struct DirectOrLoadedPointer {
++    KernelProgram fixture;
++    IR::Block taken{fixture.pool};
++    IR::Block merge{fixture.pool};
++
++    IR::U64 RecordAddress(bool phi) {
++        fixture.env.native = true;
++        IR::IREmitter ir{fixture.entry};
++        const IR::Value loaded{ir.LoadGlobal64(Address(ir, Word(ir, 0x30), Word(ir, 0x34)))};
++        const IR::U32 loaded_low{ir.CompositeExtract(loaded, 0)};
++        const IR::U32 loaded_high{ir.CompositeExtract(loaded, 1)};
++        IR::U32 low;
++        IR::U32 high;
++        IR::Block* access{&fixture.entry};
++        if (phi) {
++            fixture.entry.AddBranch(&taken);
++            fixture.entry.AddBranch(&merge);
++            taken.AddBranch(&merge);
++            fixture.program.blocks = {&fixture.entry, &taken, &merge};
++            fixture.program.post_order_blocks = {&merge, &taken, &fixture.entry};
++            for (u32 index = 0; index < fixture.program.blocks.size(); ++index) {
++                fixture.program.blocks[index]->SetOrder(index);
++            }
++            IR::IREmitter direct{taken};
++            const IR::U32 direct_low{Word(direct, 0x30)};
++            const IR::U32 direct_high{Word(direct, 0x34)};
++            merge.AppendNewInst(IR::Opcode::Phi, {});
++            IR::Inst* const low_phi{&merge.back()};
++            low_phi->SetFlags(IR::Type::U32);
++            merge.AppendNewInst(IR::Opcode::Phi, {});
++            IR::Inst* const high_phi{&merge.back()};
++            high_phi->SetFlags(IR::Type::U32);
++            low_phi->AddPhiOperand(&fixture.entry, loaded_low);
++            low_phi->AddPhiOperand(&taken, direct_low);
++            high_phi->AddPhiOperand(&fixture.entry, loaded_high);
++            high_phi->AddPhiOperand(&taken, direct_high);
++            low = IR::U32{IR::Value{low_phi}};
++            high = IR::U32{IR::Value{high_phi}};
++            access = &merge;
++        } else {
++            const IR::U1 direct{ir.ILessThan(ir.LocalInvocationIdX(), ir.Imm32(16), false)};
++            low = IR::U32{ir.Select(direct, Word(ir, 0x30), loaded_low)};
++            high = IR::U32{ir.Select(direct, Word(ir, 0x34), loaded_high)};
++        }
++        record.emplace(*access);
++        const IR::U32 offset{
++            record->ShiftLeftLogical(record->LocalInvocationIdX(), record->Imm32(4))};
++        return Address(*record, record->IAdd(low, offset), high);
++    }
++
++    std::ptrdiff_t Count(IR::Opcode opcode) const {
++        std::ptrdiff_t total{};
++        for (const IR::Block* const block : fixture.program.blocks) {
++            total += std::ranges::count_if(block->Instructions(), [=](const IR::Inst& inst) {
++                return inst.GetOpcode() == opcode;
++            });
++        }
++        return total;
++    }
++
++    std::size_t LoadedDescriptors() const {
++        return std::ranges::count_if(fixture.program.info.storage_buffers_descriptors,
++                                     [](const auto& desc) { return desc.indirect_offset == 0; });
++    }
++
++    std::optional<IR::IREmitter> record;
++};
++
++TEST_CASE("Native accesses through a cbuf pointer or a pointer loaded from it bind both",
++          "[shader][storage_buffer]") {
++    // Pairing the address with c0[0x30] alone rebased the loaded path on c0[0x30]'s binding,
++    // where its records read out of bounds as zeros.
++    const bool phi = GENERATE(false, true);
++    CAPTURE(phi);
++    DirectOrLoadedPointer program;
++    static_cast<void>(program.record->LoadGlobal128(program.RecordAddress(phi)));
++
++    CHECK(program.fixture.TrackedOffsets() == std::vector<u32>{0x30, 0x30});
++    CHECK(program.fixture.program.info.native_global_bounds);
++    CHECK(program.LoadedDescriptors() == 1);
++    CHECK(program.Count(IR::Opcode::LoadStorage64) == 1);
++    CHECK(program.Count(IR::Opcode::LoadGlobal128) == 1);
++    CHECK(program.Count(IR::Opcode::LoadStorage128) == 0);
++}
++
++TEST_CASE("Native accesses the backend cannot route keep their paired cbuf pointer",
++          "[shader][storage_buffer]") {
++    // The SPIR-V backend has no global subword accesses or global exchange atomics, and routes
++    // no global access without 64-bit integers, so these accesses are rebased on the pair rather
++    // than left global.
++    const bool phi = GENERATE(false, true);
++    const int access = GENERATE(0, 1, 2);
++    const bool atomic = access == 1;
++    CAPTURE(phi, access);
++    DirectOrLoadedPointer program;
++    program.fixture.int64 = access != 2;
++    const IR::U64 address{program.RecordAddress(phi)};
++    if (access == 2) {
++        static_cast<void>(program.record->LoadGlobal128(address));
++    } else if (atomic) {
++        static_cast<void>(program.record->GlobalAtomicExchange(address, program.record->Imm32(1)));
++    } else {
++        static_cast<void>(program.record->LoadGlobalU16(address));
++    }
++
++    CHECK(program.fixture.TrackedOffsets() == std::vector<u32>{0x30});
++    CHECK_FALSE(program.fixture.program.info.native_global_bounds);
++    CHECK(program.LoadedDescriptors() == 0);
++    const std::array storage{IR::Opcode::LoadStorageU16, IR::Opcode::StorageAtomicExchange32,
++                             IR::Opcode::LoadStorage128};
++    const std::array global{IR::Opcode::LoadGlobalU16, IR::Opcode::GlobalAtomicExchange32,
++                            IR::Opcode::LoadGlobal128};
++    CHECK(program.Count(storage[access]) == 1);
++    CHECK(program.Count(global[access]) == 0);
++}
++
++TEST_CASE("Loaded pointers that compete with a pair do not take the last storage buffer",
++          "[shader][storage_buffer]") {
++    // 31 more pointers fill every binding with c0[0x30]; the loaded pointer would be the 33rd.
++    DirectOrLoadedPointer program;
++    static_cast<void>(program.record->LoadGlobal128(program.RecordAddress(false)));
++    IR::IREmitter ir{program.fixture.entry};
++    for (u32 slot = 0; slot < Shader::Info::MAX_SSBOS - 1; ++slot) {
++        const u32 offset{0x100 + slot * 8};
++        static_cast<void>(ir.LoadGlobal32(Address(ir, Word(ir, offset), Word(ir, offset + 4))));
++    }
++
++    CHECK(program.fixture.TrackedOffsets().size() == Shader::Info::MAX_SSBOS);
++    CHECK_FALSE(program.fixture.program.info.native_global_bounds);
++    CHECK(program.LoadedDescriptors() == 0);
++    CHECK(program.Count(IR::Opcode::LoadStorage128) == 1);
++    CHECK(program.Count(IR::Opcode::LoadGlobal128) == 0);
++}
++
+ TEST_CASE("NVN fallback descriptors use guest slots rather than compact binding indices",
+           "[shader][storage_buffer]") {
+     Shader::Info info{};
 diff --git a/src/tests/video_core/texture_handles.cpp b/src/tests/video_core/texture_handles.cpp
-index 8b3254f..de85fca 100644
+index 8b3254fb..de85fca2 100644
 --- a/src/tests/video_core/texture_handles.cpp
 +++ b/src/tests/video_core/texture_handles.cpp
 @@ -1,14 +1,19 @@
@@ -4156,7 +4852,7 @@ index 8b3254f..de85fca 100644
 +    CHECK(handles == expected);
 +}
 diff --git a/src/tests/video_core/uniform_stream_reuse.cpp b/src/tests/video_core/uniform_stream_reuse.cpp
-index 6059b70..bcfee7e 100644
+index 6059b70e..bcfee7e3 100644
 --- a/src/tests/video_core/uniform_stream_reuse.cpp
 +++ b/src/tests/video_core/uniform_stream_reuse.cpp
 @@ -23,6 +23,10 @@ struct Memory {
@@ -4171,7 +4867,7 @@ index 6059b70..bcfee7e 100644
  
  struct Runtime {
 diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
-index a248222..a0c6bbb 100644
+index a248222d..a0c6bbb5 100644
 --- a/src/video_core/buffer_cache/buffer_cache.h
 +++ b/src/video_core/buffer_cache/buffer_cache.h
 @@ -112,7 +112,6 @@ void BufferCache<P>::TickFrame() {
@@ -4346,7 +5042,7 @@ index a248222..a0c6bbb 100644
              .device_addr = *aligned_device_addr,
              .gpu_addr = aligned_gpu_addr,
 diff --git a/src/video_core/buffer_cache/buffer_cache_base.h b/src/video_core/buffer_cache/buffer_cache_base.h
-index e7971b4..c36a91e 100644
+index e7971b44..c36a91e6 100644
 --- a/src/video_core/buffer_cache/buffer_cache_base.h
 +++ b/src/video_core/buffer_cache/buffer_cache_base.h
 @@ -444,8 +444,10 @@ public:
@@ -4373,7 +5069,7 @@ index e7971b4..c36a91e 100644
      void TraceTablePointer(bool compute, size_t stage, size_t ssbo_index, u32 cbuf_index,
                             u32 cbuf_offset, u32 indirect_offset, GPUVAddr holder,
 diff --git a/src/video_core/buffer_cache/uniform_stream_reuse.h b/src/video_core/buffer_cache/uniform_stream_reuse.h
-index 7ba31c4..30a31b4 100644
+index 7ba31c47..30a31b42 100644
 --- a/src/video_core/buffer_cache/uniform_stream_reuse.h
 +++ b/src/video_core/buffer_cache/uniform_stream_reuse.h
 @@ -97,8 +97,17 @@ template <class Runtime, class DeviceMemory>
@@ -4419,8 +5115,39 @@ index 7ba31c4..30a31b4 100644
      return true;
  }
  
+diff --git a/src/video_core/buffer_cache/usage_tracker.h b/src/video_core/buffer_cache/usage_tracker.h
+index 1b678873..f6756368 100644
+--- a/src/video_core/buffer_cache/usage_tracker.h
++++ b/src/video_core/buffer_cache/usage_tracker.h
+@@ -32,6 +32,10 @@ public:
+     }
+ 
+     void Reset() noexcept {
++        if (!tracked) {
++            return;
++        }
++        tracked = false;
+         std::ranges::fill(pages, 0ULL);
+         recent.fill({~u64{0}, 0});
+         full_begin = 0;
+@@ -47,6 +51,7 @@ public:
+                 return;
+             }
+         }
++        tracked = true;
+         recent[recent_cursor++ % recent.size()] = {offset, size};
+         const size_t page = offset >> BUFFER_PAGE_SHIFT;
+         const size_t page_end = (offset + size) >> BUFFER_PAGE_SHIFT;
+@@ -149,6 +154,7 @@ private:
+     /// Pages known to be all ones (FillPages).
+     size_t full_begin{};
+     size_t full_end{};
++    bool tracked{};
+ };
+ 
+ } // namespace VideoCommon
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
-index 391226c..b8eeb3c 100644
+index 391226c9..b8eeb3c3 100644
 --- a/src/video_core/dma_pusher.cpp
 +++ b/src/video_core/dma_pusher.cpp
 @@ -44,6 +44,35 @@ bool DmaPusher::IsMemoryWriter(const Engines::EngineInterface& engine, Engines::
@@ -4530,7 +5257,7 @@ index 391226c..b8eeb3c 100644
          };
          if (split.Active()) {
 diff --git a/src/video_core/engines/kepler_compute.cpp b/src/video_core/engines/kepler_compute.cpp
-index 67d87a0..08c26c3 100644
+index 67d87a0a..08c26c3d 100644
 --- a/src/video_core/engines/kepler_compute.cpp
 +++ b/src/video_core/engines/kepler_compute.cpp
 @@ -31,6 +31,7 @@
@@ -4640,7 +5367,7 @@ index 67d87a0..08c26c3 100644
  
  // Fire Emblem: Fortune's Weave's first DLSS pass (rejected, before the network) has the input colour
 diff --git a/src/video_core/engines/kepler_compute.h b/src/video_core/engines/kepler_compute.h
-index fb87579..e93994d 100644
+index fb875798..e93994d0 100644
 --- a/src/video_core/engines/kepler_compute.h
 +++ b/src/video_core/engines/kepler_compute.h
 @@ -253,6 +253,10 @@ public:
@@ -4664,7 +5391,7 @@ index fb87579..e93994d 100644
      bool TryFireEmblemUpscale(bool allow_history = true);
      void CaptureFireEmblemJitter();
 diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
-index 86fb6d2..8f99501 100644
+index 86fb6d24..8f99501d 100644
 --- a/src/video_core/engines/maxwell_3d.cpp
 +++ b/src/video_core/engines/maxwell_3d.cpp
 @@ -11,6 +11,8 @@
@@ -4973,7 +5700,7 @@ index 86fb6d2..8f99501 100644
              fs.parameters.push_back(word);
          } else if (ram + i < native_data_ram.size()) {
 diff --git a/src/video_core/engines/maxwell_3d.h b/src/video_core/engines/maxwell_3d.h
-index 9247def..000067d 100644
+index 9247deff..000067d3 100644
 --- a/src/video_core/engines/maxwell_3d.h
 +++ b/src/video_core/engines/maxwell_3d.h
 @@ -3402,6 +3402,11 @@ private:
@@ -4989,7 +5716,7 @@ index 9247def..000067d 100644
      void FinishFrontMacro(Core::System& system);
      std::unique_ptr<FrontState> front;
 diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
-index 8fb6a43..ef4111d 100644
+index 8fb6a43f..ef4111d6 100644
 --- a/src/video_core/engines/puller.cpp
 +++ b/src/video_core/engines/puller.cpp
 @@ -58,6 +58,43 @@ void OnBack(const Func& func) {
@@ -5229,7 +5956,7 @@ index 8fb6a43..ef4111d 100644
      DrainBack();
      ReleaseFences(dma_pusher);
 diff --git a/src/video_core/engines/puller.h b/src/video_core/engines/puller.h
-index 2b9e2c5..9caff39 100644
+index 2b9e2c5d..9caff39f 100644
 --- a/src/video_core/engines/puller.h
 +++ b/src/video_core/engines/puller.h
 @@ -7,9 +7,12 @@
@@ -5265,7 +5992,7 @@ index 2b9e2c5..9caff39 100644
      /// Mapping of command subchannels to their bound engine ids
      std::array<EngineID, 8> bound_engines{};
 diff --git a/src/video_core/fence_manager.h b/src/video_core/fence_manager.h
-index ccad4fc..b0b32ea 100644
+index ccad4fc8..0aa7254f 100644
 --- a/src/video_core/fence_manager.h
 +++ b/src/video_core/fence_manager.h
 @@ -81,7 +81,15 @@ public:
@@ -5285,8 +6012,26 @@ index ccad4fc..b0b32ea 100644
          if constexpr (!can_async_check) {
              TryReleasePendingFences<false>();
          }
+@@ -155,6 +163,9 @@ public:
+                 wait_cv.notify_all();
+             });
+             SignalFence(std::move(func));
++            // The fence's commands can be held back by a deferred flush that only this thread
++            // submits. The fencing thread waits for that submission before releasing the fence,
++            // so waiting here without submitting deadlocks (Ocarina of Time entering gameplay).
+             SubmitDeferredWork();
+             std::unique_lock lk(wait_mutex);
+             wait_cv.wait(
+@@ -191,6 +202,7 @@ protected:
+     virtual bool IsFenceSignaled(TFence& fence) const = 0;
+     /// Waits until a fence has been signalled by the host GPU.
+     virtual void WaitFence(TFence& fence) = 0;
++    /// Submits work whose submission the backend deferred (called before blocking on a fence).
+     virtual void SubmitDeferredWork() {}
+ 
+     VideoCore::RasterizerInterface& rasterizer;
 diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
-index 2ec20d6..e33dfe4 100644
+index 2ec20d6d..e33dfe47 100644
 --- a/src/video_core/gpu.cpp
 +++ b/src/video_core/gpu.cpp
 @@ -109,10 +109,19 @@ struct GPU::Impl {
@@ -5312,7 +6057,7 @@ index 2ec20d6..e33dfe4 100644
  
      /// Signal the ending of command list.
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
-index 5adb071..3bbafbf 100644
+index 5adb0712..3bbafbfd 100644
 --- a/src/video_core/gpu_split.cpp
 +++ b/src/video_core/gpu_split.cpp
 @@ -20,6 +20,7 @@
@@ -5437,7 +6182,7 @@ index 5adb071..3bbafbf 100644
                  hook_requested.store(false, std::memory_order_seq_cst);
                  idle_hook(idle_argument);
 diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
-index 2e9250f..6f1ab8d 100644
+index 2e9250ff..6f1ab8d3 100644
 --- a/src/video_core/gpu_split.h
 +++ b/src/video_core/gpu_split.h
 @@ -3,6 +3,7 @@
@@ -5564,7 +6309,7 @@ index 2e9250f..6f1ab8d 100644
      u64 published_local{};
      u64 consumed_cache{};
 diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
-index 7f37569..5238f36 100644
+index 7f375695..5238f36c 100644
 --- a/src/video_core/gpu_thread.cpp
 +++ b/src/video_core/gpu_thread.cpp
 @@ -4,6 +4,7 @@
@@ -5677,7 +6422,7 @@ index 7f37569..5238f36 100644
              }
              if (stop_token.stop_requested()) {
 diff --git a/src/video_core/macro.cpp b/src/video_core/macro.cpp
-index b6bca44..c1c29f4 100644
+index b6bca447..c1c29f4e 100644
 --- a/src/video_core/macro.cpp
 +++ b/src/video_core/macro.cpp
 @@ -1435,8 +1435,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
@@ -5703,7 +6448,7 @@ index b6bca44..c1c29f4 100644
                      if (memory.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
                          memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
 diff --git a/src/video_core/nx2.h b/src/video_core/nx2.h
-index fc0cfd0..7979875 100644
+index fc0cfd04..fb22a10b 100644
 --- a/src/video_core/nx2.h
 +++ b/src/video_core/nx2.h
 @@ -6,6 +6,8 @@
@@ -5760,7 +6505,34 @@ index fc0cfd0..7979875 100644
      g_nx2_has_command_list_pages.store(false, std::memory_order_relaxed);
  }
  
-@@ -371,14 +404,35 @@ public:
+@@ -90,6 +123,26 @@ inline void Nx2ClearGpuWrittenPages() {
+     return (g_nx2_gpu_written_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
+ }
+ 
++/// False only when no page of [device_address, device_address + size) has been GPU-written.
++/// Every range the buffer cache records as GPU-modified also marks its pages here, under its
++/// lock, so this answers MustFlushRegion without taking it. Ranges past the bitmap answer true.
++[[nodiscard]] inline bool Nx2MayBeGpuWritten(u64 device_address, u64 size) {
++    if (size == 0) {
++        return false;
++    }
++    const u64 first = device_address >> Nx2WrittenPageBits;
++    const u64 last = (device_address + size - 1) >> Nx2WrittenPageBits;
++    if (last < first || last >= g_nx2_gpu_written_pages.size() * 64) {
++        return true;
++    }
++    for (u64 page = first; page <= last; ++page) {
++        if ((g_nx2_gpu_written_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1) {
++            return true;
++        }
++    }
++    return false;
++}
++
+ inline constexpr size_t Nx2MaxSemaphoreRegions = 32;
+ inline std::array<std::atomic<u64>, Nx2MaxSemaphoreRegions> g_nx2_semaphore_regions{}; // starts
+ 
+@@ -371,12 +424,33 @@ public:
          if (count.load(std::memory_order_acquire) == 0) {
              return;
          }
@@ -5776,16 +6548,16 @@ index fc0cfd0..7979875 100644
 +                    w.latched = true;
 +                    latched = true;
 +                }
-             }
++            }
 +            if (latched) {
 +                ++latch_epoch;
-+            }
-+        }
+             }
+         }
 +        if (latched) {
 +            latch_cv.notify_all();
-         }
-     }
- 
++        }
++    }
++
 +    [[nodiscard]] u64 LatchEpoch() {
 +        std::scoped_lock lk{mutex};
 +        return latch_epoch;
@@ -5795,12 +6567,10 @@ index fc0cfd0..7979875 100644
 +    void WaitForLatch(u64 seen, std::chrono::microseconds timeout) {
 +        std::unique_lock lk{mutex};
 +        latch_cv.wait_for(lk, timeout, [&] { return latch_epoch != seen; });
-+    }
-+
+     }
+ 
  private:
-     struct Waiter {
-         const void* owner;
-@@ -402,6 +456,8 @@ private:
+@@ -402,6 +476,8 @@ private:
      }
  
      std::mutex mutex;
@@ -5811,7 +6581,7 @@ index fc0cfd0..7979875 100644
  };
 diff --git a/src/video_core/oot_network.h b/src/video_core/oot_network.h
 new file mode 100644
-index 0000000..a09df81
+index 00000000..a09df814
 --- /dev/null
 +++ b/src/video_core/oot_network.h
 @@ -0,0 +1,52 @@
@@ -5868,32 +6638,56 @@ index 0000000..a09df81
 +
 +} // namespace VideoCommon::OotNetwork
 diff --git a/src/video_core/query_cache/query_cache.h b/src/video_core/query_cache/query_cache.h
-index 1cd92dc..5244abc 100644
+index 1cd92dcf..298db147 100644
 --- a/src/video_core/query_cache/query_cache.h
 +++ b/src/video_core/query_cache/query_cache.h
-@@ -33,6 +33,21 @@
+@@ -11,6 +11,7 @@
+ #include <deque>
+ #include <memory>
+ #include <mutex>
++#include <optional>
+ #include "common/container/unordered_map.h"
+ #include <utility>
+ 
+@@ -24,6 +25,7 @@
+ #include "video_core/host1x/gpu_device_memory_manager.h"
+ #include "video_core/memory_manager.h"
+ #include "video_core/nx2.h"
++#include "video_core/oot_network.h"
+ #include "video_core/query_cache/bank_base.h"
+ #include "video_core/query_cache/frame_trace.h"
+ #include "video_core/query_cache/query_base.h"
+@@ -33,6 +35,29 @@
  
  namespace VideoCommon {
  
-+/// LICHII_FAKE_OCCLUSION=<samples>: occlusion reports are written at once with that many samples
-+/// passed and no host occlusion query runs. Ocarina of Time reports ~1,400 a frame and reads them
-+/// back on the CPU; on AMD the queries, their copies and the read stalls cost most of the frame.
++/// Occlusion reports are written at once with this many samples passed and no host occlusion
++/// query runs. Ocarina of Time reports ~1,400 a frame and reads them back on the CPU; on an
++/// RX 9070 XT the queries, their copies and the read stalls cost ~35 ms of a 48 ms frame, and
++/// answering them (4096 samples, everything visible) doubled its frame rate with no visible
++/// change. On by default for Ocarina; LICHII_FAKE_OCCLUSION=<samples> sets it for any title and
++/// LICHII_FAKE_OCCLUSION=0 turns it off.
 +inline u32 FakeOcclusionSamples() {
-+    static const u32 samples = [] {
++    static const std::optional<u32> forced = []() -> std::optional<u32> {
 +        const char* const value = std::getenv("LICHII_FAKE_OCCLUSION");
-+        const u32 parsed = value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
-+        if (parsed != 0) {
-+            LOG_INFO(HW_GPU, "LICHII_FAKE_OCCLUSION: occlusion reports read {} samples", parsed);
++        if (value == nullptr) {
++            return std::nullopt;
 +        }
-+        return parsed;
++        return static_cast<u32>(std::strtoul(value, nullptr, 10));
 +    }();
++    const u32 samples = forced ? *forced
++                               : (Settings::GetCurrentProgramID() == OotNetwork::ProgramId ? 4096U
++                                                                                          : 0U);
++    if (static bool logged = false; samples != 0 && !std::exchange(logged, true)) {
++        LOG_INFO(HW_GPU, "Occlusion reports read {} samples without host queries", samples);
++    }
 +    return samples;
 +}
 +
  using Maxwell = Tegra::Engines::Maxwell3D;
  
  struct SyncValuesStruct {
-@@ -190,6 +205,9 @@ QueryCacheBase<Traits>::~QueryCacheBase() = default;
+@@ -190,6 +215,9 @@ QueryCacheBase<Traits>::~QueryCacheBase() = default;
  
  template <typename Traits>
  void QueryCacheBase<Traits>::CounterEnable(QueryType counter_type, bool is_enabled) {
@@ -5903,7 +6697,7 @@ index 1cd92dc..5244abc 100644
      size_t index = static_cast<size_t>(counter_type);
      StreamerInterface* streamer = impl->streamers[index];
      if (!streamer) [[unlikely]] {
-@@ -216,6 +234,9 @@ void QueryCacheBase<Traits>::CounterClose(QueryType counter_type) {
+@@ -216,6 +244,9 @@ void QueryCacheBase<Traits>::CounterClose(QueryType counter_type) {
  
  template <typename Traits>
  void QueryCacheBase<Traits>::CounterReset(QueryType counter_type) {
@@ -5913,7 +6707,7 @@ index 1cd92dc..5244abc 100644
      size_t index = static_cast<size_t>(counter_type);
      StreamerInterface* streamer = impl->streamers[index];
      if (!streamer) [[unlikely]] {
-@@ -247,6 +268,11 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -247,6 +278,11 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                   static_cast<u32>(counter_type), static_cast<u32>(flags), payload, gpu_memory->GetID(),
                   gpu_memory->GpuToCpuAddress(addr).value_or(0));
      }
@@ -5925,7 +6719,7 @@ index 1cd92dc..5244abc 100644
      size_t streamer_id = static_cast<size_t>(counter_type);
      auto* streamer = impl->streamers[streamer_id];
      if (streamer == nullptr) [[unlikely]] {
-@@ -282,8 +308,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -282,8 +318,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
      };
      u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
      u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
@@ -5935,7 +6729,7 @@ index 1cd92dc..5244abc 100644
                                       pointer, pointer_timestamp, cpu_addr, addr,
                                       asid = gpu_memory->GetID(), counter_type] {
          if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
-@@ -294,9 +319,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -294,9 +329,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                           trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
                           static_cast<u32>(query_base->flags));
              }
@@ -5946,7 +6740,7 @@ index 1cd92dc..5244abc 100644
              return;
          }
          if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
-@@ -309,9 +332,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -309,9 +342,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
              }
              LOG_ERROR(HW_GPU,
                        "Query report value not synchronized. Consider increasing GPU accuracy.");
@@ -5957,7 +6751,7 @@ index 1cd92dc..5244abc 100644
              return;
          }
          query_base->value += streamer->GetAmendValue();
-@@ -334,12 +355,12 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -334,12 +365,12 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                       wide ? query_base->value : static_cast<u32>(query_base->value),
                       static_cast<u32>(query_base->flags));
          }
@@ -5973,7 +6767,7 @@ index 1cd92dc..5244abc 100644
      } else {
          if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
              if (has_timestamp) {
-@@ -364,10 +385,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -364,10 +395,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
          }
          impl->rasterizer.SyncOperation(std::move(operation));
      }
@@ -5985,7 +6779,7 @@ index 1cd92dc..5244abc 100644
      {
          std::scoped_lock lock(cache_mutex);
 diff --git a/src/video_core/query_cache/query_cache_base.h b/src/video_core/query_cache/query_cache_base.h
-index 5a60e42..5adcdbc 100644
+index 5a60e429..d4801cc1 100644
 --- a/src/video_core/query_cache/query_cache_base.h
 +++ b/src/video_core/query_cache/query_cache_base.h
 @@ -63,14 +63,19 @@ public:
@@ -6011,8 +6805,33 @@ index 5a60e42..5adcdbc 100644
      }
  
      static u64 BuildMask(std::span<const QueryType> types) {
+@@ -142,10 +147,12 @@ protected:
+                 continue;
+             }
+             auto& contents = it->second;
++            bool matched = false;
+             for (auto& query : contents) {
+                 if (!in_range(query.first)) {
+                     continue;
+                 }
++                matched = true;
+                 if constexpr (RETURNS_BOOL) {
+                     if (func(query.second)) {
+                         return;
+@@ -154,7 +161,11 @@ protected:
+                     func(query.second);
+                 }
+             }
++            // Only pages with a query in the range: the scan above already found none elsewhere.
+             if constexpr (remove_from_cache) {
++                if (!matched) {
++                    continue;
++                }
+                 const auto in_range2 = [&](const std::pair<u32, QueryLocation>& pair) {
+                     return in_range(pair.first);
+                 };
 diff --git a/src/video_core/query_dma.h b/src/video_core/query_dma.h
-index fdcc223..c236cca 100644
+index fdcc2234..c236cca6 100644
 --- a/src/video_core/query_dma.h
 +++ b/src/video_core/query_dma.h
 @@ -43,6 +43,21 @@ inline bool HasPendingQueries(const Tegra::MemoryManager& memory,
@@ -6038,7 +6857,7 @@ index fdcc223..c236cca 100644
  /// fence has popped and the results have landed.
  inline void Trace(const Tegra::MemoryManager& memory, VideoCore::RasterizerInterface& rasterizer,
 diff --git a/src/video_core/rasterizer_interface.h b/src/video_core/rasterizer_interface.h
-index 9cebc4f..34516b2 100644
+index 9cebc4f2..34516b25 100644
 --- a/src/video_core/rasterizer_interface.h
 +++ b/src/video_core/rasterizer_interface.h
 @@ -34,6 +34,10 @@ struct TICEntry;
@@ -6103,7 +6922,7 @@ index 9cebc4f..34516b2 100644
  
      virtual void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
 diff --git a/src/video_core/renderer_base.h b/src/video_core/renderer_base.h
-index 46f8276..2dc357e 100644
+index 46f82760..2dc357e5 100644
 --- a/src/video_core/renderer_base.h
 +++ b/src/video_core/renderer_base.h
 @@ -9,6 +9,7 @@
@@ -6147,7 +6966,7 @@ index 46f8276..2dc357e 100644
  private:
      /// Updates the framebuffer layout of the contained render window handle.
 diff --git a/src/video_core/renderer_opengl/gl_buffer_cache.h b/src/video_core/renderer_opengl/gl_buffer_cache.h
-index 6fee58a..6b37561 100644
+index 6fee58a0..6b375613 100644
 --- a/src/video_core/renderer_opengl/gl_buffer_cache.h
 +++ b/src/video_core/renderer_opengl/gl_buffer_cache.h
 @@ -207,6 +207,12 @@ public:
@@ -6164,7 +6983,7 @@ index 6fee58a..6b37561 100644
      static constexpr std::array PABO_LUT{
          GL_VERTEX_PROGRAM_PARAMETER_BUFFER_NV,          GL_TESS_CONTROL_PROGRAM_PARAMETER_BUFFER_NV,
 diff --git a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
-index 197c270..752eaf8 100644
+index 197c2704..752eaf85 100644
 --- a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
 +++ b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
 @@ -107,7 +107,8 @@ void ComputePipeline::Configure() {
@@ -6188,7 +7007,7 @@ index 197c270..752eaf8 100644
          }
          ASSERT(((qmd.const_buffer_enable_mask >> desc.cbuf_index) & 1) != 0);
 diff --git a/src/video_core/renderer_opengl/gl_device.cpp b/src/video_core/renderer_opengl/gl_device.cpp
-index bc5803d..20ece85 100644
+index bc5803da..20ece85a 100644
 --- a/src/video_core/renderer_opengl/gl_device.cpp
 +++ b/src/video_core/renderer_opengl/gl_device.cpp
 @@ -199,6 +199,11 @@ Device::Device(Core::Frontend::EmuWindow& emu_window) {
@@ -6204,7 +7023,7 @@ index bc5803d..20ece85 100644
      max_varyings = GetInteger<u32>(GL_MAX_VARYING_VECTORS);
      max_compute_shared_memory_size = GetInteger<u32>(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE);
 diff --git a/src/video_core/renderer_opengl/gl_device.h b/src/video_core/renderer_opengl/gl_device.h
-index 200e77e..3d3c140 100644
+index 200e77e6..3d3c140f 100644
 --- a/src/video_core/renderer_opengl/gl_device.h
 +++ b/src/video_core/renderer_opengl/gl_device.h
 @@ -35,6 +35,11 @@ public:
@@ -6228,7 +7047,7 @@ index 200e77e..3d3c140 100644
      u32 max_varyings{};
      u32 max_compute_shared_memory_size{};
 diff --git a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
-index 9574e63..46a0000 100644
+index 9574e631..46a00007 100644
 --- a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
 +++ b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
 @@ -311,14 +311,16 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
@@ -6250,8 +7069,34 @@ index 9574e63..46a0000 100644
                                     via_header_index);
              }
              ASSERT(cbufs[desc.cbuf_index].enabled);
+diff --git a/src/video_core/renderer_opengl/gl_rasterizer.cpp b/src/video_core/renderer_opengl/gl_rasterizer.cpp
+index 7dd336c6..5ca8e5a0 100644
+--- a/src/video_core/renderer_opengl/gl_rasterizer.cpp
++++ b/src/video_core/renderer_opengl/gl_rasterizer.cpp
+@@ -18,6 +18,7 @@
+ #include "common/math_util.h"
+ #include "common/scope_exit.h"
+ #include "common/settings.h"
++#include "shader_recompiler/exception.h"
+ #include "video_core/control/channel_state.h"
+ #include "video_core/engines/kepler_compute.h"
+ #include "video_core/engines/maxwell_3d.h"
+@@ -398,6 +399,13 @@ void RasterizerOpenGL::DispatchCompute() {
+     gpu_memory->FlushCaching();
+     ComputePipeline* const pipeline{shader_cache.CurrentComputePipeline()};
+     if (!pipeline) {
++        // Native mode comes from the command stream (ChannelState::Init), not from the renderer,
++        // so a rejected program reaches this path here too. Report it as a failed dispatch like
++        // Vulkan does: KeplerCompute::DispatchNativeCompute treats a silent return as a skipped,
++        // successful dispatch.
++        if (kepler_compute->IsNativeMode()) {
++            throw Shader::RuntimeError("Native compute pipeline unavailable");
++        }
+         return;
+     }
+     if (pipeline->UsesLocalMemory()) {
 diff --git a/src/video_core/renderer_opengl/renderer_opengl.cpp b/src/video_core/renderer_opengl/renderer_opengl.cpp
-index f9ec32e..9e88820 100644
+index f9ec32e6..9e888202 100644
 --- a/src/video_core/renderer_opengl/renderer_opengl.cpp
 +++ b/src/video_core/renderer_opengl/renderer_opengl.cpp
 @@ -159,6 +159,12 @@ void RendererOpenGL::AddTelemetryFields() {
@@ -6268,7 +7113,7 @@ index f9ec32e..9e88820 100644
      LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
      LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
 diff --git a/src/video_core/renderer_vulkan/pipeline_helper.h b/src/video_core/renderer_vulkan/pipeline_helper.h
-index 9755a5b..46a372a 100644
+index 9755a5bf..46a372af 100644
 --- a/src/video_core/renderer_vulkan/pipeline_helper.h
 +++ b/src/video_core/renderer_vulkan/pipeline_helper.h
 @@ -356,6 +356,22 @@ public:
@@ -6310,7 +7155,7 @@ index 9755a5b..46a372a 100644
              VkImageView vk_image_view{image_view.Handle(desc.type)};
              if (vk_image_view == VK_NULL_HANDLE) {
 diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
-index 3ffc624..212e35a 100644
+index 3ffc6246..212e35a8 100644
 --- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 +++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 @@ -197,6 +197,13 @@ try
@@ -6379,10 +7224,42 @@ index 3ffc624..212e35a 100644
          LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
                   Settings::values.log_filter.GetValue());
 diff --git a/src/video_core/renderer_vulkan/vk_buffer_cache.cpp b/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
-index 8cd9bf7..16673a4 100644
+index 8cd9bf70..ebf9e9b8 100644
 --- a/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
-@@ -490,14 +490,14 @@ void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
+@@ -182,13 +182,21 @@ public:
+     virtual ~QuadIndexBuffer() = default;
+ 
+     void UpdateBuffer(u32 num_indices_) {
++        while (!retired_buffers.empty() && scheduler.IsFree(retired_buffers.front().first)) {
++            retired_buffers.erase(retired_buffers.begin());
++        }
+         if (num_indices_ <= num_indices) {
+             return;
+         }
+ 
+-        scheduler.Finish();
++        // Commands recorded so far may still use the old buffer: it stays until the GPU is past
++        // them. Waiting for the GPU here stalled the thread ~150 ms in the middle of a load.
++        if (buffer) {
++            retired_buffers.emplace_back(scheduler.CurrentTick(), std::move(buffer));
++        }
+ 
+-        num_indices = num_indices_;
++        // Grown by at least half, so that a draw count creeping up doesn't redo this every time.
++        num_indices = (std::max)(num_indices_, num_indices + num_indices / 2);
+         index_type = IndexTypeFromNumElements(device, num_indices);
+ 
+         const u32 num_quads = GetQuadsNum(num_indices);
+@@ -279,6 +287,7 @@ protected:
+     StagingBufferPool& staging_pool;
+ 
+     vk::Buffer buffer{};
++    std::vector<std::pair<u64, vk::Buffer>> retired_buffers; ///< GPU tick that frees each one
+     MemoryCommit memory_commit{};
+     VkIndexType index_type{};
+     u32 num_indices = 0;
+@@ -490,14 +499,14 @@ void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
      master.Wait(tick);
  }
  
@@ -6403,7 +7280,7 @@ index 8cd9bf7..16673a4 100644
  
  bool BufferCacheRuntime::CanReorderUpload(const Buffer& buffer,
 diff --git a/src/video_core/renderer_vulkan/vk_buffer_cache.h b/src/video_core/renderer_vulkan/vk_buffer_cache.h
-index f7bc117..6ad688e 100644
+index f7bc117c..6ad688e3 100644
 --- a/src/video_core/renderer_vulkan/vk_buffer_cache.h
 +++ b/src/video_core/renderer_vulkan/vk_buffer_cache.h
 @@ -6,6 +6,8 @@
@@ -6439,7 +7316,7 @@ index f7bc117..6ad688e 100644
      void BindBuffer(const Buffer& buffer, u32 offset, u32 size) {
          const VkBuffer handle = buffer.Handle();
 diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
-index fa48503..8c88882 100644
+index fa485038..8c888829 100644
 --- a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
 +++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
 @@ -6,6 +6,7 @@
@@ -6587,7 +7464,7 @@ index fa48503..8c88882 100644
      for (const auto& desc : info.image_descriptors) {
          add_image(desc, desc.is_written);
 diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.h b/src/video_core/renderer_vulkan/vk_compute_pipeline.h
-index d286606..e64be4f 100644
+index d2866066..e64be4fb 100644
 --- a/src/video_core/renderer_vulkan/vk_compute_pipeline.h
 +++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.h
 @@ -44,7 +44,8 @@ public:
@@ -6610,7 +7487,7 @@ index d286606..e64be4f 100644
      boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
      std::vector<SampledImage> sampled_images;
 diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
-index 0cdc752..314fa78 100644
+index 0cdc7521..314fa782 100644
 --- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
 +++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
 @@ -306,6 +306,12 @@ GraphicsPipeline::GraphicsPipeline(
@@ -6757,7 +7634,7 @@ index 0cdc752..314fa78 100644
      VkPipelineCreateFlags flags{};
      if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
 diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.h b/src/video_core/renderer_vulkan/vk_graphics_pipeline.h
-index 6e02abf..b09e434 100644
+index 6e02abfa..b09e4341 100644
 --- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.h
 +++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.h
 @@ -117,6 +117,16 @@ public:
@@ -6786,7 +7663,7 @@ index 6e02abf..b09e434 100644
  
      vk::DescriptorSetLayout descriptor_set_layout;
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
-index 095bd4c..d8de700 100644
+index 095bd4c1..d8de7005 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 @@ -8,6 +8,7 @@
@@ -6936,7 +7813,7 @@ index 095bd4c..d8de700 100644
  } catch (const Shader::Exception& exception) {
      LOG_ERROR(Render_Vulkan, "Compute pipeline compilation failed shader={:#016x} pipeline={:#016x}: {}",
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.h b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
-index 08f00f2..80f25db 100644
+index 08f00f24..80f25dbe 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.h
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
 @@ -220,6 +220,9 @@ private:
@@ -6949,8 +7826,75 @@ index 08f00f2..80f25db 100644
      Common::ThreadWorker serialization_thread;
      DynamicFeatures dynamic_features;
      PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
+diff --git a/src/video_core/renderer_vulkan/vk_query_cache.cpp b/src/video_core/renderer_vulkan/vk_query_cache.cpp
+index 5a6a6026..ba3d172e 100644
+--- a/src/video_core/renderer_vulkan/vk_query_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_query_cache.cpp
+@@ -261,6 +261,11 @@ public:
+         size_t resolve_buffer_index = ObtainBuffer<true>(num_slots_used);
+         resolve_buffers.push_back(resolve_buffer_index);
+         size_t base_offset = 0;
++        // AMD's drivers wait on each query of a WAIT_BIT copy separately (3.8 us per query, ~5 ms
++        // a frame in Ocarina). Queries complete in order on the queue, so waiting for the newest
++        // one is enough before copying the range without the wait.
++        const bool wait_on_last =
++            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+ 
+         ApplyBanksWideOp<true>(pending_sync, [&](SamplesQueryBank* bank, size_t start,
+                                                  size_t amount) {
+@@ -268,7 +273,7 @@ public:
+             auto& resolve_buffer = buffers[resolve_buffer_index];
+             VkQueryPool query_pool = bank->GetInnerPool();
+             scheduler.RequestOutsideRenderPassOperationContext();
+-            scheduler.Record([start, amount, base_offset, query_pool,
++            scheduler.Record([start, amount, base_offset, query_pool, wait_on_last,
+                               buffer = *resolve_buffer](vk::CommandBuffer cmdbuf) {
+                 const VkBufferMemoryBarrier copy_query_pool_barrier{
+                     .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+@@ -282,10 +287,37 @@ public:
+                     .size = amount * SamplesQueryBank::QUERY_SIZE,
+                 };
+ 
+-                cmdbuf.CopyQueryPoolResults(
+-                    query_pool, static_cast<u32>(start), static_cast<u32>(amount), buffer,
+-                    static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
+-                    VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
++                if (!wait_on_last || amount == 1) {
++                    cmdbuf.CopyQueryPoolResults(
++                        query_pool, static_cast<u32>(start), static_cast<u32>(amount), buffer,
++                        static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
++                        VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
++                } else {
++                    const size_t last = amount - 1;
++                    const VkDeviceSize last_offset =
++                        base_offset + last * SamplesQueryBank::QUERY_SIZE;
++                    cmdbuf.CopyQueryPoolResults(query_pool, static_cast<u32>(start + last), 1,
++                                                buffer, last_offset, SamplesQueryBank::QUERY_SIZE,
++                                                VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
++                    // Orders the unwaited copy after the waited one.
++                    const VkBufferMemoryBarrier waited_barrier{
++                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
++                        .pNext = nullptr,
++                        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                        .buffer = buffer,
++                        .offset = last_offset,
++                        .size = SamplesQueryBank::QUERY_SIZE,
++                    };
++                    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
++                                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, waited_barrier);
++                    cmdbuf.CopyQueryPoolResults(
++                        query_pool, static_cast<u32>(start), static_cast<u32>(last), buffer,
++                        static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
++                        VK_QUERY_RESULT_64_BIT);
++                }
+                 cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, copy_query_pool_barrier);
+             });
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
-index 628dd72..7273418 100644
+index 628dd72d..7bf76934 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 @@ -7,6 +7,7 @@
@@ -7103,7 +8047,20 @@ index 628dd72..7273418 100644
  }
  
  void RasterizerVulkan::BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr,
-@@ -1707,6 +1742,22 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
+@@ -1582,7 +1617,11 @@ void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType
+ }
+ 
+ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
+-    if ((True(which & VideoCommon::CacheType::BufferCache))) {
++    // The split's front asks this before each macro DMA read, and the back holds the buffer
++    // cache's lock through each draw: pages the GPU never wrote need no look under it.
++    if (True(which & VideoCommon::CacheType::BufferCache) &&
++        (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) ||
++         Tegra::Nx2MayBeGpuWritten(addr, size))) {
+         std::scoped_lock lock{buffer_cache.mutex};
+         if (buffer_cache.IsRegionGpuModified(addr, size)) {
+             return true;
+@@ -1707,6 +1746,22 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
      pipeline_cache.InvalidateRegion(addr, size);
  }
  
@@ -7126,7 +8083,7 @@ index 628dd72..7273418 100644
  bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {
      if (addr == 0 || size == 0) return true;
      {
-@@ -1767,6 +1818,38 @@ void RasterizerVulkan::ReleaseFences(bool force) {
+@@ -1767,6 +1822,38 @@ void RasterizerVulkan::ReleaseFences(bool force) {
      fence_manager.WaitPendingFences(force);
  }
  
@@ -7165,7 +8122,7 @@ index 628dd72..7273418 100644
  void RasterizerVulkan::FlushAndInvalidateRegion(DAddr addr, u64 size,
                                                  VideoCommon::CacheType which) {
      if (Settings::IsGPULevelHigh()) {
-@@ -1790,6 +1873,21 @@ void RasterizerVulkan::WaitForIdle() {
+@@ -1790,6 +1877,21 @@ void RasterizerVulkan::WaitForIdle() {
  
      query_cache.NotifyWFI();
  
@@ -7187,7 +8144,7 @@ index 628dd72..7273418 100644
      if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
          scheduler.DeferFragmentBarrier();
          fence_manager.SignalOrdering();
-@@ -2331,7 +2429,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
+@@ -2331,7 +2433,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
      return DmaBufferImageCopy<true>(copy_info, buffer_operand, image_operand);
  }
  
@@ -7196,7 +8153,7 @@ index 628dd72..7273418 100644
      auto& regs = maxwell3d->regs;
      auto& flags = maxwell3d->dirty.flags;
      const auto topology = maxwell3d->draw_manager.draw_state.topology;
-@@ -2403,7 +2501,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
+@@ -2403,13 +2505,16 @@ void RasterizerVulkan::UpdateDynamicStates() {
      }
  
      if (device.IsExtExtendedDynamicState3BlendingSupported()) {
@@ -7205,7 +8162,17 @@ index 628dd72..7273418 100644
      } else if (device.IsExtColorWriteEnableSupported()) {
          UpdateColorWriteEnable(regs);
      }
-@@ -3039,12 +3137,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
+ 
+     if (device.IsExtVertexInputDynamicStateSupported()) {
+-        if (auto* gp = pipeline_cache.CurrentGraphicsPipeline(); gp && gp->HasDynamicVertexInput()) {
++        // A draw passes the pipeline it looked up: a second lookup was ~2.5% of the back thread.
++        const GraphicsPipeline* const gp =
++            pipeline != nullptr ? pipeline : pipeline_cache.CurrentGraphicsPipeline();
++        if (gp && gp->HasDynamicVertexInput()) {
+             UpdateVertexInput(regs);
+         }
+     }
+@@ -3039,12 +3144,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
      scheduler.Record([op](vk::CommandBuffer cmdbuf) { cmdbuf.SetLogicOpEXT(op); });
  }
  
@@ -7227,7 +8194,7 @@ index 628dd72..7273418 100644
          std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> setup_masks{};
          for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
              const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
-@@ -3061,6 +3165,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
+@@ -3061,6 +3172,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
              if (mask.A) {
                  current |= VK_COLOR_COMPONENT_A_BIT;
              }
@@ -7236,7 +8203,7 @@ index 628dd72..7273418 100644
          scheduler.Record([setup_masks](vk::CommandBuffer cmdbuf) {
              cmdbuf.SetColorWriteMaskEXT(0, setup_masks);
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.h b/src/video_core/renderer_vulkan/vk_rasterizer.h
-index c33b0ed..ac33832 100644
+index c33b0ed3..ac338326 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.h
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.h
 @@ -18,6 +18,7 @@
@@ -7313,7 +8280,7 @@ index c33b0ed..ac33832 100644
      struct IndirectTrace {
          vk::Buffer readback;
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-index 19bbcd9..e6e3af2 100644
+index 19bbcd96..e6e3af21 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 @@ -14,6 +14,7 @@
@@ -7640,7 +8607,7 @@ index 19bbcd9..e6e3af2 100644
  
          state.renderpass = VkRenderPass{};
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.h b/src/video_core/renderer_vulkan/vk_scheduler.h
-index f977051..7d819d0 100644
+index f9770518..7d819d0a 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.h
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.h
 @@ -44,6 +44,10 @@ class StateTracker;
@@ -7734,7 +8701,7 @@ index f977051..7d819d0 100644
      bool trace_gpu_pending{};
      bool trace_gpu_failed{};
 diff --git a/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp b/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
-index 98787b9..c34cfc7 100644
+index 98787b9a..c34cfc71 100644
 --- a/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
 +++ b/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
 @@ -115,10 +115,17 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
@@ -7759,7 +8726,7 @@ index 98787b9..c34cfc7 100644
  
  void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
 diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
-index 65f8478..c148a2a 100644
+index 65f84789..3f89065d 100644
 --- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
 @@ -1260,8 +1260,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
@@ -7773,8 +8740,29 @@ index 65f8478..c148a2a 100644
  }
  
  StagingBufferRef TextureCacheRuntime::UploadStagingBuffer(size_t size, bool deferred) {
+@@ -4580,6 +4580,10 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
+     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
+     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();
+     key.srgb_border = has_srgb_border_color && IsPixelFormatSRGB(image_view.format);
++    // A compare-enabled TSC read by a plain (non-Dref) sample: Maxwell ignores the comparison,
++    // Vulkan leaves it undefined and AMD returns the 0/1 compare result (Ocarina forest fog
++    // composite read alpha 0 -> black screen). Use a variant without comparison.
++    key.drop_compare = has_depth_comparison && !is_depth;
+     if (needs_swizzle_mapping && !key.drop_custom_border && !image_view.HasIdentitySwizzle()) {
+         const VkComponentMapping& mapping = image_view.Swizzle();
+         key.swizzle = {mapping.r, mapping.g, mapping.b, mapping.a};
+@@ -4643,6 +4647,9 @@ VkSampler Sampler::Emplace(VariantKey key) {
+     }
+ 
+     VkSamplerCreateInfo create_info = base_ci;
++    if (key.drop_compare) {
++        create_info.compareEnable = VK_FALSE;
++    }
+     create_info.pNext = chain;
+     if (key.force_nearest) {
+         create_info.magFilter = VK_FILTER_NEAREST;
 diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
-index 49dd837..f997f73 100644
+index 49dd837a..daa7d2c7 100644
 --- a/src/video_core/renderer_vulkan/vk_texture_cache.h
 +++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
 @@ -6,6 +6,8 @@
@@ -7795,11 +8783,32 @@ index 49dd837..f997f73 100644
  
      StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
  
+@@ -839,6 +841,7 @@ private:
+         bool drop_reduction;
+         bool drop_custom_border;
+         bool srgb_border;
++        bool drop_compare;
+         std::array<VkComponentSwizzle, 4> swizzle;
+ 
+         bool operator==(const VariantKey&) const noexcept = default;
 diff --git a/src/video_core/shader_cache.cpp b/src/video_core/shader_cache.cpp
-index 96938b9..610fad4 100644
+index 96938b9e..0c2b65f7 100644
 --- a/src/video_core/shader_cache.cpp
 +++ b/src/video_core/shader_cache.cpp
-@@ -289,6 +289,10 @@ const ShaderInfo* ShaderCache::ComputeShader() {
+@@ -269,6 +269,12 @@ const ShaderInfo* ShaderCache::ComputeShader() {
+                                                      *kepler_compute, *gpu_memory, bank, offset);
+                                              }))
+             throw Shader::Ampere::TrapGuardError{};
++    } else if (kepler_compute->IsNativeMode() && IsRejected(*cpu_shader_addr)) {
++        // A rejected program fails the same way on every dispatch. GetGraphicsEnvironments
++        // skips those draws without rethrowing; doing the same here avoids two C++ throws, a
++        // mutex-guarded insert and an exception_ptr for each dispatch of the program. The
++        // caller already turns a missing shader into a failed dispatch.
++        return nullptr;
+     } else {
+         try {
+             RethrowIfRejected(*cpu_shader_addr);
+@@ -289,6 +295,10 @@ const ShaderInfo* ShaderCache::ComputeShader() {
                                              shader->lowered_native->native_program_key)) {
          kepler_compute->TraceDlssContract(shader->lowered_native->native_program_key);
      }
@@ -7810,8 +8819,20 @@ index 96938b9..610fad4 100644
      if (kepler_compute->IsNativeMode() && shader->lowered_native &&
          kepler_compute->ProcessGameDlss(program_id, shader->lowered_native->native_program_key)) {
          throw FireEmblemUpscale::DispatchReplaced{};
+@@ -310,6 +320,11 @@ bool ShaderCache::IsRejected(VAddr addr) {
+ 
+ void ShaderCache::RememberRejection(VAddr addr) {
+     std::scoped_lock lock{rejected_mutex};
++    if (rejected_native.contains(addr)) {
++        // Called from a catch block: keep the first exception for that address instead of
++        // capturing and inserting a new one on every rejected dispatch.
++        return;
++    }
+     rejected_native.emplace(addr, std::current_exception());
+     rejected_lowest.store((std::min)(rejected_lowest.load(std::memory_order_relaxed), addr),
+                           std::memory_order_relaxed);
 diff --git a/src/video_core/shader_handle_program.h b/src/video_core/shader_handle_program.h
-index cfdc47a..5621a8e 100644
+index cfdc47af..5621a8e5 100644
 --- a/src/video_core/shader_handle_program.h
 +++ b/src/video_core/shader_handle_program.h
 @@ -3,40 +3,154 @@
@@ -7989,7 +9010,7 @@ index cfdc47a..5621a8e 100644
 +
  } // namespace VideoCommon
 diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
-index 8ca5df2..1fce5dd 100644
+index 8ca5df23..92e444aa 100644
 --- a/src/video_core/texture_cache/texture_cache.h
 +++ b/src/video_core/texture_cache/texture_cache.h
 @@ -137,9 +137,52 @@ void TextureCache<P>::RunGarbageCollector() {
@@ -8190,8 +9211,50 @@ index 8ca5df2..1fce5dd 100644
              if (blacklist) {
                  if (view.blacklist && view.id != NULL_IMAGE_VIEW_ID) {
                      const ImageViewBase& image_view = slot_image_views[view.id];
+@@ -1081,10 +1156,20 @@ template <class P>
+ bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
+                                 const Tegra::Engines::Fermi2D::Surface& src,
+                                 const Tegra::Engines::Fermi2D::Config& copy) {
++    // A deferred clear parked before this copy has to land before it: realizing it afterwards
++    // starts its clear pass after the copy and wipes what the copy wrote. That is what made
++    // Ocarina of Time draw its terrain layer over the scene (#101): the game clears the
++    // occlusion depth, blits the scene depth over it, and reads it back during the layer draw.
++    // GetFramebufferId only flushes when it creates a framebuffer, so the bug starts on the
++    // second frame. Texture cache copies bypass render passes and keep stream order here.
++    // Only when the copy proceeds: a rejected blit writes nothing and must not realize the
++    // clear ahead of the next draw that consumes it as its load-op. GetBlitImages cannot
++    // invalidate the parked clear: framebuffer removal flushes first (RemoveFramebuffers).
+     const auto result = GetBlitImages(dst, src, copy);
+     if (!result) {
+         return false;
+     }
++    runtime.FlushDeferredClear();
+     const BlitImages images = *result;
+     const ImageId dst_id = images.dst_id;
+     const ImageId src_id = images.src_id;
+@@ -2990,6 +3075,11 @@ ImageId TextureCache<P>::FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr)
+ template <class P>
+ std::pair<u32, u32> TextureCache<P>::PrepareDmaImage(ImageId dst_id, GPUVAddr base_addr,
+                                                      bool mark_as_modified) {
++    // As in BlitImage: land a parked deferred clear before the DMA write, but only when the
++    // write happens (mark_as_modified); a read-only access writes nothing.
++    if (mark_as_modified) {
++        runtime.FlushDeferredClear();
++    }
+     const auto& image = slot_images[dst_id];
+     const auto base = image.TryFindBase(base_addr);
+     PrepareImage(dst_id, mark_as_modified, false);
+@@ -3747,6 +3837,8 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
+         // same guest data, which is uploaded from guest memory instead.
+         return;
+     }
++    // As in BlitImage: land a parked deferred clear before the copy overwrites the image.
++    runtime.FlushDeferredClear();
+     const bool is_rescaled = True(src.flags & ImageFlagBits::Rescaled);
+     if (is_rescaled) {
+         ASSERT(True(dst.flags & ImageFlagBits::Rescaled));
 diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
-index 87d0d79..84fbad4 100644
+index 87d0d797..84fbad4b 100644
 --- a/src/video_core/texture_cache/texture_cache_base.h
 +++ b/src/video_core/texture_cache/texture_cache_base.h
 @@ -125,7 +125,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
@@ -8205,7 +9268,7 @@ index 87d0d79..84fbad4 100644
      u64 images_created{};
      u64 images_uploaded{};   ///< Image contents uploaded from guest memory (last 600 frames)
 diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
-index d28dd13..34f972d 100644
+index d28dd131..34f972d7 100644
 --- a/src/video_core/vulkan_common/vulkan_device.cpp
 +++ b/src/video_core/vulkan_common/vulkan_device.cpp
 @@ -641,8 +641,14 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
@@ -8226,7 +9289,7 @@ index d28dd13..34f972d 100644
                          "AMD drivers (2026+) have broken float16 math");
              features.shader_float16_int8.shaderFloat16 = false;
 diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
-index 93a89d1..e73bc8b 100644
+index 93a89d12..e73bc8b4 100644
 --- a/src/video_core/vulkan_common/vulkan_device.h
 +++ b/src/video_core/vulkan_common/vulkan_device.h
 @@ -371,6 +371,23 @@ public:
@@ -8262,7 +9325,7 @@ index 93a89d1..e73bc8b 100644
      FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffers) \
      FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffersDynamic) \
 diff --git a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
-index a0a39ab..d38ddcd 100644
+index a0a39abe..d38ddcd6 100644
 --- a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
 +++ b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
 @@ -427,6 +427,14 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
@@ -8281,7 +9344,7 @@ index a0a39ab..d38ddcd 100644
      // Log GPU memory allocation for buffers
      if (GPU::Logging::IsActive() &&
 diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
-index 2052b63..b8d7eb2 100644
+index 2052b633..b8d7eb2d 100644
 --- a/src/yuzu/CMakeLists.txt
 +++ b/src/yuzu/CMakeLists.txt
 @@ -14,11 +14,17 @@ endif()
@@ -8312,7 +9375,7 @@ index 2052b63..b8d7eb2 100644
      multiplayer/chat_room.h
 diff --git a/src/yuzu/compatibility_report.cpp b/src/yuzu/compatibility_report.cpp
 new file mode 100644
-index 0000000..db61233
+index 00000000..db61233f
 --- /dev/null
 +++ b/src/yuzu/compatibility_report.cpp
 @@ -0,0 +1,631 @@
@@ -8949,7 +10012,7 @@ index 0000000..db61233
 +} // namespace CompatibilityReporting
 diff --git a/src/yuzu/compatibility_report.h b/src/yuzu/compatibility_report.h
 new file mode 100644
-index 0000000..0825707
+index 00000000..0825707e
 --- /dev/null
 +++ b/src/yuzu/compatibility_report.h
 @@ -0,0 +1,106 @@
@@ -9060,7 +10123,7 @@ index 0000000..0825707
 +
 +} // namespace CompatibilityReporting
 diff --git a/src/yuzu/game/game_list.cpp b/src/yuzu/game/game_list.cpp
-index f4ba7b0..4912fb3 100644
+index f4ba7b09..4912fb3a 100644
 --- a/src/yuzu/game/game_list.cpp
 +++ b/src/yuzu/game/game_list.cpp
 @@ -454,6 +454,10 @@ void GameList::PopupContextMenu(const QPoint& menu_location) {
@@ -9087,7 +10150,7 @@ index f4ba7b0..4912fb3 100644
      favorite->setVisible(program_id != 0);
      favorite->setCheckable(true);
 diff --git a/src/yuzu/game/game_list.h b/src/yuzu/game/game_list.h
-index 11a2bd1..e826657 100644
+index 11a2bd1a..e826657a 100644
 --- a/src/yuzu/game/game_list.h
 +++ b/src/yuzu/game/game_list.h
 @@ -77,6 +77,7 @@ public:
@@ -9115,7 +10178,7 @@ index 11a2bd1..e826657 100644
  };
  
 diff --git a/src/yuzu/main.cpp b/src/yuzu/main.cpp
-index 1f25f92..cacdbf1 100644
+index 1f25f924..cacdbf18 100644
 --- a/src/yuzu/main.cpp
 +++ b/src/yuzu/main.cpp
 @@ -1,16 +1,11 @@
@@ -9219,7 +10282,7 @@ index 1f25f92..cacdbf1 100644
      LoadNx2Switches(argv[0]);
  #if YUZU_ROOM
 diff --git a/src/yuzu/main_window.cpp b/src/yuzu/main_window.cpp
-index e24a09d..fac2e5c 100644
+index e24a09d9..fac2e5cc 100644
 --- a/src/yuzu/main_window.cpp
 +++ b/src/yuzu/main_window.cpp
 @@ -8,6 +8,7 @@
@@ -9357,7 +10420,7 @@ index e24a09d..fac2e5c 100644
      std::string title_version;
  
 diff --git a/src/yuzu/main_window.h b/src/yuzu/main_window.h
-index 9e98b97..4d7a9fb 100644
+index 9e98b97e..4d7a9fb1 100644
 --- a/src/yuzu/main_window.h
 +++ b/src/yuzu/main_window.h
 @@ -27,6 +27,7 @@
@@ -9378,7 +10441,7 @@ index 9e98b97..4d7a9fb 100644
      // The path to the game currently running
 diff --git a/src/yuzu/nx2_switches.h b/src/yuzu/nx2_switches.h
 new file mode 100644
-index 0000000..91b12ac
+index 00000000..91b12ac9
 --- /dev/null
 +++ b/src/yuzu/nx2_switches.h
 @@ -0,0 +1,112 @@
@@ -9496,7 +10559,7 @@ index 0000000..91b12ac
 +}
 diff --git a/tools/nx2/test_switches.py b/tools/nx2/test_switches.py
 new file mode 100644
-index 0000000..ac99ca8
+index 00000000..ac99ca85
 --- /dev/null
 +++ b/tools/nx2/test_switches.py
 @@ -0,0 +1,122 @@
@@ -9623,7 +10686,7 @@ index 0000000..ac99ca8
 +if __name__ == "__main__":
 +    unittest.main()
 diff --git a/tools/shader-sweep/main.cpp b/tools/shader-sweep/main.cpp
-index 1a88462..38df7f0 100644
+index 1a884626..38df7f05 100644
 --- a/tools/shader-sweep/main.cpp
 +++ b/tools/shader-sweep/main.cpp
 @@ -730,6 +730,7 @@ int main(int argc, char** argv) {

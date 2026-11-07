@@ -99,7 +99,12 @@ def main() -> int:
         users = subprocess.run(["git", "-C", str(source), "grep", "-l", "-F",
                                 f'#include "{header.removeprefix("src/")}"', "--", "src/*.cpp"],
                                capture_output=True, text=True).stdout.split()
-        units += [u for u in sorted(users) if u not in units and not SKIP.search(u)][:2]
+        # Skip users of the SPIR-V headers the build generates (absent in a plain checkout).
+        generated = set(subprocess.run(["git", "-C", str(source), "grep", "-l", "-F",
+                                        '#include "video_core/host_shaders/', "--", *users],
+                                       capture_output=True, text=True).stdout.split()) if users else set()
+        units += [u for u in sorted(users)
+                  if u not in units and u not in generated and not SKIP.search(u)][:2]
 
     with tempfile.TemporaryDirectory() as overlay:
         for header in PRAGMA_HEADERS:

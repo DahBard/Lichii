@@ -35,28 +35,33 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (64 commits over 588bfa6; pushing it
+- Source of the patch: branch `tuned4` of DahBard/Lichii (78 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
   checkout before committing it.
-- Before turning `msvc` on, run `python3 -I lichii-tuned/check_patch_warnings.py <tuned4
-  checkout>`. It compiles the changed files with clang and GCC and reports warnings on added
-  lines that the msvc variant treats as errors (shadowing, signed/unsigned compares, unused
-  locals and captures, unhandled enumerators, video_core conversions); a changed header is
-  compiled through two files that include it. The pgo builds don't
-  catch them: `common/x64/xbyak.h` turns -Wshadow and -Wconversion off for the rest of every
-  file that includes it. Qt, Windows-only and test files need a look by hand.
+- Before turning `msvc` on, run `python3 -I lichii-tuned/check_patch_warnings.py <tuned4 checkout>`.
+  It compiles the changed files with clang and GCC and reports warnings on added lines that the msvc
+  variant treats as errors (shadowing, signed/unsigned compares, unused locals and captures,
+  unhandled enumerators, video_core conversions); a changed header is compiled through two files
+  that include it. The pgo builds don't catch them: `common/x64/xbyak.h` turns -Wshadow and
+  -Wconversion off for the rest of every file that includes it. Qt, Windows-only and test files need
+  a look by hand. Locally `vk_frame_dump.cpp` (needs stb) and `nvhost_ctrl_gpu.cpp` (the cloud's
+  clang crashes on it at any commit) fail; ignore them.
 - The cloud session's network blocks GitHub archive downloads (so a full CMake configure fails)
   and the Actions log host; git clones work. Read job logs with the GitHub MCP `get_job_logs`
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
 
-Upstream nx2 up to `09b78bd2df`, which is build 93, the newest published build (builds 89-92
-were never published), so its AMD fixes (#273, #295) are in. nx2 has since moved to `809fb3a`
-(#215, #149, #397, #398, #185, #241, #197, #203), not merged yet: #215 and #149 touch the split
-front like #345. Plus open upstream pull requests at their heads as of 2026-11-07 00:00 UTC:
+Upstream nx2 up to `09b78bd2df`, which is build 93, the newest published build (builds 89-92 were
+never published), so its AMD fixes (#273, #295) are in. Round 10 cherry-picked ten of the thirteen
+nx2 commits since then (nx2 at `9fa4a71`): #413, #414, #410, #185, #398, #241, #197, #149, #203
+cleanly and #412 (GPU back thread bookkeeping) with `UpdateDynamicStates` kept on our `const
+GraphicsPipeline*` signature. Not taken (conflicts): #397 (buffer downloads), #215 (query results
+before macro DMA reads; touches the split front like #345) and #232 (hybrid CPU threads; overlaps
+`src/common/windows/hybrid_cpu.*`). Plus open upstream pull requests at their heads as of 2026-11-07
+00:00 UTC:
 
 - #319 "Ocarina of Time anti-aliasing: No sharpening" bypasses the game's tensor AA network
   (AMD runs its HMMA math in software); #300 builds those HMMA pipelines off the wait path on AMD.
@@ -122,18 +127,23 @@ Own changes:
   `upload_ms`), the 10 s scheduler report adds `Staging traffic per second` (stream buffer, host
   memory, downloads), and boot logs `Memory heaps:`, `Memory types:` and the stream buffer's memory
   type (`Stream buffer:`).
-- `LICHII_WFI_DEFER=1` (round 8, off by default): a guest wait for idle inside a render pass is
-  deferred like a fragment barrier, as on MoltenVK; later draws end the render pass only when it has
-  storage writes or they sample its render targets, and the full memory barrier is recorded after
-  the render pass ends. Ocarina ends ~40 render passes a frame there (`vk_rasterizer.cpp`
-  WaitForIdle), each a full barrier and cache flush on AMD.
-- `LICHII_FAKE_OCCLUSION=<samples>` (round 9, off by default): occlusion (ZPass sample count)
-  reports are written at once with that many samples, like a counter Lichii doesn't support (which
-  reads 1), and no host occlusion query begins (`query_cache.h`: CounterEnable, CounterReset and
-  CounterReport). The game sees everything as visible.
+- `LICHII_WFI_DEFER=1` (round 8, off; launcher dropped in round 10, no gain in r14): a guest wait
+  for idle inside a render pass is deferred like a fragment barrier, as on MoltenVK, and its full
+  barrier recorded after the render pass ends.
+- Occlusion reports answered without host queries (round 9 switch, default for Ocarina since round
+  10, `query_cache.h` FakeOcclusionSamples): each ZPass sample count report is written at once with
+  4096 samples, like a counter Lichii doesn't support (which reads 1), and no host occlusion query
+  begins, so the game sees everything as visible. `LICHII_FAKE_OCCLUSION=<samples>` sets it for any
+  title, `=0` runs the queries (`trace-real-occlusion.bat`).
+- Ported from Shakoquo/Lichii-sharkiix-version (round 10): on AMD a query result copy waits only for
+  the newest query (`vk_query_cache.cpp`, ~5 ms a frame with real queries; from its 3.1 tree, also
+  in chuppatricky's AMD test build v13), and samplers read without a depth reference drop the
+  comparison (`vk_texture_cache.cpp`, from 28f594ac: AMD returned the 0/1 compare result, a black
+  Ocarina forest fog). Not ported: its always-refreshed blend state (costs back-thread time per
+  draw, no symptom here).
 - Launchers with the perf-trace variables: `trace-preflush.bat`, `trace-fp16.bat`,
   `trace-flush4096.bat` (`EDEN_NX2_FLUSH_DRAWS=4096`), `trace-old-jit.bat` (round 7's JIT off),
-  `trace-wfi-defer.bat` (round 8), `trace-fake-occlusion.bat` (round 9, 4096 samples).
+  `trace-real-occlusion.bat` (round 10).
 
 ## Test results so far
 
@@ -253,6 +263,23 @@ Own changes:
   GPU waits a second (163 ms/s) at buffer_cache.h:407.
 - Run #15 (round 9) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r15-pgo`,
   `lichii-tuned-r15-pgo-lto`).
+- r15 `trace-fake-occlusion.bat` at 1x, docked (the owner's second log was the old r11 fp16 one;
+  compared with r13 and r14 instead): gameplay median 14.5 -> 27.5 fps, p10 11.6 -> 17.9, p90 23.0
+  -> 34.7; the owner: "finally feels markedly better", no flares or objects through walls. Untimed
+  GPU busy 12.5 ms a frame (p90 18.6) against 47.6: the GPU is no longer the limit. Per frame the
+  guest cores 4 and 5 use 29 and 28 ms (797 and 766 ms/s), the GPU back thread 28 ms (766 ms/s), the
+  front 21 ms: those set the frame rate now.
+- Sharkiix (2026-11-07): Shakoquo/Lichii-sharkiix-version, AMD- and Ocarina-focused, tested on an RX
+  9060 XT. No history of its own: v1/v2 are Lichii `99ac3d59` plus one commit (faster tensor
+  emulation, semaphore acquire resumes, texture cache GC min age, the sampler and blend fixes), 3.0
+  imports chuppatricky's AMD test build v13, 3.1/3.1.1 import a "build-11 (fix/ocarina-of-time)"
+  tree and add graphics pipeline libraries on RDNA 3+ (fewer freezes on new pipelines). Its README
+  rejects the ground mist (s5:c72b6ea746c00433) and the fog/light-shaft composite
+  (s5:3ddfb1d7a854c849) because they draw a white veil there: the same passes that cost most in
+  sunlit areas here, where #292 draws them right. Verdict: don't migrate (snapshot imports, more
+  glitches, older base); port pieces. Other candidates in those trees: NaN-defined min/max, a
+  compute-to-draw barrier, an atomics spin fix, AMD safe compile; combined forks justr4mzi/hortensia
+  and jordenjacobsen-ai/Lichii-Frizti-v3-plus.
 - Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
   not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
   build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
@@ -277,20 +304,16 @@ Own changes:
 
 ## Next steps
 
-1. Run #15 (round 9), docked, 1x, ScaleForce, the same sunlit and shadowy Kokiri spots:
-   `perf-trace.bat`, then `trace-fake-occlusion.bat`. Compare fps, untimed GPU busy per frame,
-   render passes per second and the buffer_cache.h:407 waits; the owner reports visual differences
-   (glows or flares through walls, objects that should be hidden). If faking helps a lot, make the
-   real queries cheap instead: resolve them in batches without render pass ends, don't make CPU
-   reads of query results wait for the GPU (answer with the last resolved value), or skip the host
-   query for reports the game overwrites before reading. If it doesn't: time the non-draw commands
-   per call site (render pass ends, barriers, clears, query copies) or get a Radeon GPU Profiler
-   capture of one Kokiri frame (kept on the owner's PC; screenshots of the barrier and event views
-   are enough). For 4K: port #253's jitter and motion vectors and feed the FSR 3.1 path, then FSR 4
-   through the SDK 2.4 DLLs; until then the game renders at 1x and the window filter scales it (the
-   owner prefers ScaleForce). fp16 stays off; preflush is safe but showed no gain yet. Port
-   candidates: #408, upstream #264, #267's grass-on-sword-swing and sunlight fixes, nx2's commits
-   since build 93.
+1. Run #16 (round 10), docked, 1x, ScaleForce, the same Kokiri spots: `perf-trace.bat` (fake
+   occlusion is now the default), plus a few minutes of normal play elsewhere to look for new
+   glitches from the ten upstream picks. The CPU side is the limit now: guest cores 4/5 and the GPU
+   back thread at ~28 ms a frame each. Next: the back thread's zones (`GPU back thread per second`
+   lines: bind stage buffers, method, other), the rest of upstream nx2 (#397, #215, #232), Sharkiix
+   3.1's graphics pipeline libraries for first-time pipelines, PGO training on Ocarina (the guest
+   cores are JIT code; PGO speeds the emulator around it), #408. For 4K: port #253's jitter and
+   motion vectors and feed the FSR 3.1 path, then FSR 4 through the SDK 2.4 DLLs; until then the
+   game renders at 1x and the window filter scales it (the owner prefers ScaleForce). fp16 stays
+   off; preflush is safe but showed no gain yet.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
