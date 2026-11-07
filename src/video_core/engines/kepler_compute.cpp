@@ -1376,12 +1376,11 @@ void KeplerCompute::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& s
     if (!result.success && !result.side_effects &&
         result.error == TuringMacroInterpreter::OutsideCodeError) {
         // As in Maxwell3D::FrontRunMacro: replay a call that wrote nothing on the interpreter
-        // rather than drop it.
-        std::vector<u32> replay_parameters{fs.parameters};
+        // rather than drop it, reading the live FIFO so FIFOed DMA reads land in it.
+        std::vector<u32> before_replay{fs.parameters};
         const auto replayed = macro.native_interpreter.Execute(
-            macro.native_code, start, replay_parameters, read, emit);
+            macro.native_code, start, fs.parameters, read, emit);
         if (replayed.success) {
-            fs.parameters = std::move(replay_parameters);
             result = replayed;
             static std::atomic<u32> fallbacks{};
             if (fallbacks.fetch_add(1, std::memory_order_relaxed) % 4096 == 0) {
@@ -1390,6 +1389,8 @@ void KeplerCompute::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& s
                             "start={:#x}; ran it on the interpreter ({} calls so far)",
                             start, fallbacks.load(std::memory_order_relaxed));
             }
+        } else {
+            fs.parameters = std::move(before_replay);
         }
     }
 #else
