@@ -13,11 +13,9 @@
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 #include <bit>
 #include <numeric>
@@ -440,29 +438,6 @@ bool DriverCachesPipelines(const Device& device) {
         return false;
     }
 }
-
-// AMD's driver crashed building an Ocarina of Time fragment shader that shuffles (Eglantine
-// #618, RX 6700 XT), so fragment shuffles with a dynamic lane run as a loop of broadcasts over
-// the subgroup there. EDEN_AMD_FRAGMENT_SHUFFLE=1 keeps them native for comparison runs.
-bool AmdFragmentShufflesNative() {
-    static const bool native = [] {
-        const char* const value = std::getenv("EDEN_AMD_FRAGMENT_SHUFFLE");
-        return value != nullptr && value[0] == '1';
-    }();
-    return native;
-}
-
-// Names each fragment shader that shuffles while the broadcast loop is in use, once.
-void NoteFragmentShuffles(size_t index, u64 hash) {
-    static std::mutex mutex;
-    static std::unordered_set<u64> noted;
-    std::scoped_lock lock{mutex};
-    if (noted.insert(hash).second) {
-        LOG_INFO(Render_Vulkan,
-                 "AMD: s{}:{:016x} shuffles; its dynamic-lane shuffles run as broadcast loops",
-                 index, hash);
-    }
-}
 } // Anonymous namespace
 
 PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
@@ -593,18 +568,13 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
             driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
             device.GetDriverVersion() < VK_MAKE_VERSION(512, 672, 0),
         .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
-        .has_broken_spirv_fragment_shuffle =
-            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY && !AmdFragmentShufflesNative(),
+        .has_broken_spirv_fragment_shuffle = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY,
         .max_subgroup_size = device.GetMaxSubgroupSize(),
         .has_broken_robust =
             device.IsNvidia() && device.GetNvidiaArch() <= NvidiaArchitecture::Arch_Pascal,
         .min_ssbo_alignment = device.GetStorageBufferAlignment(),
         .max_user_clip_distances = device.GetMaxUserClipDistances()
     };
-    if (driver_id == VK_DRIVER_ID_AMD_PROPRIETARY && AmdFragmentShufflesNative()) {
-        LOG_WARNING(Render_Vulkan, "EDEN_AMD_FRAGMENT_SHUFFLE=1: fragment shuffles stay native on "
-                                   "the AMD driver (experimental)");
-    }
 
     host_info = Shader::HostTranslateInfo{
         .min_ssbo_alignment = device.GetStorageBufferAlignment(),
@@ -1445,10 +1415,6 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         Shader::IR::Program& program{programs[index]};
         const size_t stage_index{index - 1};
         infos[stage_index] = &program.info;
-        if (profile.has_broken_spirv_fragment_shuffle &&
-            program.stage == Shader::Stage::Fragment && program.info.uses_subgroup_shuffles) {
-            NoteFragmentShuffles(index, key.unique_hashes[index]);
-        }
 
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage, device)};
         ConvertLegacyToGeneric(program, runtime_info);
