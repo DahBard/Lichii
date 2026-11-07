@@ -116,13 +116,34 @@ Own changes:
   round 4. Rounds 3 and 3b are untested.
 - Run #10 (round 4): `pgo` and `pgo-lto` built (artifacts `lichii-tuned-r10-pgo`,
   `lichii-tuned-r10-pgo-lto`); `msvc` was cancelled 10 minutes into its build, with no error
-  before that. Untested.
+  before that.
+- r10-pgo-lto, perf-trace, ~4.5 min in Kokiri village right after the Deku Tree, first visit
+  with this pipeline cache. Docked: the game renders 2560x1440 (round 2b was handheld, a
+  1920x1080 crop), so the numbers don't compare directly.
+  - No crash: the 2010-0212 panic at the end comes from stopping emulation (force stop).
+  - Gameplay median 18.4 fps (p10 8.6, p90 40.2). GPU busy per frame median 33.7 ms, p90 66 ms:
+    the ~10 fps stretches are GPU-bound. Two passes dominate: s1:89b176edbafc8868
+    s5:046ea18d9f62eba6 s1:d7ec5ba11453e891 s5:b7bd625f79e3ced1 at 25-33 ms, sometimes with only
+    4 draws (heavy full-screen fragment work; round 2b's 17.5 ms at 1080p scaled by the pixel
+    count), and a tessellated pass with s3:3019c6c744e7ecda at 18-26 ms (79-92 draws).
+  - Boot built 1,322 cached pipelines. 341 new ones held draws for 19.7 s in total and caused
+    all five 1.6-2.5 s freezes.
+  - Read traps: 27-161 guest CPU reads of GPU-written pages per second (41% on two pages,
+    0x12fdfc000 and 0x44a14000) and 18-78 full GPU waits per second at buffer_cache.h:407
+    (`DownloadMemory`), 64-200 ms/s.
+  - Split threads: front split drain ~270 and writer wait ~230 ms/s, back split wait ~460 ms/s.
+    Never blocked on the present fence. The AA bypass engaged on the first gameplay frame.
 
 ## Next steps
 
-1. Have the owner test r10-pgo-lto rather than r9, which has the unsound #345 acquires and the
-   #376 collector bug. Judge from the second launch (the first recompiles shaders), run
-   `perf-trace.bat` at the same spots, and compare with the numbers above.
+1. Same Kokiri spots with r10, each run with the perf-trace variables (`ab-7` and `ab-9` don't
+   set them): `perf-trace.bat` again (the 341 new pipelines are now built at boot), then
+   `EDEN_NX2_PREFLUSH=1` (#259's author measured Kokiri ~26 -> ~40 fps, with some flicker) and
+   `EDEN_AMD_FP16=1` (for the heavy fragment passes; look for wrong colors). Handheld (1080p)
+   gives a comparison with round 2b. `EDEN_NX2_READ_TRAPS=0` drops the traps entirely (stale
+   reads possible). Port candidates: upstream #264 (read traps armed once, +1-2 fps on an RTX
+   4090), #147 (batched readbacks; little left at our ~40 waits/s), #267's grass-on-sword-swing
+   (32 storage buffers) and missing-sunlight fixes.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
