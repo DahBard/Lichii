@@ -559,6 +559,32 @@ void A64EmitX64::EmitA64GetCNTFRQ(A64EmitContext& ctx, IR::Inst* inst) {
 }
 
 void A64EmitX64::EmitA64GetCNTPCT(A64EmitContext& ctx, IR::Inst* inst) {
+    if (conf.wall_clock_cntpct && conf.inline_cntpct_factor != 0) {
+        // The high half of TSC * factor, without the register spills of a host call.
+        const Xbyak::Reg64 low = ctx.reg_alloc.ScratchGpr(code, HostLoc::RAX);
+        const Xbyak::Reg64 high = ctx.reg_alloc.ScratchGpr(code, HostLoc::RDX);
+        const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr(code);
+        code.lfence();
+        code.rdtsc();
+        code.shl(high, 32);
+        code.or_(low, high);
+        code.mov(tmp, conf.inline_cntpct_factor);
+        code.mul(tmp);
+        if (conf.inline_cntpct_spin_ticks != 0) {
+            // Two reads this close together are a polling loop: pause, as GetCNTPCT does.
+            Xbyak::Label done;
+            code.mov(tmp, high);
+            code.sub(tmp, qword[code.ABI_JIT_PTR + offsetof(A64JitState, last_cntpct)]);
+            code.mov(qword[code.ABI_JIT_PTR + offsetof(A64JitState, last_cntpct)], high);
+            code.cmp(tmp, static_cast<u32>(conf.inline_cntpct_spin_ticks));
+            code.jae(done);
+            code.pause();
+            code.pause();
+            code.L(done);
+        }
+        ctx.reg_alloc.DefineValue(code, inst, high);
+        return;
+    }
     ctx.reg_alloc.HostCall(code, inst);
     if (!conf.wall_clock_cntpct) {
         code.UpdateTicks();

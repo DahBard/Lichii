@@ -239,6 +239,9 @@ struct UserConfig {
     /// to avoid writting certain unnecessary code only needed for cycle timers.
     bool wall_clock_cntpct = false;
 
+    /// x86-64 hosts: load-acquires are plain loads (see A64::UserConfig::x64_tso_barriers).
+    bool x64_tso_barriers = false;
+
     /// This allows accurately emulating protection fault handlers. If true, we check
     /// for exit after every data memory access by the emulated program.
     bool check_halt_on_memory_access = false;

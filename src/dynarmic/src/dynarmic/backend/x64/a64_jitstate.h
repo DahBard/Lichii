@@ -56,6 +56,9 @@ struct A64JitState {
     std::array<u64, RSB_SIZE> rsb_location_descriptors;
     std::array<u64, RSB_SIZE> rsb_codeptrs;
 
+    // The last inline CNTPCT_EL0 read, to tell a polling loop (UserConfig::inline_cntpct_spin_ticks).
+    u64 last_cntpct = 0;
+
     u32 GetPstate() const {
         return NZCV::FromX64(cpsr_nzcv);
     }

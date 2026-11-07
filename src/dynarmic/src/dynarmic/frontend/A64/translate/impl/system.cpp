@@ -86,7 +86,13 @@ bool TranslatorVisitor::DSB(Imm<4> /*CRm*/) {
     return true;
 }
 
-bool TranslatorVisitor::DMB(Imm<4> /*CRm*/) {
+bool TranslatorVisitor::DMB(Imm<4> CRm) {
+    // CRm<1:0> is the access type: 01 orders loads (DMB LD), 10 stores (DMB ST), 11 both. Other
+    // encodings act as full barriers.
+    const u32 access = CRm.ZeroExtend() & 3U;
+    if (options.elide_load_store_barriers && (access == 1U || access == 2U)) {
+        return true;
+    }
     ir.DataMemoryBarrier();
     return true;
 }

@@ -38,6 +38,9 @@ struct TranslationOptions {
     /// If this is false, we treat the instruction as a NOP.
     /// If this is true, we emit an ExceptionRaised instruction.
     bool hook_hint_instructions = true;
+
+    /// If this is true, DMB LD and DMB ST emit no IR: the host keeps loads and stores in order.
+    bool elide_load_store_barriers = false;
 };
 
 /**

@@ -354,6 +354,34 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
     config.wall_clock_cntpct = m_uses_wall_clock;
     config.enable_cycle_counting = !m_uses_wall_clock;
 
+#if defined(ARCHITECTURE_x86_64)
+    // x86-64 keeps loads and stores in order: DMB LD and DMB ST emit nothing and load-acquires are
+    // plain loads instead of LOCK XADD. LICHII_JIT_TSO=0 keeps the fences.
+    static const bool tso_barriers = [] {
+        const char* const value = std::getenv("LICHII_JIT_TSO");
+        return value == nullptr || value[0] != '0';
+    }();
+    config.x64_tso_barriers = tso_barriers;
+    // CNTPCT_EL0 inline from the TSC, the value GetClockTicks returns at the normal CPU clock
+    // without core speed sync, keeping GetCNTPCT's pause for polling loops (EDEN_NX2_CNTPCT_PAUSE).
+    // LICHII_JIT_INLINE_CNTPCT=0 calls GetCNTPCT instead.
+    static const bool inline_cntpct = [] {
+        const char* const value = std::getenv("LICHII_JIT_INLINE_CNTPCT");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (inline_cntpct && m_uses_wall_clock && Common::g_wall_clock.IsNative() &&
+        Settings::values.cpu_clock.GetValue() == Settings::CpuClock::Normal &&
+        !Settings::values.sync_core_speed.GetValue()) {
+        static const bool pause_spins = [] {
+            const char* const value = std::getenv("EDEN_NX2_CNTPCT_PAUSE");
+            return value == nullptr || value[0] != '0';
+        }();
+        config.inline_cntpct_factor =
+            Common::g_wall_clock.cntpct_rdtsc_factor.load(std::memory_order_relaxed);
+        config.inline_cntpct_spin_ticks = pause_spins ? m_cb->m_spin_ticks : 0;
+    }
+#endif
+
     // Code cache size
 #if defined(ARCHITECTURE_arm64) || defined(__sun__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__OpenBSD__)
     config.code_cache_size = std::uint32_t(128_MiB);
