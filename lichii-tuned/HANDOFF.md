@@ -284,6 +284,8 @@ Own changes:
   register writes a second, 1.5 M unchanged), draw 89, compute 61. Front: writer wait 416, split
   drain 386, macro DMA flush waits 289, acquire waits 251 ms/s. Read-trap GPU waits 49 a second, 90
   ms/s.
+- Run #17 (round 11) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r17-pgo`,
+  `lichii-tuned-r17-pgo-lto`).
 - Sharkiix (2026-11-07): Shakoquo/Lichii-sharkiix-version, AMD- and Ocarina-focused, tested on an RX
   9060 XT. No history of its own: v1/v2 are Lichii `99ac3d59` plus one commit (faster tensor
   emulation, semaphore acquire resumes, texture cache GC min age, the sampler and blend fixes), 3.0
