@@ -71,10 +71,10 @@ index 0502b3f..48e0ad1 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000..b429005
+index 0000000..4c7e8fc
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,94 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -150,6 +150,9 @@ index 0000000..b429005
 + trace-wfi-defer.bat          the game's waits for idle no longer end the GPU render pass
 +                              (LICHII_WFI_DEFER=1), logged like perf-trace.bat; watch for
 +                              missing or flickering effects
++ trace-fake-occlusion.bat     the game's occlusion checks always answer "visible" and the GPU
++                              runs no occlusion queries (LICHII_FAKE_OCCLUSION=4096), logged
++                              like perf-trace.bat; watch for glows or flares through walls
 + perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
 +                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
 +                              EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
@@ -292,6 +295,18 @@ index 0000000..7f0dcdb
 +rem Logs GPU thread zones every 10 s and frame timing every second (EDEN_NX2_GPU_PROFILE=1,
 +rem EDEN_DKB_FRAME_TRACE=1); the log is %APPDATA%\eden\log\eden_log.txt.
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-fake-occlusion.bat b/dist/lichii-tuned/trace-fake-occlusion.bat
+new file mode 100644
+index 0000000..392dc1e
+--- /dev/null
++++ b/dist/lichii-tuned/trace-fake-occlusion.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem Occlusion reports read 4096 samples at once and no GPU occlusion query runs
++rem (LICHII_FAKE_OCCLUSION=4096): the game thinks everything is visible. Logged like
++rem perf-trace.bat. Look for lens flares or glows showing through walls and trees.
++set LICHII_FAKE_OCCLUSION=4096&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-flush4096.bat b/dist/lichii-tuned/trace-flush4096.bat
 new file mode 100644
@@ -5853,10 +5868,64 @@ index 0000000..a09df81
 +
 +} // namespace VideoCommon::OotNetwork
 diff --git a/src/video_core/query_cache/query_cache.h b/src/video_core/query_cache/query_cache.h
-index 1cd92dc..83b1da6 100644
+index 1cd92dc..5244abc 100644
 --- a/src/video_core/query_cache/query_cache.h
 +++ b/src/video_core/query_cache/query_cache.h
-@@ -282,8 +282,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -33,6 +33,21 @@
+ 
+ namespace VideoCommon {
+ 
++/// LICHII_FAKE_OCCLUSION=<samples>: occlusion reports are written at once with that many samples
++/// passed and no host occlusion query runs. Ocarina of Time reports ~1,400 a frame and reads them
++/// back on the CPU; on AMD the queries, their copies and the read stalls cost most of the frame.
++inline u32 FakeOcclusionSamples() {
++    static const u32 samples = [] {
++        const char* const value = std::getenv("LICHII_FAKE_OCCLUSION");
++        const u32 parsed = value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
++        if (parsed != 0) {
++            LOG_INFO(HW_GPU, "LICHII_FAKE_OCCLUSION: occlusion reports read {} samples", parsed);
++        }
++        return parsed;
++    }();
++    return samples;
++}
++
+ using Maxwell = Tegra::Engines::Maxwell3D;
+ 
+ struct SyncValuesStruct {
+@@ -190,6 +205,9 @@ QueryCacheBase<Traits>::~QueryCacheBase() = default;
+ 
+ template <typename Traits>
+ void QueryCacheBase<Traits>::CounterEnable(QueryType counter_type, bool is_enabled) {
++    if (counter_type == QueryType::ZPassPixelCount64 && FakeOcclusionSamples() != 0) {
++        return;
++    }
+     size_t index = static_cast<size_t>(counter_type);
+     StreamerInterface* streamer = impl->streamers[index];
+     if (!streamer) [[unlikely]] {
+@@ -216,6 +234,9 @@ void QueryCacheBase<Traits>::CounterClose(QueryType counter_type) {
+ 
+ template <typename Traits>
+ void QueryCacheBase<Traits>::CounterReset(QueryType counter_type) {
++    if (counter_type == QueryType::ZPassPixelCount64 && FakeOcclusionSamples() != 0) {
++        return;
++    }
+     size_t index = static_cast<size_t>(counter_type);
+     StreamerInterface* streamer = impl->streamers[index];
+     if (!streamer) [[unlikely]] {
+@@ -247,6 +268,11 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+                  static_cast<u32>(counter_type), static_cast<u32>(flags), payload, gpu_memory->GetID(),
+                  gpu_memory->GpuToCpuAddress(addr).value_or(0));
+     }
++    if (counter_type == QueryType::ZPassPixelCount64 && !is_fence && FakeOcclusionSamples() != 0) {
++        // Written like a payload: at once with GPU accuracy below High.
++        counter_type = QueryType::Payload;
++        payload = FakeOcclusionSamples();
++    }
+     size_t streamer_id = static_cast<size_t>(counter_type);
+     auto* streamer = impl->streamers[streamer_id];
+     if (streamer == nullptr) [[unlikely]] {
+@@ -282,8 +308,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
      };
      u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
      u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
@@ -5866,7 +5935,7 @@ index 1cd92dc..83b1da6 100644
                                       pointer, pointer_timestamp, cpu_addr, addr,
                                       asid = gpu_memory->GetID(), counter_type] {
          if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
-@@ -294,9 +293,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -294,9 +319,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                           trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
                           static_cast<u32>(query_base->flags));
              }
@@ -5877,7 +5946,7 @@ index 1cd92dc..83b1da6 100644
              return;
          }
          if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
-@@ -309,9 +306,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -309,9 +332,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
              }
              LOG_ERROR(HW_GPU,
                        "Query report value not synchronized. Consider increasing GPU accuracy.");
@@ -5888,7 +5957,7 @@ index 1cd92dc..83b1da6 100644
              return;
          }
          query_base->value += streamer->GetAmendValue();
-@@ -334,12 +329,12 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -334,12 +355,12 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                       wide ? query_base->value : static_cast<u32>(query_base->value),
                       static_cast<u32>(query_base->flags));
          }
@@ -5904,7 +5973,7 @@ index 1cd92dc..83b1da6 100644
      } else {
          if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
              if (has_timestamp) {
-@@ -364,10 +359,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+@@ -364,10 +385,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
          }
          impl->rasterizer.SyncOperation(std::move(operation));
      }

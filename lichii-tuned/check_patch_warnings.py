@@ -94,6 +94,12 @@ def main() -> int:
     includes = clone_deps(source, args.deps)
     added = added_lines(source, args.base)
     units = sorted(f for f in added if f.endswith(".cpp") and not SKIP.search(f))
+    # A changed header is compiled through two of the files that include it.
+    for header in sorted(f for f in added if f.endswith((".h", ".inc")) and not SKIP.search(f)):
+        users = subprocess.run(["git", "-C", str(source), "grep", "-l", "-F",
+                                f'#include "{header.removeprefix("src/")}"', "--", "src/*.cpp"],
+                               capture_output=True, text=True).stdout.split()
+        units += [u for u in sorted(users) if u not in units and not SKIP.search(u)][:2]
 
     with tempfile.TemporaryDirectory() as overlay:
         for header in PRAGMA_HEADERS:
