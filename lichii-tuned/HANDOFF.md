@@ -269,6 +269,8 @@ Own changes:
   GPU busy 12.5 ms a frame (p90 18.6) against 47.6: the GPU is no longer the limit. Per frame the
   guest cores 4 and 5 use 29 and 28 ms (797 and 766 ms/s), the GPU back thread 28 ms (766 ms/s), the
   front 21 ms: those set the frame rate now.
+- Run #16 (round 10) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r16-pgo`,
+  `lichii-tuned-r16-pgo-lto`).
 - Sharkiix (2026-11-07): Shakoquo/Lichii-sharkiix-version, AMD- and Ocarina-focused, tested on an RX
   9060 XT. No history of its own: v1/v2 are Lichii `99ac3d59` plus one commit (faster tensor
   emulation, semaphore acquire resumes, texture cache GC min age, the sampler and blend fixes), 3.0
