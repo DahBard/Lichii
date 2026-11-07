@@ -146,6 +146,9 @@ public:
 
     u32 GetStorageBufferAlignment() const;
 
+    /// Largest range a storage buffer binding may have
+    u64 GetMaxStorageBufferRange() const;
+
     [[nodiscard]] StagingBufferRef UploadStagingBuffer(size_t size);
 
     [[nodiscard]] StagingBufferRef DownloadStagingBuffer(size_t size, bool deferred = false);
@@ -283,10 +286,6 @@ public:
 
     u32 GetMaxDynamicStorageBuffers() const {
         return max_dynamic_storage_buffers;
-    }
-
-    u32 GetMaxStorageBufferRange() const {
-        return static_cast<u32>(device.GetMaxStorageBufferRange());
     }
 
 private:

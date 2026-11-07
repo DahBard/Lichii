@@ -19,6 +19,8 @@ add_executable(tests
     common/dkb_cpu_trace.cpp
     common/dkb_frame_trace.cpp
     audio_core/nx2_sysmix.cpp
+    audio_core/nx2_input_service.cpp
+    audio_core/audio_in.cpp
     audio_core/sysmix_sink.cpp
     audio_core/sysmix_test_context.h
     video_core/ampere_starfox_test10.cpp
@@ -26,6 +28,7 @@ add_executable(tests
     video_core/ampere_yoshi_compute.cpp
     video_core/texture_rect_descriptor.cpp
     audio_core/batch_decoder.cpp
+    audio_core/microphone.cpp
     audio_core/hardware_audio_codec.cpp
     core/gpu_dirty_memory.cpp
     core/memory_acquire.cpp
@@ -51,6 +54,7 @@ add_executable(tests
     video_core/maxwell_numeric.cpp
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
+    video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp
     video_core/fire_emblem_upscale.cpp
@@ -65,6 +69,7 @@ add_executable(tests
     video_core/spirv_atomic_retry.cpp
     video_core/spirv_storage_alignment.cpp
     video_core/spirv_fragment_shuffle.cpp
+    video_core/mesh_fallback.cpp
     video_core/multi_range_refresh.cpp
     video_core/command_fetch_order.cpp
     video_core/gpu_written_pages.cpp
@@ -101,12 +106,15 @@ add_executable(tests
     video_core/spirv_software_matrix.cpp
     video_core/spirv_builtin_capabilities.cpp
     video_core/spirv_min_max_denorms.cpp
+    video_core/spirv_nan_safe_min_max.cpp
     video_core/virtual_range_cache.cpp
     common/bit_field.cpp
     common/cityhash.cpp
     common/container_hash.cpp
+    common/core_pinning.cpp
     common/event.cpp
     common/fibers.cpp
+    common/fs_iterate.cpp
     common/game_presets.cpp
     common/host_memory.cpp
     common/host_memory_failure.cpp
@@ -190,11 +198,16 @@ endif()
 
 add_executable(update_checker_tests
     common/update_checker.cpp
-    ../frontend_common/update_checker.cpp)
+    common/update_installer.cpp
+    ../frontend_common/update_checker.cpp
+    ../frontend_common/update_installer.cpp)
 target_link_libraries(update_checker_tests PRIVATE common Catch2::Catch2WithMain)
 add_test(NAME update_checker_tests COMMAND update_checker_tests)
 
 if (NOT ANDROID)
+    target_sources(tests PRIVATE input_common/joycon_subcommand_response.cpp)
+    target_link_libraries(tests PRIVATE SDL3::SDL3)
+
     add_executable(config_tests
         common/first_run_config.cpp
         ../frontend_common/config.cpp)

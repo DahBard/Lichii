@@ -396,7 +396,7 @@ TEST_CASE("Handle tables are read for every element at once", "[video_core][text
         return index == 0 ? cbuf : 0;
     };
     std::vector<u32> handles;
-    VideoCommon::EvaluateTextureHandles(info, 0, memory, cbuf_address, 4,
+    VideoCommon::EvaluateTextureHandles(info, 0, memory, cbuf_address, 1, 4,
                                         [&handles](u32 element, u32 handle) {
                                             CHECK(element == handles.size());
                                             handles.push_back(handle);
@@ -405,7 +405,7 @@ TEST_CASE("Handle tables are read for every element at once", "[video_core][text
     // The entry size and the storage buffer address, once each for all the elements.
     CHECK(cbuf_reads == 2);
     for (u32 element = 0; element < 4; ++element) {
-        CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, element) ==
+        CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, 1, element) ==
               0x100 + element);
     }
 }
@@ -561,7 +561,8 @@ TEST_CASE("Dual vertex programs join the handle programs of both halves",
         };
     }
     const IR::Program merged{
-        Shader::Maxwell::MergeDualVertexPrograms(vertex_a.program, vertex_b.program, vertex_b.env)};
+        Shader::Maxwell::MergeDualVertexPrograms(vertex_a.program, vertex_b.program, vertex_b.env,
+                                                 Shader::HostTranslateInfo{})};
 
     const auto& info{merged.info};
     REQUIRE(info.storage_buffers_descriptors.size() == 2);
@@ -588,7 +589,7 @@ TEST_CASE("Dual vertex programs join the handle programs of both halves",
         REQUIRE(descriptor.handle_program < info.handle_programs.size());
         handles.emplace_back(descriptor.type,
                              VideoCommon::EvaluateTextureHandle(info, descriptor.handle_program,
-                                                                memory, cbuf_address));
+                                                                memory, cbuf_address, 1));
     }
     std::vector<std::pair<TextureType, u32>> expected{
         {TextureType::Color2D, 0xa0},
@@ -598,4 +599,37 @@ TEST_CASE("Dual vertex programs join the handle programs of both halves",
     std::ranges::sort(handles);
     std::ranges::sort(expected);
     CHECK(handles == expected);
+}
+
+TEST_CASE("Storage handle words are read from the host-aligned buffer base",
+          "[video_core][texture_handles]") {
+    // The program's storage offsets are relative to the buffer address aligned down to the host
+    // storage alignment (StorageOffset), where the buffer cache binds the buffer.
+    constexpr GPUVAddr cbuf = 0x1000;
+    HandleTestMemory memory;
+    memory.words[cbuf + 0x10] = 0x2008; // the storage buffer address, 8 bytes past 16
+    memory.words[cbuf + 0x14] = 0;
+    memory.words[0x2008] = 0x11; // the handle the shader reads
+    memory.words[0x2010] = 0x22;
+
+    Shader::Info info;
+    info.storage_buffers_descriptors.push_back({.cbuf_index = 0, .cbuf_offset = 0x10, .count = 1, .is_written = false});
+    // Offset 8 from the base aligned to 16, as StorageOffset gives it for a read at 0x2008.
+    info.handle_programs.push_back({static_cast<u32>(Shader::HandleOp::Immediate), 8U,
+                                    static_cast<u32>(Shader::HandleOp::Storage), 0U});
+    const auto cbuf_address = [](u32 index) -> GPUVAddr { return index == 0 ? cbuf : 0; };
+    CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, 16) == 0x11U);
+    CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, 4) == 0x22U);
+    CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, 0) == 0x22U);
+
+    SECTION("Indirect buffers align the address read from the table, not the table") {
+        // The constant buffer points at a table that is not aligned. The buffer address is read
+        // from the table entry at its exact address, then aligned down.
+        memory.words[cbuf + 0x10] = 0x3004;
+        memory.words[0x3004 + 0x8] = 0x2008;
+        memory.words[0x3004 + 0xc] = 0;
+        info.storage_buffers_descriptors[0].indirect_offset = 0x8;
+        CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, 16) == 0x11U);
+        CHECK(VideoCommon::EvaluateTextureHandle(info, 0, memory, cbuf_address, 4) == 0x22U);
+    }
 }
