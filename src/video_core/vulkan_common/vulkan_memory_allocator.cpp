@@ -427,6 +427,14 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
         vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
     }
     vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
+    if (usage == MemoryUsage::Stream) {
+        // Device-local only with Resizable BAR or inside the 256 MiB BAR window; otherwise the
+        // GPU reads uniform data and copy sources from it across the PCIe link.
+        LOG_INFO(Render_Vulkan, "Stream buffer: {} MiB in memory type {} ({})", ci.size >> 20,
+                 alloc_info.memoryType,
+                 (property_flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 ? "device-local"
+                                                                            : "host memory");
+    }
 
     // Log GPU memory allocation for buffers
     if (GPU::Logging::IsActive() &&
