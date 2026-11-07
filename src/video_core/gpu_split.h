@@ -274,10 +274,28 @@ public:
     /// Returns whether any of it was still queued.
     bool WaitForWriters();
     /// A host-level wait was just sent (a syncpoint acquire, a host WFI, a GP entry with its sync
-    /// bit; semaphore acquires drain, or note it when a release still queued meets them): the
-    /// guest's GPU work before it is complete before the commands after it are fetched.
+    /// bit; semaphore acquires note it when a release still queued meets them): the guest's GPU
+    /// work before it is complete before the commands after it are fetched.
     void NoteSync() {
         last_sync_position = write_position;
+    }
+    /// The position after everything sent so far, for Ran and WaitForPosition.
+    [[nodiscard]] u64 Position() const {
+        return write_position;
+    }
+    /// Whether the back executed everything sent before `position`. It may tell so a little
+    /// late: the back stores its position every few thousand words and when it runs out of work.
+    [[nodiscard]] bool Ran(u64 position) const {
+        return consumed.load(std::memory_order_acquire) >= position;
+    }
+    /// The position after the last compute or copy work sent (NoteWriter).
+    [[nodiscard]] u64 LastWriterPosition() const {
+        return (std::min)(last_writer_position, write_position);
+    }
+    /// Waits until the back executed everything sent before `position`, not what came after.
+    /// Returns whether any of it was still queued.
+    bool WaitForPosition(u64 position, DrainSite site) {
+        return WaitFor((std::min)(position, write_position), site);
     }
     /// Waits until the back executed the work sent before the last NoteSync. Returns whether any
     /// of it was still queued.
@@ -292,6 +310,7 @@ public:
     struct QueuedSemaphoreWrite {
         u32 payload;
         bool known;
+        u64 position; ///< Once the back ran this (Ran), the word holds the write
     };
     /// The last write sent to the semaphore word at `device_address`, if the back may not have run
     /// it yet.
@@ -328,17 +347,10 @@ public:
     [[nodiscard]] u64 WriterPosition() const {
         return last_writer_position;
     }
-    [[nodiscard]] u64 Position() const {
-        return write_position;
-    }
     /// How far the back has executed.
     [[nodiscard]] u64 Consumed() {
         consumed_cache = consumed.load(std::memory_order_acquire);
         return consumed_cache;
-    }
-    /// Waits until the back executed everything sent before `target`.
-    void WaitForPosition(u64 target, DrainSite site) {
-        WaitFor(std::min(target, write_position), site);
     }
 
     /// Work just sent writes [begin, end) of the GPU address space `space` (a memory manager).
