@@ -1873,6 +1873,21 @@ void RasterizerVulkan::WaitForIdle() {
 
     query_cache.NotifyWFI();
 
+    // LICHII_WFI_DEFER=1: keep the render pass, as on MoltenVK; ~40 a frame ended it in Ocarina
+    // of Time, each a full barrier and cache flush on AMD.
+    static const bool defer_wait_for_idle = [] {
+        const char* const value = std::getenv("LICHII_WFI_DEFER");
+        const bool enabled = value != nullptr && value[0] == '1';
+        if (enabled) {
+            LOG_INFO(Render_Vulkan, "LICHII_WFI_DEFER: waits for idle keep the render pass");
+        }
+        return enabled;
+    }();
+    if (defer_wait_for_idle && scheduler.IsRenderPassActive()) {
+        scheduler.DeferWaitForIdle();
+        fence_manager.SignalOrdering();
+        return;
+    }
     if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
         fence_manager.SignalOrdering();
