@@ -109,14 +109,15 @@ Own changes:
     log "Patch topology not used with tessellation".
   - 28-61 full GPU waits (Finish) a second costing 140-170 ms/s; sites are logged from round 3b.
   - Guest cores 4 and 5 use ~40-43 ms of CPU per frame in the 17 fps area.
-- Run #9 (round 3b): `pgo` built; `pgo-lto` was still building at 00:00 UTC; `msvc` failed at
-  914/1880 on C4458 (#319's `state` in kepler_compute.cpp) and C4456/C4457 (#345's
-  `[source, count]` in maxwell_3d.cpp), fixed in round 4. Rounds 3 and 3b are untested.
+- Run #9 (round 3b): `pgo` and `pgo-lto` built (artifacts `lichii-tuned-r9-pgo`,
+  `lichii-tuned-r9-pgo-lto`); `msvc` failed at 914/1880 on C4458 (#319's `state` in
+  kepler_compute.cpp) and C4456/C4457 (#345's `[source, count]` in maxwell_3d.cpp), fixed in
+  round 4. Rounds 3 and 3b are untested.
 
 ## Next steps
 
-1. Run #10 (round 4: round 3b, the PR updates above and the MSVC fix): when `pgo-lto` / `pgo`
-   finish (they queue behind run #9's), have the owner test r10-pgo-lto rather than r9, which
+1. Run #10 (round 4: round 3b, the PR updates above and the MSVC fix, started 00:02 UTC): when
+   `pgo-lto` / `pgo` finish, have the owner test r10-pgo-lto rather than r9, which
    has the unsound #345 acquires and the #376 collector bug. Judge from the second launch (the
    first recompiles shaders), run `perf-trace.bat` at the same spots, and compare with the
    numbers above. If `msvc` fails, add the case to `check_patch_warnings.py`.
