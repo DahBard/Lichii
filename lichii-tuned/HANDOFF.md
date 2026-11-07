@@ -35,7 +35,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (58 commits over 588bfa6; pushing it
+- Source of the patch: branch `tuned4` of DahBard/Lichii (62 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
@@ -114,8 +114,21 @@ Own changes:
   the Switch 1 rate. `LICHII_JIT_TSO=0` / `LICHII_JIT_INLINE_CNTPCT=0` restore the old code.
 - GPU trace (round 7): mesh, indirect count and byte count draws are timed too; mesh draws show
   as `m1:<task/mesh>+s5:<fragment>` in `DKB gpu_work` and as `mesh_draws=` per sampled submission.
+- GPU trace (round 8): draws are timed in one sampled frame of four (`LICHII_TRACE_DRAWS_EVERY`,
+  default 4, 0 = never), because their timestamps lengthen the frame they measure; `gpu_frame` lines
+  say `draws_timed=0/1`, and the summary script reports the untimed frames as the frame's GPU time.
+  Each sampled submission records when its upload command buffer finished (`gpu_upload_sum_ms`,
+  `upload_ms`), the 10 s scheduler report adds `Staging traffic per second` (stream buffer, host
+  memory, downloads), and boot logs `Memory heaps:`, `Memory types:` and the stream buffer's memory
+  type (`Stream buffer:`).
+- `LICHII_WFI_DEFER=1` (round 8, off by default): a guest wait for idle inside a render pass is
+  deferred like a fragment barrier, as on MoltenVK; later draws end the render pass only when it has
+  storage writes or they sample its render targets, and the full memory barrier is recorded after
+  the render pass ends. Ocarina ends ~40 render passes a frame there (`vk_rasterizer.cpp`
+  WaitForIdle), each a full barrier and cache flush on AMD.
 - Launchers with the perf-trace variables: `trace-preflush.bat`, `trace-fp16.bat`,
-  `trace-flush4096.bat` (`EDEN_NX2_FLUSH_DRAWS=4096`), `trace-old-jit.bat` (round 7's JIT off).
+  `trace-flush4096.bat` (`EDEN_NX2_FLUSH_DRAWS=4096`), `trace-old-jit.bat` (round 7's JIT off),
+  `trace-wfi-defer.bat` (round 8).
 
 ## Test results so far
 
@@ -194,6 +207,30 @@ Own changes:
   per second) and untimed mesh draws are the suspects.
 - Run #13 (round 7) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r13-pgo`,
   `lichii-tuned-r13-pgo-lto`).
+- r13 with Lichii's resolution at 3x (`trace-old-jit.bat`, `trace-flush4096.bat`, docked): 3x
+  renders 7680x4320 (the docked base is 2560x1440), past the 9 GiB VRAM cap (an 8K image left
+  unbacked, an 18.9 s freeze with the GPU back thread at 904 ms/s in clears); gameplay 2-16 fps. FSR
+  1 looked worse than ScaleForce there because it was scaling 8K down to 4K. The same full-screen
+  draws took 20-80x longer in some sampled frames: s1:621c4755238870a8+s5:3ddfb1d7a854c849 0.7 ms or
+  15-54 ms, s1:ee1f5e9a94e748d4+s5:1d78d4e5c4e9b0e4 190-330 ms,
+  m1:b41e5eadb0568672+s5:c72b6ea746c00433 1 ms or 8-21 ms; those frames match the 1-5 fps windows.
+  The owner sees bright areas run much worse than shadowy ones.
+- r13 `perf-trace.bat` at 1x, docked: gameplay median 13.9 fps (earlier docked runs 13.1-18.2
+  depending on the area). Guest core 4 used 703 ms/s and core 5 625 ms/s against 750-828 and 688-734
+  before: round 7's JIT cuts guest CPU time, but the frame rate is limited elsewhere. Sampled
+  gameplay frames: span 30-120 ms, submissions 14-84 ms, yet their 800-3,700 timed draws add up to
+  5-15 ms; slow frames have 3-4x the draws of fast ones (~800 at 29 ms vs 2,000-3,700 at 60-120 ms).
+  No heavy full-screen draw appeared at 1x. ~46 submissions and ~145 render passes a frame; render
+  pass ends per second: vk_rasterizer.cpp:1881 (WaitForIdle) 520-640, vk_query_cache.cpp:1640
+  340-410, vk_buffer_cache.cpp:545 (uploads that can't move to the upload command buffer) 165-250,
+  vk_graphics_pipeline.cpp:781 (new framebuffer) 175-190, vk_rasterizer.cpp:1297 (clears) 140-160,
+  vk_query_cache.cpp:270 115-125, vk_rasterizer.cpp:2343 (submission budget) 110-140. Read traps:
+  38.7 full GPU waits a second at buffer_cache.h:407, 139 ms/s. No image fell back to host memory at
+  1x.
+- The owner's laptop BIOS forces Resizable BAR off; GPU-Z: "PCIe x16 5.0 @ x4 4.0". The stream
+  buffer (128 MiB) prefers device-local host-visible memory, which is then the 256 MiB BAR window
+  (round 8 logs where it lands: `Stream buffer:`); uploads over 1/16 of it and all downloads go
+  through host memory across the x4 link.
 - Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
   not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
   build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
@@ -218,18 +255,21 @@ Own changes:
 
 ## Next steps
 
-1. Run #13 (round 7), docked, same Kokiri spots, log filter unchanged (the trace lines are Info):
-   `perf-trace.bat` (new JIT), `trace-old-jit.bat` (compare guest core 4 ms per frame) and
-   `trace-flush4096.bat` (submits and render passes per second, GPU span against busy time). Read
-   the `m1:` entries and `mesh_draws=` to see whether mesh draws are the untimed GPU time. Ask for
-   GPU-Z's "Bus Interface" and "Resizable BAR" fields. Round 8 candidates: port #408; log the memory
-   heaps, the stream and staging buffers' memory types and the bytes uploaded and downloaded per
-   second (the eGPU link is PCIe 4.0 x4); cut render pass ends at their biggest sources (`Render
-   pass ends` lines: vk_rasterizer.cpp:1871, vk_query_cache.cpp:1640, ...); if mesh draws dominate,
-   look at their task/mesh workgroup sizes on AMD. A Radeon GPU Profiler capture of one Kokiri frame
-   (kept on the owner's PC) would show barriers and per-draw cost directly. For 4K: port #253's
-   jitter and motion vectors and feed the FSR 3.1 path, then FSR 4 through the SDK 2.4 DLLs. fp16
-   stays off; preflush is safe but showed no gain yet. Port candidates: upstream #264, #267's
+1. Run #14 (round 8), docked, resolution 1x, the same Kokiri spots in sunlit and shadowy places:
+   `perf-trace.bat` and `trace-wfi-defer.bat`, a few minutes each. Compare the untimed frames' GPU
+   time with the frame time: if GPU time per frame is close to 1/fps the GPU is the limit, otherwise
+   something on the CPU side waits. Read `gpu_upload_sum_ms` and `Staging traffic per second` (the
+   x4 link carries ~6-7 GB/s; 100 MiB a frame at 60 fps would be most of it). From
+   `trace-wfi-defer.bat`: render pass ends at vk_rasterizer.cpp:1881, frame rate, and the owner's
+   report of missing or flickering effects. Next: if uploads dominate, find what is uploaded every
+   frame; if render pass ends and barriers dominate, cut the next sources (queries at
+   vk_query_cache.cpp:1640 and 270, buffer uploads at vk_buffer_cache.cpp:545). The bright-area
+   passes (s5:3ddfb1d7a854c849, s5:1d78d4e5c4e9b0e4, m1:b41e5eadb0568672) can be skipped with
+   `EDEN_NX2_REJECT_HASH` for an A/B. A Radeon GPU Profiler capture of one Kokiri frame (kept on the
+   owner's PC) would show barriers and per-draw cost directly. For 4K: port #253's jitter and motion
+   vectors and feed the FSR 3.1 path, then FSR 4 through the SDK 2.4 DLLs; until then the game
+   renders at 1x and the window filter scales it (the owner prefers ScaleForce). fp16 stays off;
+   preflush is safe but showed no gain yet. Port candidates: #408, upstream #264, #267's
    grass-on-sword-swing and sunlight fixes, nx2's commits since build 93.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.

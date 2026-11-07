@@ -71,10 +71,10 @@ index 0502b3f..48e0ad1 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000..045a844
+index 0000000..b429005
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,91 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -147,9 +147,13 @@ index 0000000..045a844
 + trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
 +                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
 +                              like perf-trace.bat
++ trace-wfi-defer.bat          the game's waits for idle no longer end the GPU render pass
++                              (LICHII_WFI_DEFER=1), logged like perf-trace.bat; watch for
++                              missing or flickering effects
 + perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
 +                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
-+                              EDEN_DKB_FRAME_TRACE=1)
++                              EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
++                              (LICHII_TRACE_DRAWS_EVERY=4), since timing them slows that frame
 +
 +Each start replaces the log, so copy it after every run you want to compare.
 +The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
@@ -333,6 +337,18 @@ index 0000000..15c8666
 +rem ab-7-preflush.bat with the logging of perf-trace.bat: GPU readbacks are preflushed
 +rem (EDEN_NX2_PREFLUSH=1), fewer readback stalls, but some flicker was reported.
 +set EDEN_NX2_PREFLUSH=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-wfi-defer.bat b/dist/lichii-tuned/trace-wfi-defer.bat
+new file mode 100644
+index 0000000..b9b294a
+--- /dev/null
++++ b/dist/lichii-tuned/trace-wfi-defer.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem Waits for idle inside a render pass keep it (LICHII_WFI_DEFER=1): later draws break it only
++rem when they read what it wrote, and the full barrier follows its end. Logged like
++rem perf-trace.bat. Look for missing or flickering effects.
++set LICHII_WFI_DEFER=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
 index 5c75012..4b2d0bb 100644
@@ -6225,7 +6241,7 @@ index 9755a5b..46a372a 100644
              VkImageView vk_image_view{image_view.Handle(desc.type)};
              if (vk_image_view == VK_NULL_HANDLE) {
 diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
-index 3ffc624..4dbd14c 100644
+index 3ffc624..212e35a 100644
 --- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 +++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 @@ -197,6 +197,13 @@ try
@@ -6253,7 +6269,7 @@ index 3ffc624..4dbd14c 100644
  
      const std::string api_version = GetReadableVersion(device.ApiVersion());
  
-@@ -303,8 +306,8 @@ void RendererVulkan::Report() const {
+@@ -303,10 +306,37 @@ void RendererVulkan::Report() const {
  
      const auto available_vram = static_cast<f64>(device.GetDeviceLocalMemory()) / f64{1_GiB};
  
@@ -6263,7 +6279,36 @@ index 3ffc624..4dbd14c 100644
 +    LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
      LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
      LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
++    {
++        // Where the host-visible heaps are: without Resizable BAR, device-local host-visible
++        // memory is a 256 MiB window and other host-visible memory is across the PCIe link.
++        const VkPhysicalDeviceMemoryProperties memory =
++            device.GetPhysical().GetMemoryProperties().memoryProperties;
++        std::string heaps;
++        for (u32 i = 0; i < memory.memoryHeapCount; ++i) {
++            const VkMemoryHeap& heap = memory.memoryHeaps[i];
++            heaps += fmt::format("{}{}: {} MiB{}", heaps.empty() ? "" : ", ", i, heap.size >> 20,
++                                 (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0
++                                     ? " device-local"
++                                     : "");
++        }
++        std::string types;
++        for (u32 i = 0; i < memory.memoryTypeCount; ++i) {
++            const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
++            types += fmt::format("{}{}: heap {}{}{}{}{}", types.empty() ? "" : ", ", i,
++                                 memory.memoryTypes[i].heapIndex,
++                                 (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 ? " DL" : "",
++                                 (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 ? " HV" : "",
++                                 (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 ? " HC" : "",
++                                 (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 ? " cached"
++                                                                                   : "");
++        }
++        LOG_INFO(Render_Vulkan, "Memory heaps: {}", heaps);
++        LOG_INFO(Render_Vulkan, "Memory types: {}", types);
++    }
      if (VideoCommon::RenderTrace::Enabled()) {
+         LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
+                  Settings::values.log_filter.GetValue());
 diff --git a/src/video_core/renderer_vulkan/vk_buffer_cache.cpp b/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
 index 8cd9bf7..16673a4 100644
 --- a/src/video_core/renderer_vulkan/vk_buffer_cache.cpp
@@ -6836,7 +6881,7 @@ index 08f00f2..80f25db 100644
      DynamicFeatures dynamic_features;
      PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
-index 628dd72..0c16f22 100644
+index 628dd72..7273418 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 @@ -7,6 +7,7 @@
@@ -7051,7 +7096,29 @@ index 628dd72..0c16f22 100644
  void RasterizerVulkan::FlushAndInvalidateRegion(DAddr addr, u64 size,
                                                  VideoCommon::CacheType which) {
      if (Settings::IsGPULevelHigh()) {
-@@ -2331,7 +2414,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
+@@ -1790,6 +1873,21 @@ void RasterizerVulkan::WaitForIdle() {
+ 
+     query_cache.NotifyWFI();
+ 
++    // LICHII_WFI_DEFER=1: keep the render pass, as on MoltenVK; ~40 a frame ended it in Ocarina
++    // of Time, each a full barrier and cache flush on AMD.
++    static const bool defer_wait_for_idle = [] {
++        const char* const value = std::getenv("LICHII_WFI_DEFER");
++        const bool enabled = value != nullptr && value[0] == '1';
++        if (enabled) {
++            LOG_INFO(Render_Vulkan, "LICHII_WFI_DEFER: waits for idle keep the render pass");
++        }
++        return enabled;
++    }();
++    if (defer_wait_for_idle && scheduler.IsRenderPassActive()) {
++        scheduler.DeferWaitForIdle();
++        fence_manager.SignalOrdering();
++        return;
++    }
+     if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
+         scheduler.DeferFragmentBarrier();
+         fence_manager.SignalOrdering();
+@@ -2331,7 +2429,7 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
      return DmaBufferImageCopy<true>(copy_info, buffer_operand, image_operand);
  }
  
@@ -7060,7 +7127,7 @@ index 628dd72..0c16f22 100644
      auto& regs = maxwell3d->regs;
      auto& flags = maxwell3d->dirty.flags;
      const auto topology = maxwell3d->draw_manager.draw_state.topology;
-@@ -2403,7 +2486,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
+@@ -2403,7 +2501,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
      }
  
      if (device.IsExtExtendedDynamicState3BlendingSupported()) {
@@ -7069,7 +7136,7 @@ index 628dd72..0c16f22 100644
      } else if (device.IsExtColorWriteEnableSupported()) {
          UpdateColorWriteEnable(regs);
      }
-@@ -3039,12 +3122,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
+@@ -3039,12 +3137,18 @@ void RasterizerVulkan::UpdateLogicOp(Tegra::Engines::Maxwell3D::Regs& regs) {
      scheduler.Record([op](vk::CommandBuffer cmdbuf) { cmdbuf.SetLogicOpEXT(op); });
  }
  
@@ -7091,7 +7158,7 @@ index 628dd72..0c16f22 100644
          std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> setup_masks{};
          for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
              const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
-@@ -3061,6 +3150,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
+@@ -3061,6 +3165,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs) {
              if (mask.A) {
                  current |= VK_COLOR_COMPONENT_A_BIT;
              }
@@ -7177,7 +7244,7 @@ index c33b0ed..ac33832 100644
      struct IndirectTrace {
          vk::Buffer readback;
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-index 19bbcd9..74f2ef0 100644
+index 19bbcd9..e6e3af2 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 @@ -14,6 +14,7 @@
@@ -7188,8 +7255,13 @@ index 19bbcd9..74f2ef0 100644
  #include <utility>
  
  #include <fmt/format.h>
-@@ -45,6 +46,23 @@ std::atomic<u64> g_profile_finish_ns{};
+@@ -43,8 +44,28 @@ std::atomic<u64> g_profile_renderpasses{};
+ std::atomic<u64> g_profile_finishes{};
+ std::atomic<u64> g_profile_finish_ns{};
  std::atomic<u64> g_profile_window_start{};
++std::atomic<u64> g_profile_stream_upload_bytes{};
++std::atomic<u64> g_profile_host_upload_bytes{};
++std::atomic<u64> g_profile_download_bytes{};
  std::mutex g_profile_end_mutex;
  std::map<std::string, u64> g_profile_ends;
 +/// Finish (a full GPU wait) by call site: count and nanoseconds waited.
@@ -7212,7 +7284,21 @@ index 19bbcd9..74f2ef0 100644
  
  void CountRenderPassEnd(const char* file, u32 line) {
      if (!VideoCommon::Nx2Profile::Enabled()) {
-@@ -90,6 +108,22 @@ void ReportSubmitCounts() {
+@@ -77,6 +98,13 @@ void ReportSubmitCounts() {
+              static_cast<double>(g_profile_renderpasses.exchange(0)) / seconds,
+              static_cast<double>(g_profile_finishes.exchange(0)) / seconds,
+              static_cast<double>(g_profile_finish_ns.exchange(0)) / 1e6 / seconds);
++    constexpr double MiB = 1024.0 * 1024.0;
++    LOG_INFO(Render_Vulkan,
++             "Staging traffic per second: {:.1f} MiB uploaded through the stream buffer, {:.1f} "
++             "MiB through host memory, {:.1f} MiB downloaded",
++             static_cast<double>(g_profile_stream_upload_bytes.exchange(0)) / MiB / seconds,
++             static_cast<double>(g_profile_host_upload_bytes.exchange(0)) / MiB / seconds,
++             static_cast<double>(g_profile_download_bytes.exchange(0)) / MiB / seconds);
+     std::vector<std::pair<u64, std::string>> ends;
+     {
+         std::scoped_lock lock{g_profile_end_mutex};
+@@ -90,9 +118,42 @@ void ReportSubmitCounts() {
          LOG_INFO(Render_Vulkan, "Render pass ends {:.0f}/s at {}",
                   static_cast<double>(ends[i].first) / seconds, ends[i].second);
      }
@@ -7235,7 +7321,46 @@ index 19bbcd9..74f2ef0 100644
  }
  }
  
-@@ -254,9 +288,10 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
++void CountStagingTraffic(StagingTraffic kind, u64 bytes) {
++    if (!VideoCommon::Nx2Profile::Enabled()) {
++        return;
++    }
++    switch (kind) {
++    case StagingTraffic::StreamUpload:
++        g_profile_stream_upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
++        break;
++    case StagingTraffic::HostUpload:
++        g_profile_host_upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
++        break;
++    case StagingTraffic::Download:
++        g_profile_download_bytes.fetch_add(bytes, std::memory_order_relaxed);
++        break;
++    }
++}
++
+ void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
+                                          vk::CommandBuffer upload_cmdbuf) {
+     auto command = first;
+@@ -114,6 +175,9 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
+       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)} {
+ 
+     if (Common::DkbFrameTrace::Enabled()) {
++        if (const char* every = std::getenv("LICHII_TRACE_DRAWS_EVERY")) {
++            trace_draws_every = static_cast<u32>(std::strtoul(every, nullptr, 10));
++        }
+         const auto physical = device.GetPhysical();
+         trace_timestamp_bits =
+             physical.GetQueueFamilyProperties()[device.GetGraphicsFamily()].timestampValidBits;
+@@ -125,7 +189,7 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
+                     .pNext = nullptr,
+                     .flags = 0,
+                     .queryType = VK_QUERY_TYPE_TIMESTAMP,
+-                    .queryCount = TraceMaxSubmissions * 2,
++                    .queryCount = TraceMaxSubmissions * 3,
+                     .pipelineStatistics = 0,
+                 });
+                 trace_submissions.resize(TraceMaxSubmissions);
+@@ -254,9 +318,10 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
      last_flush = std::chrono::steady_clock::now();
      flush_pending = false;
      if (profile) {
@@ -7248,7 +7373,7 @@ index 19bbcd9..74f2ef0 100644
      }
  }
  
-@@ -501,7 +536,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
+@@ -501,7 +566,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
      Common::SetCurrentThreadName("VulkanWorker");
      const Common::DkbCpuTrace::Registration trace_thread{Common::DkbCpuTrace::Role::VulkanWorker};
      Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
@@ -7257,7 +7382,7 @@ index 19bbcd9..74f2ef0 100644
  
      const auto TryPopQueue{[this](auto& work) -> bool {
          if (work_queue.empty()) {
-@@ -643,6 +678,7 @@ void Scheduler::ReportWorkTimes() {
+@@ -643,6 +708,7 @@ void Scheduler::ReportWorkTimes() {
          double max_ms{};
          u32 count{};
          std::array<u32, 3> max_size{};
@@ -7265,7 +7390,7 @@ index 19bbcd9..74f2ef0 100644
      };
      std::map<std::pair<u64, u64>, Totals> by_shaders;
      double total_ms{};
-@@ -657,6 +693,7 @@ void Scheduler::ReportWorkTimes() {
+@@ -657,6 +723,7 @@ void Scheduler::ReportWorkTimes() {
          const WorkTrace& item = trace_work_items[i];
          Totals& totals = by_shaders[{item.hash, item.fragment_hash}];
          totals.total_ms += ms;
@@ -7273,7 +7398,7 @@ index 19bbcd9..74f2ef0 100644
          ++totals.count;
          if (ms > totals.max_ms) {
              totals.max_ms = ms;
-@@ -674,9 +711,16 @@ void Scheduler::ReportWorkTimes() {
+@@ -674,9 +741,16 @@ void Scheduler::ReportWorkTimes() {
      std::string slowest;
      for (const auto& [shaders, totals] : sorted) {
          const auto& [hash, fragment_hash] = shaders;
@@ -7293,24 +7418,174 @@ index 19bbcd9..74f2ef0 100644
          slowest += fmt::format("={:.3f}ms/{}x(max {:.3f}ms size {}x{}x{})", totals.total_ms,
                                 totals.count, totals.max_ms, totals.max_size[0],
                                 totals.max_size[1], totals.max_size[2]);
-@@ -750,9 +794,10 @@ void Scheduler::TraceGpuSubmission() {
+@@ -696,9 +770,9 @@ void Scheduler::TraceGpuSubmission() {
+             u64 timestamp;
+             u64 available;
+         };
+-        std::array<Result, TraceMaxSubmissions * 2> results{};
++        std::array<Result, TraceMaxSubmissions * 3> results{};
+         const auto result = device.GetLogical().GetQueryResults(
+-            *trace_query_pool, 0, trace_gpu_count * 2, trace_gpu_count * 2 * sizeof(Result),
++            *trace_query_pool, 0, trace_gpu_count * 3, trace_gpu_count * 3 * sizeof(Result),
+             results.data(), sizeof(Result),
+             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+         if (result == VK_NOT_READY) {
+@@ -710,33 +784,37 @@ void Scheduler::TraceGpuSubmission() {
+             trace_gpu_failed = true;
+             return;
+         }
++        const auto elapsed_ms = [&](u32 from, u32 to) {
++            return static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
++                       results[from].timestamp, results[to].timestamp, trace_timestamp_bits)) *
++                   trace_timestamp_period / 1e6;
++        };
+         double total_ms{};
++        double upload_ms{};
+         std::array<std::pair<double, u32>, 4> slowest{};
+-        for (u32 i = 0; i < trace_gpu_count * 2; i += 2) {
+-            if (results[i].available == 0 || results[i + 1].available == 0) {
++        for (u32 i = 0; i < trace_gpu_count * 3; i += 3) {
++            if (results[i].available == 0 || results[i + 1].available == 0 ||
++                results[i + 2].available == 0) {
+                 return;
+             }
+-            const auto ticks = Common::DkbFrameTrace::TimestampDelta(
+-                results[i].timestamp, results[i + 1].timestamp, trace_timestamp_bits);
+-            const double duration_ms = static_cast<double>(ticks) * trace_timestamp_period / 1e6;
++            const double duration_ms = elapsed_ms(i, i + 1);
+             total_ms += duration_ms;
++            upload_ms += elapsed_ms(i, i + 2);
+             if (duration_ms >= 10.0 && duration_ms > slowest.back().first) {
+-                slowest.back() = {duration_ms, i / 2};
++                slowest.back() = {duration_ms, i / 3};
+                 std::ranges::sort(slowest, std::greater<>{});
+             }
+         }
+-        const double span_ms = trace_gpu_skipped == 0
+-            ? static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
+-                  results[0].timestamp, results[trace_gpu_count * 2 - 1].timestamp,
+-                  trace_timestamp_bits)) * trace_timestamp_period / 1e6
+-            : -1.0;
++        const double span_ms =
++            trace_gpu_skipped == 0 ? elapsed_ms(0, trace_gpu_count * 3 - 2) : -1.0;
+         LOG_INFO(Render_Vulkan,
+                  "DKB gpu_frame renderer_frame={} last_submission_tick={} "
+                  "gpu_frame_span_ms={:.3f} gpu_submission_sum_ms={:.3f} "
+                  "measured_submissions={} dropped_submissions={} "
+-                 "valid_bits={} period_ns={}",
++                 "valid_bits={} period_ns={} gpu_upload_sum_ms={:.3f} draws_timed={}",
+                  trace_sample_frame, trace_gpu_tick, span_ms, total_ms, trace_gpu_count,
+-                 trace_gpu_skipped, trace_timestamp_bits, trace_timestamp_period);
++                 trace_gpu_skipped, trace_timestamp_bits, trace_timestamp_period, upload_ms,
++                 trace_time_draws ? 1 : 0);
+         for (const auto& [duration_ms, index] : slowest) {
+             if (duration_ms < 10.0) {
+                 continue;
+@@ -750,9 +828,11 @@ void Scheduler::TraceGpuSubmission() {
              }
              LOG_INFO(Render_Vulkan,
                       "DKB gpu_submission renderer_frame={} tick={} gpu_ms={:.3f} "
 -                     "draw_attempts={} dispatch_attempts={} shaders={} untracked_uses={}",
 +                     "draw_attempts={} mesh_draws={} dispatch_attempts={} shaders={} "
-+                     "untracked_uses={}",
++                     "untracked_uses={} upload_ms={:.3f}",
                       trace_sample_frame, work.tick, duration_ms, work.draw_attempts,
 -                     work.dispatch_attempts, shaders, work.untracked_uses);
-+                     work.mesh_draws, work.dispatch_attempts, shaders, work.untracked_uses);
++                     work.mesh_draws, work.dispatch_attempts, shaders, work.untracked_uses,
++                     elapsed_ms(index * 3, index * 3 + 2));
          }
          ReportWorkTimes();
          trace_gpu_tick = 0;
+@@ -764,13 +844,18 @@ void Scheduler::TraceGpuSubmission() {
+     if (!trace_gpu_sampling || trace_gpu_count == TraceMaxSubmissions) {
+         return;
+     }
+-    current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 2, 2);
+-    if (trace_gpu_count == 0 && trace_work_pool) {
+-        // Draws are timed inside render passes, where queries cannot be reset.
+-        current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
++    // Per submission: its start, its end and the end of its upload command buffer.
++    current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 3, 3);
++    if (trace_gpu_count == 0) {
++        trace_time_draws = trace_work_pool && trace_draws_every != 0 &&
++                           trace_samples++ % trace_draws_every == 0;
++        if (trace_time_draws) {
++            // Draws are timed inside render passes, where queries cannot be reset.
++            current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
++        }
+     }
+     current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
+-                                        trace_gpu_count * 2);
++                                        trace_gpu_count * 3);
+     trace_gpu_recording = true;
+ }
+ 
+@@ -792,10 +877,14 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
+             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+         };
+         upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WRITE_BARRIER);
++        if (trace_gpu_recording) {
++            upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_query_pool,
++                                         trace_gpu_count * 3 + 2);
++        }
+         upload_cmdbuf.End();
+         if (trace_gpu_recording) {
+             cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_query_pool,
+-                                 trace_gpu_count * 2 + 1);
++                                 trace_gpu_count * 3 + 1);
+             trace_gpu_tick = signal_value;
+             trace_work.tick = signal_value;
+             trace_submissions[trace_gpu_count] = trace_work;
+@@ -877,6 +966,7 @@ void Scheduler::EndRenderPass()
+         ++recording_epoch;
+         fragment_barrier.Reset();
+         render_pass_has_stores = false;
++        const bool wait_for_idle = std::exchange(wait_for_idle_pending, false);
+ 
+         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);
+ 
+@@ -892,7 +982,8 @@ void Scheduler::EndRenderPass()
+         Record([num_images = num_renderpass_images,
+                        images = renderpass_images,
+                        ranges = renderpass_image_ranges,
+-                       has_transform_feedback = device.IsExtTransformFeedbackSupported()](
++                       has_transform_feedback = device.IsExtTransformFeedbackSupported(),
++                       wait_for_idle](
+                           vk::CommandBuffer cmdbuf) {
+             std::array<VkImageMemoryBarrier, 9> barriers;
+             for (size_t i = 0; i < num_images; ++i) {
+@@ -944,6 +1035,16 @@ void Scheduler::EndRenderPass()
+                                        VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                        0, XFB_OUTPUT_BARRIER);
+             }
++            if (wait_for_idle) {
++                static constexpr VkMemoryBarrier WFI_BARRIER{
++                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
++                    .pNext = nullptr,
++                    .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
++                    .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
++                };
++                cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++                                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WFI_BARRIER);
++            }
+         });
+ 
+         state.renderpass = VkRenderPass{};
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.h b/src/video_core/renderer_vulkan/vk_scheduler.h
-index f977051..a680297 100644
+index f977051..7d819d0 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.h
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.h
-@@ -83,16 +83,20 @@ public:
+@@ -44,6 +44,10 @@ class StateTracker;
+ 
+ struct QueryCacheParams;
+ 
++/// Bytes requested from the staging pool, reported every 10 s with EDEN_NX2_GPU_PROFILE.
++enum class StagingTraffic { StreamUpload, HostUpload, Download };
++void CountStagingTraffic(StagingTraffic kind, u64 bytes);
++
+ /// The scheduler abstracts command buffer and fence management with an interface that's able to do
+ /// OpenGL-like operations on Vulkan command buffers.
+ class Scheduler {
+@@ -83,16 +87,20 @@ public:
      void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
      void TraceComputePipeline(u64 hash);
      /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
@@ -7320,11 +7595,12 @@ index f977051..a680297 100644
      template <typename Func>
      void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
 -                      std::array<u32, 3> size, Func&& work) {
+-        if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
 +                      std::array<u32, 3> size, Func&& work, bool mesh = false) {
 +        if (mesh && trace_gpu_recording) {
 +            ++trace_work.mesh_draws;
 +        }
-         if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
++        if (!trace_gpu_recording || !trace_time_draws || trace_work_count == TraceMaxWork) {
              work();
              return;
          }
@@ -7334,7 +7610,29 @@ index f977051..a680297 100644
          cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
          work();
          cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
-@@ -461,6 +465,7 @@ private:
+@@ -123,6 +131,13 @@ public:
+         fragment_barrier.Defer(state.renderpass != VK_NULL_HANDLE);
+     }
+ 
++    /// A wait for idle inside a render pass (LICHII_WFI_DEFER=1): later draws break the render
++    /// pass only as after a fragment barrier, and the full barrier follows the render pass end.
++    void DeferWaitForIdle() {
++        DeferFragmentBarrier();
++        wait_for_idle_pending = true;
++    }
++
+     bool HasFragmentBarrier() const {
+         return fragment_barrier.Pending();
+     }
+@@ -447,6 +462,7 @@ private:
+ 
+     std::unique_ptr<MasterSemaphore> master_semaphore;
+     FragmentBarrierState fragment_barrier;
++    bool wait_for_idle_pending{};
+     bool render_pass_has_stores{};
+     bool compute_writes_pending{};
+     bool graphics_pipeline_missing{};
+@@ -461,6 +477,7 @@ private:
          };
          u64 tick{};
          u32 draw_attempts{};
@@ -7342,7 +7640,7 @@ index f977051..a680297 100644
          u32 dispatch_attempts{};
          u32 num_shaders{};
          u32 untracked_uses{};
-@@ -472,8 +477,10 @@ private:
+@@ -472,8 +489,10 @@ private:
      struct WorkTrace {
          u64 hash{};
          u64 fragment_hash{};
@@ -7354,6 +7652,43 @@ index f977051..a680297 100644
      };
      vk::QueryPool trace_work_pool;
      std::vector<WorkTrace> trace_work_items;
+@@ -487,6 +506,11 @@ private:
+     u32 trace_timestamp_bits{};
+     float trace_timestamp_period{};
+     bool trace_gpu_recording{};
++    /// Draws are timed in every trace_draws_every-th sampled frame (LICHII_TRACE_DRAWS_EVERY,
++    /// default 4, 0 = never): their timestamps lengthen the frame they measure.
++    bool trace_time_draws{};
++    u32 trace_draws_every{4};
++    u32 trace_samples{};
+     bool trace_gpu_sampling{};
+     bool trace_gpu_pending{};
+     bool trace_gpu_failed{};
+diff --git a/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp b/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
+index 98787b9..c34cfc7 100644
+--- a/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
++++ b/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
+@@ -115,10 +115,17 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
+ StagingBufferPool::~StagingBufferPool() = default;
+ 
+ StagingBufferRef StagingBufferPool::Request(size_t size, MemoryUsage usage, bool deferred) {
+-    if (!deferred && usage == MemoryUsage::Upload && size <= region_size) {
+-        return GetStreamBuffer(size);
++    StagingBufferRef ref = !deferred && usage == MemoryUsage::Upload && size <= region_size
++                               ? GetStreamBuffer(size)
++                               : GetStagingBuffer(size, usage, deferred);
++    if (usage == MemoryUsage::Upload) {
++        CountStagingTraffic(ref.buffer == *stream_buffer ? StagingTraffic::StreamUpload
++                                                         : StagingTraffic::HostUpload,
++                            size);
++    } else if (usage == MemoryUsage::Download) {
++        CountStagingTraffic(StagingTraffic::Download, size);
+     }
+-    return GetStagingBuffer(size, usage, deferred);
++    return ref;
+ }
+ 
+ void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
 diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
 index 65f8478..c148a2a 100644
 --- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
@@ -7857,6 +8192,25 @@ index 93a89d1..e73bc8b 100644
      FN_MAX_LIMIT_ELEM(DescriptorSetSamplers) \
      FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffers) \
      FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffersDynamic) \
+diff --git a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
+index a0a39ab..d38ddcd 100644
+--- a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
++++ b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
+@@ -427,6 +427,14 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
+         vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
+     }
+     vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
++    if (usage == MemoryUsage::Stream) {
++        // Device-local only with Resizable BAR or inside the 256 MiB BAR window; otherwise the
++        // GPU reads uniform data and copy sources from it across the PCIe link.
++        LOG_INFO(Render_Vulkan, "Stream buffer: {} MiB in memory type {} ({})", ci.size >> 20,
++                 alloc_info.memoryType,
++                 (property_flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 ? "device-local"
++                                                                            : "host memory");
++    }
+ 
+     // Log GPU memory allocation for buffers
+     if (GPU::Logging::IsActive() &&
 diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
 index 2052b63..b8d7eb2 100644
 --- a/src/yuzu/CMakeLists.txt

@@ -40,6 +40,8 @@ def main(path):
     setup, settings, placements = [], [], set()
     fps_windows, role_ms = [], collections.defaultdict(list)
     gpu_span, gpu_sum, gpu_work = [], [], collections.defaultdict(lambda: [0.0, 0, 0.0])
+    # Frames sampled without per-draw timestamps (round 8 on): their GPU time is not inflated.
+    gpu_plain_span, gpu_plain_sum, gpu_upload, traffic = [], [], [], []
     gpu_work_samples, slow_submits = 0, collections.Counter()
     zones, sched = collections.defaultdict(list), []
     pipelines, deferred, presents = [], [], []
@@ -63,9 +65,13 @@ def main(path):
                 role_ms[role].append(float(value))
         m = re.match(r"DKB gpu_frame .*gpu_frame_span_ms=(-?[\d.]+) gpu_submission_sum_ms=([\d.]+)", msg)
         if m:
+            u = re.search(r"gpu_upload_sum_ms=([\d.]+) draws_timed=(\d)", msg)
+            plain = u is not None and u.group(2) == "0"
             if float(m.group(1)) >= 0:
-                gpu_span.append(float(m.group(1)))
-            gpu_sum.append(float(m.group(2)))
+                (gpu_plain_span if plain else gpu_span).append(float(m.group(1)))
+            (gpu_plain_sum if plain else gpu_sum).append(float(m.group(2)))
+            if u:
+                gpu_upload.append(float(u.group(1)))
         m = re.match(r"DKB gpu_work .*slowest:(.*)", msg)
         if m:
             gpu_work_samples += 1
@@ -98,6 +104,10 @@ def main(path):
                      r"waiting ([\d.]+) ms", msg)
         if m:
             sched.append(tuple(float(x) for x in m.groups()))
+        m = re.match(r"Staging traffic per second: ([\d.]+) MiB uploaded through the stream buffer, "
+                     r"([\d.]+) MiB through host memory, ([\d.]+) MiB downloaded", msg)
+        if m:
+            traffic.append(tuple(float(x) for x in m.groups()))
         m = re.match(r"(\w+) pipeline built on the GPU thread in ([\d.]+) ms", msg)
         if m:
             pipelines.append((t, m.group(1), float(m.group(2))))
@@ -179,8 +189,16 @@ def main(path):
         print(f"  {role:24} {describe(values, ' ms')}")
 
     print("\n== GPU time per frame (DKB, one sampled frame per second)")
-    print(f"  frame span: {describe(gpu_span, ' ms')}")
-    print(f"  submissions sum: {describe(gpu_sum, ' ms')}")
+    if gpu_plain_span or gpu_plain_sum:
+        print(f"  frame span: {describe(gpu_plain_span, ' ms')}")
+        print(f"  submissions sum: {describe(gpu_plain_sum, ' ms')}")
+        print(f"  frames with timed draws (slower by the timestamps): span {describe(gpu_span, ' ms')}")
+        print(f"                                                      sum  {describe(gpu_sum, ' ms')}")
+    else:
+        print(f"  frame span: {describe(gpu_span, ' ms')}")
+        print(f"  submissions sum: {describe(gpu_sum, ' ms')}")
+    if gpu_upload:
+        print(f"  of which upload command buffers: {describe(gpu_upload, ' ms')}")
     if gpu_work_samples:
         print(f"  slowest shaders, average GPU ms per sampled frame over {gpu_work_samples} samples:")
         for key, (total, count, peak) in sorted(gpu_work.items(), key=lambda kv: -kv[1][0])[:15]:
@@ -205,6 +223,11 @@ def main(path):
         print(f"  scheduler: {statistics.median(cols[0]):.0f} submits/s, "
               f"{statistics.median(cols[1]):.0f} render passes/s, {statistics.median(cols[2]):.0f} "
               f"finishes/s waiting {statistics.median(cols[3]):.1f} ms/s (max {max(cols[3]):.0f})")
+    if traffic:
+        cols = list(zip(*traffic))
+        print(f"  staging traffic, MiB/s (median over 10 s reports): {statistics.median(cols[0]):.1f} "
+              f"uploaded through the stream buffer, {statistics.median(cols[1]):.1f} through host "
+              f"memory, {statistics.median(cols[2]):.1f} downloaded (max {max(cols[0]) + max(cols[1]):.0f} up)")
 
     print("\n== Pipelines built on the GPU thread (the frame waits for these)")
     if pipelines:
