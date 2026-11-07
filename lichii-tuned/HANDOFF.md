@@ -292,6 +292,8 @@ Own changes:
   ms/s.
 - Run #17 (round 11) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r17-pgo`,
   `lichii-tuned-r17-pgo-lto`).
+- Run #18 (round 12) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r18-pgo`,
+  `lichii-tuned-r18-pgo-lto`).
 - Sharkiix (2026-11-07): Shakoquo/Lichii-sharkiix-version, AMD- and Ocarina-focused, tested on an RX
   9060 XT. No history of its own: v1/v2 are Lichii `99ac3d59` plus one commit (faster tensor
   emulation, semaphore acquire resumes, texture cache GC min age, the sampler and blend fixes), 3.0
