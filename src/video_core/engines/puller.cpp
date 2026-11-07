@@ -111,17 +111,6 @@ bool PollWithoutDrain() {
     return enabled;
 }
 
-/// LICHII_TUNED4_ACQUIRES=1: Switch 2 acquires as tuned4 decided them (#345's fast paths, then
-/// Frizti's drain-free polls with LICHII_ACQUIRE_POLL, then drains) instead of #805's checks
-/// without draining the split.
-bool Tuned4Acquires() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("LICHII_TUNED4_ACQUIRES");
-        return value != nullptr && value[0] == '1';
-    }();
-    return enabled;
-}
-
 // EDEN_NX2_DRAIN_CHECK: whether an acquire (or a suspended one's poll) met its value before the
 // drain as well as after it, and whether the GPU had released a semaphore at the address.
 void NoteAcquireCheck(DmaPusher& dma_pusher, GPUVAddr address, bool poll, bool met_before,
@@ -242,7 +231,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
         return true;
     }
     auto& split = VideoCommon::GpuSplit::Get();
-    if (!Tuned4Acquires()) {
+    if (!VideoCommon::g_tuned4_acquires) {
         switch (CheckWithoutDrain(dma_pusher, *pending_acquire)) {
         case AcquireCheck::MetByQueued:
             if (!PassStands(dma_pusher, *pending_acquire, true, this)) {
@@ -462,7 +451,7 @@ bool Puller::StableSemaphore(DmaPusher& dma_pusher, GPUVAddr address) {
 
 void Puller::NoteQueuedRelease(GPUVAddr address, u32 payload) {
     auto& split = VideoCommon::GpuSplit::Get();
-    if (!split.Active()) {
+    if (!VideoCommon::g_tuned4_acquires || !split.Active()) {
         return;
     }
     if (queued_releases.size() >= 1024) {
@@ -545,7 +534,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
         auto& split = VideoCommon::GpuSplit::Get();
-        if (!Tuned4Acquires()) {
+        if (!VideoCommon::g_tuned4_acquires) {
             if (const AcquireCheck without_drain = CheckWithoutDrain(dma_pusher, acquire);
                 (without_drain == AcquireCheck::Met ||
                  without_drain == AcquireCheck::MetByQueued) &&
@@ -750,7 +739,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         return;
     }
     auto& split = VideoCommon::GpuSplit::Get();
-    if (Tuned4Acquires() && operation <= 3 && operation != 1) {
+    if (VideoCommon::g_tuned4_acquires && operation <= 3 && operation != 1) {
         // This channel's own queued release meets it before anything sent after the acquire.
         if (const auto released = OwnQueuedRelease(dma_pusher, address)) {
             if (operation == 0 ? *released == payload
@@ -761,7 +750,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
             }
         }
     }
-    if (Tuned4Acquires() && (operation == 2 || operation == 3) && split.Active() &&
+    if (VideoCommon::g_tuned4_acquires && (operation == 2 || operation == 3) && split.Active() &&
         StableSemaphore(dma_pusher, address)) {
         // A greater-or-equal value already in memory with no queued write to it: skip the drain.
         const u32 current = dma_pusher.memory_manager.Read<u32>(address);

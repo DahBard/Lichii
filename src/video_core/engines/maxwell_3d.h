@@ -3426,10 +3426,14 @@ private:
     void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
     void FrontTrackInstanceLoop(FrontState& state, u32 method, u32 value);
     bool FrontSkipsLoopWrite(FrontState& state, u32 method, u32 value, bool shadow_kept);
+    void FrontNoteWrites(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
+                         u32 amount);
     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
                       u32 count);
-    void FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 amount,
-                         const u32* values);
+    std::span<const u32> FrontDmaReadTuned4(VideoCommon::GpuSplit& split, FrontState& state,
+                                            u32 macro, u32 method, GPUVAddr source, u32 words);
+    void FrontTrackWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method,
+                          u32 amount, const u32* values);
     /// Calls func(index, device address) for `count` words from `begin`, while it returns true.
     template <typename Func>
     bool DeviceWords(GPUVAddr begin, u32 count, Func&& func);
