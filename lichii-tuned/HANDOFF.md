@@ -29,7 +29,7 @@ he tests and sends `eden_log.txt`, analyze, next build.
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (49 commits over 588bfa6; pushing it
+- Source of the patch: branch `tuned4` of DahBard/Lichii (51 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
@@ -46,8 +46,10 @@ he tests and sends `eden_log.txt`, analyze, next build.
 
 ## What the tuned build contains (tuned4)
 
-Upstream nx2 up to `09b78bd2df` (still zortos293/Lichii's nx2 head on 2026-11-07), plus open
-upstream pull requests at their heads as of 2026-11-07 00:00 UTC:
+Upstream nx2 up to `09b78bd2df`, which is build 93, the newest published build (builds 89-92
+were never published), so its AMD fixes (#273, #295) are in. nx2 has since moved to `809fb3a`
+(#215, #149, #397, #398, #185, #241, #197, #203), not merged yet: #215 and #149 touch the split
+front like #345. Plus open upstream pull requests at their heads as of 2026-11-07 00:00 UTC:
 
 - #319 "Ocarina of Time anti-aliasing: No sharpening" bypasses the game's tensor AA network
   (AMD runs its HMMA math in software); #300 builds those HMMA pipelines off the wait path on AMD.
@@ -90,6 +92,12 @@ Own changes:
   (`EDEN_NX2_GPU_PROFILE=1`, `EDEN_DKB_FRAME_TRACE=1`) and A/B launchers ab-1 to ab-11.
 - MSVC build fix (round 4): four declarations from #319, #345 and #376 that hid a class member
   or a local are renamed.
+- `EDEN_AMD_FRAGMENT_SHUFFLE=1` (round 5) keeps fragment shuffles native on AMD's driver. Since
+  #273 (build 93) every dynamic-lane fragment shuffle there runs as a loop of broadcasts over the
+  subgroup, because the driver crashed building one Ocarina shader (Eglantine #618, RX 6700 XT).
+  The log names each fragment shader that shuffles under the loop (`AMD: s5:<hash> shuffles`).
+  `trace-preflush.bat`, `trace-fp16.bat` and `trace-native-shuffle.bat` run ab-7, ab-9 and this
+  switch with the perf-trace variables.
 
 ## Test results so far
 
@@ -133,17 +141,25 @@ Own changes:
     (`DownloadMemory`), 64-200 ms/s.
   - Split threads: front split drain ~270 and writer wait ~230 ms/s, back split wait ~460 ms/s.
     Never blocked on the present fence. The AA bypass engaged on the first gameplay frame.
+- r10-pgo-lto again, second launch, same area and mode: boot built 1,663 cached pipelines; 11
+  new ones held draws 0.8 s (19.7 s before), one 2.2 s freeze. Gameplay median 13.1 fps (p10
+  9.2, p90 30.8), GPU busy per frame median 53.3 ms (62% of frames over 40 ms): more time in
+  the heavy views. Frame rate follows GPU time window by window. The "1X (720p/1080p)" label is
+  the resolution scale's Switch 1 wording; the game composites 2560x1440 docked.
 
 ## Next steps
 
-1. Same Kokiri spots with r10, each run with the perf-trace variables (`ab-7` and `ab-9` don't
-   set them): `perf-trace.bat` again (the 341 new pipelines are now built at boot), then
-   `EDEN_NX2_PREFLUSH=1` (#259's author measured Kokiri ~26 -> ~40 fps, with some flicker) and
-   `EDEN_AMD_FP16=1` (for the heavy fragment passes; look for wrong colors). Handheld (1080p)
+1. Run #11 (round 5): same Kokiri spots, one run each of `perf-trace.bat` (baseline),
+   `trace-native-shuffle.bat`, `trace-fp16.bat` and `trace-preflush.bat`, copying the log after
+   each. Check whether the `AMD: s5:<hash> shuffles` lines name the heavy passes' fragment
+   shaders (s5:046ea18d9f62eba6, s5:b7bd625f79e3ced1, s5:292b3848bd8c1dbf, s5:f16638b51d8e93ac).
+   If native shuffles are faster and don't crash, make them the default on this driver; if those
+   shaders don't shuffle, dump them (`EDEN_NX2_SHADER_DUMP`) to see what makes them slow on AMD.
+   Preflush: #259's author measured Kokiri ~26 -> ~40 fps, with some flicker. Handheld (1080p)
    gives a comparison with round 2b. `EDEN_NX2_READ_TRAPS=0` drops the traps entirely (stale
    reads possible). Port candidates: upstream #264 (read traps armed once, +1-2 fps on an RTX
    4090), #147 (batched readbacks; little left at our ~40 waits/s), #267's grass-on-sword-swing
-   (32 storage buffers) and missing-sunlight fixes.
+   (32 storage buffers) and missing-sunlight fixes, and nx2's commits since build 93.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
