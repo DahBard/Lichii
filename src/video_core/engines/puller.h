@@ -82,6 +82,8 @@ public:
         u32 operation;
         std::chrono::steady_clock::time_point since;
         bool reported;
+        u32 unmet_polls{}; ///< polls answered from guest memory, unmet
+        std::chrono::steady_clock::time_point last_drain{}; ///< of the back, for this acquire
 
         [[nodiscard]] bool Matches(u32 current) const;
     };

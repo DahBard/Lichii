@@ -99,6 +99,16 @@ void DrainBack() {
     VideoCommon::GpuSplit::Get().Drain(VideoCommon::DrainSite::Acquire);
 }
 
+/// LICHII_ACQUIRE_POLL=0: a waiting acquire drains the back on every poll and before it waits,
+/// as before the port of Frizti v3's drain-free acquires.
+bool PollWithoutDrain() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_ACQUIRE_POLL");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 // The fence manager records into the scheduler and downloads the CPU's writes over GPU data:
 // the back's state, which a drained back still uses from its idle hook (it submits).
 void ReleaseFences(DmaPusher& dma_pusher) {
@@ -126,9 +136,34 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (!pending_acquire) {
         return true;
     }
+    // Ocarina of Time polls each waiting acquire about 12 times before its CPU releases it, and
+    // each poll drained the back. While no queued write or GPU data can change the word, answer
+    // from guest memory; a release the back ran latches the waiter. An unmet word is trusted for
+    // 16 polls or 1 ms since the last drain: a release the back holds as deferred work lands only
+    // when the back runs. Ported from Frizti v3 (PantACRO4life, 547ce11b4 and f362e5a5f).
+    auto& split = VideoCommon::GpuSplit::Get();
+    if (PollWithoutDrain() && split.Active()) {
+        if (Nx2SemaphoreWaiters::Get().Latched(this)) {
+            split.NoteSync();
+            return true;
+        }
+        if (StableSemaphore(dma_pusher, pending_acquire->address)) {
+            if (pending_acquire->Matches(
+                    dma_pusher.memory_manager.Read<u32>(pending_acquire->address))) {
+                split.NoteSync();
+                return true;
+            }
+            if (++pending_acquire->unmet_polls % 16 != 0 &&
+                std::chrono::steady_clock::now() - pending_acquire->last_drain <
+                    std::chrono::milliseconds{1}) {
+                return false;
+            }
+        }
+    }
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadSemaphoreWord asks are its state).
     DrainBack();
+    pending_acquire->last_drain = std::chrono::steady_clock::now();
     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
         if (static std::atomic<u32> rescued{};
@@ -361,6 +396,28 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             split.NoteSync();
             return;
         }
+        if (PollWithoutDrain() && split.Active() &&
+            StableSemaphore(dma_pusher, acquire.address)) {
+            // The word is current: the CPU or another channel meets it later, and the polls in
+            // CanResumeAcquire see that without draining the back (Frizti v3). The fences run on
+            // the back without waiting for it; a release among them latches the waiter.
+            if (acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
+                if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Fast);
+                split.NoteSync();
+                return;
+            }
+            if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
+                Nx2SemaphoreWaiters::Get().Add(this, *device, acquire.value, acquire.operation);
+            }
+            split.Defer([rasterizer = dma_pusher.rasterizer] { rasterizer->ReleaseFences(); });
+            pending_acquire = acquire;
+            pending_acquire->since = std::chrono::steady_clock::now();
+            pending_acquire->last_drain = pending_acquire->since;
+            if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Suspended);
+            dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
+            VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireWaits, 1);
+            return;
+        }
         if (split.Active()) {
             // Only queued work that writes the semaphore (or untracked writes) can change it.
             const u64 target = split.ReadReadyPosition(&dma_pusher.memory_manager, acquire.address,
@@ -413,6 +470,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             pending_acquire = acquire;
             pending_acquire->since = std::chrono::steady_clock::now();
+            pending_acquire->last_drain = pending_acquire->since;
             if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Suspended);
             dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
             VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireWaits, 1);
