@@ -753,9 +753,9 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count, bool* pendin
     // them to host memory right after the dispatch or copy that writes them and submits. The
     // front then waits only for the back to run that work and for the GPU to finish the copy, not
     // for everything queued and a cache flush (FlushGpuWrittenCommands: ~400 GPU round trips a
-    // second in a Mario Kart World race, during which the back had nothing to do). Pages
-    // FlushGpuWrittenCommands flushed whole and no GPU work wrote since are read from guest
-    // memory.
+    // second in a Mario Kart World race, during which the back had nothing to do). Lists on words
+    // no GPU work wrote since FlushGpuWrittenCommands flushed the page, or the host wrote them,
+    // are read from guest memory and wait for no copy (BufferCache::Nx2ReadListCopy).
     if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || count == 0 ||
         rasterizer == nullptr) {
         return false;
@@ -772,13 +772,16 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count, bool* pendin
     if (!written) {
         return false;
     }
+    // As for lists on pages no GPU work wrote (Step): the dispatch or copy that rewrites the
+    // list is ordered before the fetch only by a host-level wait between them, so the front waits
+    // for the work before the last one, not for compute and copy work sent after it.
     auto& split = VideoCommon::GpuSplit::Get();
     // Resuming after the copy's tick: the back ran the list's writer before the suspension
     // (this wait ran then), and waiting again would wait for the other channels' work queued
     // meanwhile too.
     const bool resumed = std::exchange(resumed_list_read, false);
     if (split.Active() && !resumed) {
-        split.WaitForWriters();
+        split.WaitForSyncedWriters(VideoCommon::DrainSite::ListCopies);
     }
     bool past_sync = !split.Active();
     using GpuWrittenList = VideoCore::RasterizerInterface::GpuWrittenList;
