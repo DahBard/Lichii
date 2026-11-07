@@ -147,21 +147,34 @@ Own changes:
   the heavy views. Frame rate follows GPU time window by window. The "1X (720p/1080p)" label is
   the resolution scale's Switch 1 wording; the game composites 2560x1440 docked.
 - Run #11 (round 5): `pgo` and `pgo-lto` built (artifacts `lichii-tuned-r11-pgo`,
-  `lichii-tuned-r11-pgo-lto`). Untested.
+  `lichii-tuned-r11-pgo-lto`). r11-pgo-lto, docked 1440p, same area, 1-1.5 min each:
+  - `trace-native-shuffle.bat`: music but a black screen at 0 fps (no log). Native AMD fragment
+    shuffles don't work on this driver.
+  - The shuffle lines name ~185 fragment shaders, but not the heavy passes' (s5:046ea18d9f62eba6,
+    s5:b7bd625f79e3ced1, s5:292b3848bd8c1dbf, s5:f16638b51d8e93ac): the loop isn't their cost.
+  - `trace-fp16.bat`: one wrong color on the start screen; GPU per frame in heavy views 37-74 ms
+    (baseline 40-77): no clear gain.
+  - `trace-preflush.bat`: no flicker seen. CPU reads of GPU-written memory 73-108/s -> 10/s,
+    buffer_cache.h:407 waits 27-52/s -> 4/s (1.7 ms/s). Fps unchanged (median 13.2, GPU 55 ms per
+    frame): heavy views are GPU-bound, and light views stay at 21-34 fps with the front waiting
+    on the game ("pending sleep" 220-500 ms/s; guest cores 4-5 used 35-46 ms per frame in r10).
+- The owner sees Link and NPCs move too fast in every run. The guest counter is right (31.25 MHz
+  reported and delivered), speed limit 100%, standard CPU settings. Suspect: the built-in Dynamic
+  FPS mod, which replaces the game's time step with the smoothed measured frame time, capped at
+  100 ms here (#299) and 50 ms upstream.
 
 ## Next steps
 
-1. Run #11 (round 5): same Kokiri spots, one run each of `perf-trace.bat` (baseline),
-   `trace-native-shuffle.bat`, `trace-fp16.bat` and `trace-preflush.bat`, copying the log after
-   each. Check whether the `AMD: s5:<hash> shuffles` lines name the heavy passes' fragment
-   shaders (s5:046ea18d9f62eba6, s5:b7bd625f79e3ced1, s5:292b3848bd8c1dbf, s5:f16638b51d8e93ac).
-   If native shuffles are faster and don't crash, make them the default on this driver; if those
-   shaders don't shuffle, dump them (`EDEN_NX2_SHADER_DUMP`) to see what makes them slow on AMD.
-   Preflush: #259's author measured Kokiri ~26 -> ~40 fps, with some flicker. Handheld (1080p)
-   gives a comparison with round 2b. `EDEN_NX2_READ_TRAPS=0` drops the traps entirely (stale
-   reads possible). Port candidates: upstream #264 (read traps armed once, +1-2 fps on an RTX
-   4090), #147 (batched readbacks; little left at our ~40 waits/s), #267's grass-on-sword-swing
-   (32 storage buffers) and missing-sunlight fixes, and nx2's commits since build 93.
+1. Speed: a run with "Dynamic FPS by Dark (built-in)" disabled (game Properties, Add-ons). If
+   motion looks right without it, give the cap a switch (#299's CNTFRQ/10 against upstream's /20)
+   or ship the mod off. Then a handheld (1080p) perf-trace run in the same spots, since the heavy
+   views are GPU-bound at 1440p, and `LICHII_CPU_POLICY=strict` with the perf-trace variables
+   for the light views. Next round: drop `EDEN_AMD_FRAGMENT_SHUFFLE` and its launcher (black
+   screen); fp16 stays off; preflush is safe here but showed no fps gain yet. To see what makes
+   the heavy passes slow on AMD, dump them (`EDEN_NX2_SHADER_DUMP`). `EDEN_NX2_READ_TRAPS=0`
+   drops the traps entirely (stale reads possible). Port candidates: upstream #264 (read traps
+   armed once, +1-2 fps on an RTX 4090), #267's grass-on-sword-swing (32 storage buffers) and
+   missing-sunlight fixes, and nx2's commits since build 93.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
