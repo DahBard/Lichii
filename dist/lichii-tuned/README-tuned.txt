@@ -58,10 +58,17 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               GPU does not idle between frames; logs like perf-trace.bat
  ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
+ trace-preflush.bat           ab-7 with the logging of perf-trace.bat
+ trace-fp16.bat               ab-9 with the logging of perf-trace.bat
+ trace-native-shuffle.bat     fragment shader shuffles stay native on AMD instead of running
+                              as loops (EDEN_AMD_FRAGMENT_SHUFFLE=1), logged like perf-trace.bat.
+                              An older AMD driver crashed building one Ocarina shader this way:
+                              if the emulator closes while building shaders, don't use it
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1)
 
+Each start replaces the log, so copy it after every run you want to compare.
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
 
