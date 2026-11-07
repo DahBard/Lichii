@@ -29,7 +29,7 @@ he tests and sends `eden_log.txt`, analyze, next build.
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (51 commits over 588bfa6; pushing it
+- Source of the patch: branch `tuned4` of DahBard/Lichii (54 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
@@ -92,12 +92,15 @@ Own changes:
   (`EDEN_NX2_GPU_PROFILE=1`, `EDEN_DKB_FRAME_TRACE=1`) and A/B launchers ab-1 to ab-11.
 - MSVC build fix (round 4): four declarations from #319, #345 and #376 that hid a class member
   or a local are renamed.
-- `EDEN_AMD_FRAGMENT_SHUFFLE=1` (round 5) keeps fragment shuffles native on AMD's driver. Since
-  #273 (build 93) every dynamic-lane fragment shuffle there runs as a loop of broadcasts over the
-  subgroup, because the driver crashed building one Ocarina shader (Eglantine #618, RX 6700 XT).
-  The log names each fragment shader that shuffles under the loop (`AMD: s5:<hash> shuffles`).
-  `trace-preflush.bat`, `trace-fp16.bat` and `trace-native-shuffle.bat` run ab-7, ab-9 and this
-  switch with the perf-trace variables.
+- Round 5's `EDEN_AMD_FRAGMENT_SHUFFLE=1` (native fragment shuffles on AMD; since #273 they run
+  as broadcast loops because a driver crashed on one Ocarina shader, Eglantine #618) was dropped
+  in round 6: black screen on this card, and the heavy passes don't shuffle.
+- `LICHII_DYNFPS_SMOOTHING=<1|2|4|8>` and `LICHII_DYNFPS_MIN_FPS=<5-60>` (round 6) rewrite two
+  instructions of the Dynamic FPS routine after it is applied: the average of the measured frame
+  time (`add x12, x12, x14, asr #3` at +0x44, 8 frames; 1 = each frame's own time) and the cap
+  (`mov x14, #10` at +0x24; Dark's mod: 20). Without the mod the game steps 1/60 s per frame.
+- `trace-preflush.bat`, `trace-fp16.bat`, `trace-dynfps-raw.bat` (smoothing 1) and
+  `trace-dynfps-official.bat` (min fps 20) run those switches with the perf-trace variables.
 
 ## Test results so far
 
@@ -162,19 +165,23 @@ Own changes:
   reported and delivered), speed limit 100%, standard CPU settings. Suspect: the built-in Dynamic
   FPS mod, which replaces the game's time step with the smoothed measured frame time, capped at
   100 ms here (#299) and 50 ms upstream.
+- r11 with the mod off, `LICHII_CPU_POLICY=strict` and the perf-trace variables: super slow
+  motion, so the mod is needed. Guest core 4 still used 45 ms per frame on P-cores only (fps
+  ~15, GPU 34-72 ms per frame): strict placement doesn't help. The mod's 8-frame average keeps
+  a long step after slow frames, which runs the game up to 2-3x real time for ~0.5 s each time
+  the frame rate recovers (more with #299's 100 ms cap); round 6's switches test that.
 
 ## Next steps
 
-1. Speed: a run with "Dynamic FPS by Dark (built-in)" disabled (game Properties, Add-ons). If
-   motion looks right without it, give the cap a switch (#299's CNTFRQ/10 against upstream's /20)
-   or ship the mod off. Then a handheld (1080p) perf-trace run in the same spots, since the heavy
-   views are GPU-bound at 1440p, and `LICHII_CPU_POLICY=strict` with the perf-trace variables
-   for the light views. Next round: drop `EDEN_AMD_FRAGMENT_SHUFFLE` and its launcher (black
-   screen); fp16 stays off; preflush is safe here but showed no fps gain yet. To see what makes
-   the heavy passes slow on AMD, dump them (`EDEN_NX2_SHADER_DUMP`). `EDEN_NX2_READ_TRAPS=0`
-   drops the traps entirely (stale reads possible). Port candidates: upstream #264 (read traps
-   armed once, +1-2 fps on an RTX 4090), #267's grass-on-sword-swing (32 storage buffers) and
-   missing-sunlight fixes, and nx2's commits since build 93.
+1. Run #12 (round 6), mod on: `perf-trace.bat` against `trace-dynfps-raw.bat` and
+   `trace-dynfps-official.bat` in the same spots; the owner judges movement speed. If raw (or 2
+   frames) removes the speed-ups without visible judder, make it the default. Then a handheld
+   (1080p) perf-trace run: the heavy views are GPU-bound at 1440p. fp16 stays off; preflush is
+   safe here but showed no fps gain yet. To see what makes the heavy passes slow on AMD, dump
+   them (`EDEN_NX2_SHADER_DUMP`). `EDEN_NX2_READ_TRAPS=0` drops the traps entirely (stale reads
+   possible). Port candidates: upstream #264 (read traps armed once, +1-2 fps on an RTX 4090),
+   #267's grass-on-sword-swing (32 storage buffers) and missing-sunlight fixes, and nx2's
+   commits since build 93.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
