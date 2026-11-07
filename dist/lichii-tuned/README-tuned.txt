@@ -73,6 +73,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-wfi-defer.bat          the game's waits for idle no longer end the GPU render pass
                               (LICHII_WFI_DEFER=1), logged like perf-trace.bat; watch for
                               missing or flickering effects
+ trace-fake-occlusion.bat     the game's occlusion checks always answer "visible" and the GPU
+                              runs no occlusion queries (LICHII_FAKE_OCCLUSION=4096), logged
+                              like perf-trace.bat; watch for glows or flares through walls
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
