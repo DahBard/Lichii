@@ -299,6 +299,15 @@ public:
         u64 device_address) const;
     /// Whether compute or copy work sent so far is still queued (EDEN_NX2_DRAIN_CHECK).
     [[nodiscard]] bool WritersPending() const;
+    /// Front thread: the ring words sent that the back had not run when it last stored its
+    /// position (every 4096 words of a batch and at its end) (EDEN_NX2_LIST_STATS).
+    [[nodiscard]] u64 Backlog() const {
+        return write_position - consumed.load(std::memory_order_acquire);
+    }
+    /// Front thread: the ring words sent that the back does not see yet (EDEN_NX2_LIST_STATS).
+    [[nodiscard]] u64 Unpublished() const {
+        return write_position - published_local;
+    }
 
     /// Work that may write guest memory at addresses the front does not track was just sent.
     /// `source` names the sender for EDEN_NX2_MME_DMA_STATS.
