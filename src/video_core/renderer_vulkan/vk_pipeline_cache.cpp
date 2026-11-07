@@ -1091,6 +1091,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     size_t other_driver = 0;      ///< records from another driver or driver version
     size_t to_vertex_input = 0;   ///< records turned into the dynamic vertex input form
     size_t color_write_flips = 0; ///< records whose color write enable form was changed
+    size_t logic_op_flips = 0;    ///< records whose logic op form was changed
+    size_t logic_op_in_use = 0;   ///< recorded with a dynamic logic op, the logic op on
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
@@ -1148,6 +1150,29 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             fixed.color_write_enable_dynamic.Assign(dynamic_features.has_color_write_enable ? 1
                                                                                              : 0);
             ++color_write_flips;
+        }
+        if ((fixed.extended_dynamic_state_2_logic_op != 0) !=
+            dynamic_features.has_extended_dynamic_state_2_logic_op) {
+            if (dynamic_features.has_extended_dynamic_state_2_logic_op) {
+                // The op leaves the key (Refresh2 isn't run).
+                fixed.dynamic_state.logic_op.Assign(0);
+                fixed.extended_dynamic_state_2_logic_op.Assign(1);
+                ++logic_op_flips;
+            } else if (fixed.dynamic_state.logic_op_enable == 0 &&
+                       !dynamic_features.has_dynamic_state3_logic_op_enable) {
+                // The key holds no op, which matters only while the logic op is on (all of a
+                // shared Ocarina cache recorded on another GPU: 21,062 records).
+                fixed.extended_dynamic_state_2_logic_op.Assign(0);
+                ++logic_op_flips;
+            } else {
+                ++logic_op_in_use;
+            }
+        }
+        // One key for every op while the logic op is off, as Refresh makes them.
+        if (fixed.extended_dynamic_state_2_logic_op == 0 &&
+            !dynamic_features.has_dynamic_state3_logic_op_enable &&
+            fixed.dynamic_state.logic_op_enable == 0) {
+            fixed.dynamic_state.logic_op.Assign(0);
         }
 
         if (!device.IsExtMeshShaderSupported() &&
@@ -1294,12 +1319,15 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         LOG_WARNING(Render_Vulkan, "Pipeline cache: {} of {} cached graphics pipelines left out{}",
                     total_dropped, graphics_records, detail);
     }
-    if (other_driver != 0 || to_vertex_input != 0 || color_write_flips != 0) {
+    if (other_driver != 0 || to_vertex_input != 0 || color_write_flips != 0 ||
+        logic_op_flips != 0 || logic_op_in_use != 0) {
         LOG_INFO(Render_Vulkan,
                  "Pipeline cache: {} of {} cached graphics pipelines from another driver or driver "
                  "version, {} turned into dynamic vertex input, {} into this device's color write "
-                 "enable form",
-                 other_driver, graphics_records, to_vertex_input, color_write_flips);
+                 "enable form, {} into its logic op form ({} left out: the logic op is on and its "
+                 "op not recorded)",
+                 other_driver, graphics_records, to_vertex_input, color_write_flips,
+                 logic_op_flips, logic_op_in_use);
     }
     if (skipped_pipelines != 0) {
         LOG_INFO(
