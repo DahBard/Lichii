@@ -71,10 +71,10 @@ index 0502b3f3..48e0ad1f 100644
  - The exact build, game version, CPU, GPU and driver version.
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 00000000..5af9e2c6
+index 00000000..b057aa07
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,95 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -150,6 +150,8 @@ index 00000000..5af9e2c6
 + trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
 +                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
 +                              like perf-trace.bat
++ trace-strict.bat             ab-4 (emulated CPU cores on P-cores too) logged like
++                              perf-trace.bat
 + trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
 +                              logged like perf-trace.bat: slower, for comparison
 + perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
@@ -350,6 +352,18 @@ index 00000000..68c09072
 +rem Runs the GPU occlusion queries Ocarina of Time reports, as before round 10
 +rem (LICHII_FAKE_OCCLUSION=0), with the logging of perf-trace.bat. Compare with perf-trace.bat.
 +set LICHII_FAKE_OCCLUSION=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-strict.bat b/dist/lichii-tuned/trace-strict.bat
+new file mode 100644
+index 00000000..a7e2f255
+--- /dev/null
++++ b/dist/lichii-tuned/trace-strict.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem ab-4 with the logging of perf-trace.bat: emulated CPU cores on P-cores too, pipeline
++rem builds on E-cores only (LICHII_CPU_POLICY=strict). The CPU side limits the frame rate
++rem since round 10, so P-core placement may help now.
++set LICHII_CPU_POLICY=strict&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
 index 5c750128..4b2d0bb1 100644
@@ -652,21 +666,223 @@ index 00000000..cfe86ce0
 +
 +} // namespace Common::PgoTraining
 diff --git a/src/common/range_sets.inc b/src/common/range_sets.inc
-index ebe7c831..c21fb258 100644
+index ebe7c831..48cfd256 100644
 --- a/src/common/range_sets.inc
 +++ b/src/common/range_sets.inc
-@@ -214,6 +214,11 @@ void RangeSet<AddressType>::Add(AddressType base_address, size_t size) {
+@@ -3,8 +3,10 @@
  
- template <typename AddressType>
- void RangeSet<AddressType>::Subtract(AddressType base_address, size_t size) {
-+    // Most subtractions miss every range (the buffer cache clears several sets per write): the
-+    // lookup is far cheaper than the interval set's subtract.
-+    if (!Intersects(base_address, size)) {
-+        return;
-+    }
-     m_impl->Subtract(base_address, size);
+ #pragma once
+ 
++#include <algorithm>
+ #include <limits>
+ #include <utility>
++#include <vector>
+ 
+ #include <boost/icl/interval.hpp>
+ #include <boost/icl/interval_base_set.hpp>
+@@ -26,69 +28,108 @@ using RangeSetsAllocator =
+                                boost::details::pool::default_mutex, 1024, 2048>;
  }
  
++// Sorted, disjoint, non-touching ranges in one array. The buffer cache looks these up tens of
++// thousands of times a frame and most lookups miss; sets stay small (Ocarina of Time: ~200 ranges
++// at a subtract, 763 at most), so moving a few hundred bytes on an insert costs less than tree
++// nodes from a locked pool.
+ template <typename AddressType>
+ struct RangeSet<AddressType>::RangeSetImpl {
+-    using IntervalSet = boost::icl::interval_set<
+-        AddressType, std::less, ICL_INTERVAL_INSTANCE(ICL_INTERVAL_DEFAULT, AddressType, std::less),
+-        RangeSetsAllocator>;
+-    using IntervalType = typename IntervalSet::interval_type;
+-
+-    RangeSetImpl() = default;
+-    ~RangeSetImpl() = default;
++    struct Range {
++        AddressType lower;
++        AddressType upper;
++    };
++    using Iterator = typename std::vector<Range>::iterator;
++    using ConstIterator = typename std::vector<Range>::const_iterator;
++
++    /// The first range ending after `address`, the first that could overlap what starts there.
++    ConstIterator FirstEndingAfter(AddressType address) const {
++        return std::upper_bound(
++            m_ranges.begin(), m_ranges.end(), address,
++            [](AddressType value, const Range& range) { return value < range.upper; });
++    }
+ 
+     void Add(AddressType base_address, size_t size) {
+-        AddressType end_address = base_address + static_cast<AddressType>(size);
+-        IntervalType interval{base_address, end_address};
+-        m_ranges_set.add(interval);
++        const AddressType end_address = base_address + static_cast<AddressType>(size);
++        if (end_address <= base_address) {
++            return;
++        }
++        // Ranges that touch the new one join it: the first ending at or after its start...
++        auto first = std::lower_bound(
++            m_ranges.begin(), m_ranges.end(), base_address,
++            [](const Range& range, AddressType value) { return range.upper < value; });
++        if (first == m_ranges.end()) {
++            m_ranges.push_back(Range{base_address, end_address});
++            return;
++        }
++        // ...up to the first starting after its end.
++        const auto last = std::upper_bound(
++            first, m_ranges.end(), end_address,
++            [](AddressType value, const Range& range) { return value < range.lower; });
++        if (first == last) {
++            m_ranges.insert(first, Range{base_address, end_address});
++            return;
++        }
++        first->lower = (std::min)(first->lower, base_address);
++        first->upper = (std::max)((last - 1)->upper, end_address);
++        m_ranges.erase(first + 1, last);
+     }
+ 
+     void Subtract(AddressType base_address, size_t size) {
+-        AddressType end_address = base_address + static_cast<AddressType>(size);
+-        IntervalType interval{base_address, end_address};
+-        m_ranges_set.subtract(interval);
++        const AddressType end_address = base_address + static_cast<AddressType>(size);
++        if (end_address <= base_address) {
++            return;
++        }
++        const auto first = m_ranges.begin() + (FirstEndingAfter(base_address) - m_ranges.cbegin());
++        const auto last = std::lower_bound(
++            first, m_ranges.end(), end_address,
++            [](const Range& range, AddressType value) { return range.lower < value; });
++        if (first == last) {
++            return;
++        }
++        const AddressType left_lower = first->lower;
++        const AddressType right_upper = (last - 1)->upper;
++        const bool keep_left = left_lower < base_address;
++        const bool keep_right = end_address < right_upper;
++        if (keep_left && keep_right && last - first == 1) {
++            // Cut out of the middle of one range: it becomes two.
++            first->upper = base_address;
++            m_ranges.insert(last, Range{end_address, right_upper});
++            return;
++        }
++        Iterator erase_from = first;
++        Iterator erase_to = last;
++        if (keep_left) {
++            first->upper = base_address;
++            ++erase_from;
++        }
++        if (keep_right) {
++            --erase_to;
++            erase_to->lower = end_address;
++        }
++        m_ranges.erase(erase_from, erase_to);
+     }
+ 
+     template <typename Func>
+     void ForEach(Func&& func) const {
+-        if (m_ranges_set.empty()) {
+-            return;
+-        }
+-        auto it = m_ranges_set.begin();
+-        auto end_it = m_ranges_set.end();
+-        for (; it != end_it; it++) {
+-            const AddressType inter_addr_end = it->upper();
+-            const AddressType inter_addr = it->lower();
+-            func(inter_addr, inter_addr_end);
++        for (const Range& range : m_ranges) {
++            func(range.lower, range.upper);
+         }
+     }
+ 
+     template <typename Func>
+     void ForEachInRange(AddressType base_addr, size_t size, Func&& func) const {
+-        if (m_ranges_set.empty()) {
+-            return;
+-        }
+         const AddressType start_address = base_addr;
+-        const AddressType end_address = start_address + size;
+-        const RangeSetImpl::IntervalType search_interval{start_address, end_address};
+-        auto it = m_ranges_set.lower_bound(search_interval);
+-        if (it == m_ranges_set.end()) {
++        const AddressType end_address = start_address + static_cast<AddressType>(size);
++        if (end_address <= start_address) {
+             return;
+         }
+-        auto end_it = m_ranges_set.upper_bound(search_interval);
+-        for (; it != end_it; it++) {
+-            AddressType inter_addr_end = it->upper();
+-            AddressType inter_addr = it->lower();
+-            if (inter_addr_end > end_address) {
+-                inter_addr_end = end_address;
+-            }
+-            if (inter_addr < start_address) {
+-                inter_addr = start_address;
+-            }
+-            func(inter_addr, inter_addr_end);
++        for (auto it = FirstEndingAfter(start_address);
++             it != m_ranges.end() && it->lower < end_address; ++it) {
++            func((std::max)(it->lower, start_address), (std::min)(it->upper, end_address));
+         }
+     }
+ 
+-    IntervalSet m_ranges_set;
++    std::vector<Range> m_ranges;
+ };
+ 
+ template <typename AddressType>
+@@ -192,17 +233,17 @@ RangeSet<AddressType>::~RangeSet() = default;
+ template <typename AddressType>
+ RangeSet<AddressType>::RangeSet(RangeSet&& other) {
+     m_impl = std::make_unique<RangeSet<AddressType>::RangeSetImpl>();
+-    m_impl->m_ranges_set = std::move(other.m_impl->m_ranges_set);
++    m_impl->m_ranges = std::move(other.m_impl->m_ranges);
+     // A moved-from container is only "valid but unspecified". Callers hand ranges over by
+     // moving and then keep adding to the source (BufferCache::AccumulateFlushes).
+-    other.m_impl->m_ranges_set.clear();
++    other.m_impl->m_ranges.clear();
+ }
+ 
+ template <typename AddressType>
+ RangeSet<AddressType>& RangeSet<AddressType>::operator=(RangeSet&& other) {
+     if (this != &other) {
+-        m_impl->m_ranges_set = std::move(other.m_impl->m_ranges_set);
+-        other.m_impl->m_ranges_set.clear();
++        m_impl->m_ranges = std::move(other.m_impl->m_ranges);
++        other.m_impl->m_ranges.clear();
+     }
+     return *this;
+ }
+@@ -219,24 +260,23 @@ void RangeSet<AddressType>::Subtract(AddressType base_address, size_t size) {
+ 
+ template <typename AddressType>
+ void RangeSet<AddressType>::Clear() {
+-    m_impl->m_ranges_set.clear();
++    m_impl->m_ranges.clear();
+ }
+ 
+ template <typename AddressType>
+ bool RangeSet<AddressType>::Empty() const {
+-    return m_impl->m_ranges_set.empty();
++    return m_impl->m_ranges.empty();
+ }
+ 
+ template <typename AddressType>
+ bool RangeSet<AddressType>::Intersects(AddressType base_address, size_t size) const {
+-    const auto& set = m_impl->m_ranges_set;
+-    if (set.empty() || size == 0) {
++    const auto& ranges = m_impl->m_ranges;
++    if (ranges.empty() || size == 0) {
+         return false;
+     }
+     const AddressType end_address = base_address + static_cast<AddressType>(size);
+-    // The first range not entirely below the query; it overlaps when it starts before its end.
+-    const auto it = set.lower_bound(typename RangeSetImpl::IntervalType{base_address, end_address});
+-    return it != set.end() && it->lower() < end_address;
++    const auto it = m_impl->FirstEndingAfter(base_address);
++    return it != ranges.end() && it->lower < end_address;
+ }
+ 
+ template <typename AddressType>
 diff --git a/src/common/settings.cpp b/src/common/settings.cpp
 index c63943a9..cbf65c84 100644
 --- a/src/common/settings.cpp
@@ -2122,7 +2338,7 @@ index ac2d77c6..48998144 100644
      case IR::Opcode::FPFloor32:
      case IR::Opcode::FPCeil32:
 diff --git a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
-index 7ca477cc..8cd7bad2 100644
+index 7ca477cc..77b6335d 100644
 --- a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
 +++ b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
 @@ -79,6 +79,11 @@ struct StorageInfo {
@@ -2137,7 +2353,17 @@ index 7ca477cc..8cd7bad2 100644
      /// Pointer table entries reached through a phi or select of table pointers, or through a
      /// table pointer read from a dynamically indexed constant buffer array. They are bound only
      /// in the bindings the program's other storage buffers leave free (table_budget).
-@@ -149,6 +154,24 @@ bool IsGlobalMemory(const IR::Inst& inst) {
+@@ -86,6 +91,9 @@ struct StorageInfo {
+     bool tables_seen{};
+     size_t table_budget{};
+     size_t table_used{};
++    /// The storage buffers the pass without table entries bound; bound again, they take nothing
++    /// from table_budget, which they were left out of.
++    StorageBufferSet counted;
+     small_vector<StorageBufferAddr, 8> table_candidates;
+ };
+ 
+@@ -149,6 +157,24 @@ bool IsGlobalMemory(const IR::Inst& inst) {
      }
  }
  
@@ -2162,7 +2388,7 @@ index 7ca477cc..8cd7bad2 100644
  /// Returns true when the instruction is a global memory instruction
  bool IsGlobalMemoryWrite(const IR::Inst& inst) {
      switch (inst.GetOpcode()) {
-@@ -1318,7 +1341,12 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
+@@ -1318,7 +1344,12 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
          !env.IsCbufStorageBufferPointer(storage_buffer->index, storage_buffer->offset)) {
          storage_buffer.reset();
      }
@@ -2176,7 +2402,7 @@ index 7ca477cc..8cd7bad2 100644
          const IR::Inst* const start{low_addr.InstRecursive()};
          auto it{info.native_candidates.find(start)};
          if (it == info.native_candidates.end()) {
-@@ -1331,10 +1359,25 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
+@@ -1331,20 +1362,37 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
              }
          }
          const auto& candidates{it->second};
@@ -2203,7 +2429,23 @@ index 7ca477cc..8cd7bad2 100644
              for (const StorageBufferAddr& candidate : candidates) {
                  if (std::ranges::find(info.table_candidates, candidate) !=
                      info.table_candidates.end()) {
-@@ -1366,7 +1409,7 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
+                     const StorageBufferAddr holder{.index = candidate.index,
+                                                    .offset = candidate.offset};
++                    const auto takes_binding = [&info](const StorageBufferAddr& buffer) {
++                        return info.set.find(buffer) == info.set.end() &&
++                               !info.counted.contains(buffer);
++                    };
+                     const size_t added{
+-                        (info.set.find(candidate) == info.set.end() ? 1U : 0U) +
+-                        (candidate.indirect != ~0U && info.set.find(holder) == info.set.end()
+-                             ? 1U
+-                             : 0U)};
++                        (takes_binding(candidate) ? 1U : 0U) +
++                        (candidate.indirect != ~0U && takes_binding(holder) ? 1U : 0U)};
+                     if (info.table_used + added > info.table_budget) {
+                         continue;
+                     }
+@@ -1366,7 +1414,7 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
                  return;
              }
              // Only table entries, and no free binding for them: as if none had been found.
@@ -2212,7 +2454,7 @@ index 7ca477cc..8cd7bad2 100644
              // The one pointer the address is built from. The NVN search below only takes 16-byte
              // aligned slots, so for a pointer at an 8-byte slot it can return a dimension or stride
              // the address arithmetic reads instead, and the access then lands in the wrong buffer.
-@@ -1563,6 +1606,8 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+@@ -1563,6 +1611,8 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
      }
      TrackingConditions conditions{program};
      StorageInfo info;
@@ -2221,7 +2463,7 @@ index 7ca477cc..8cd7bad2 100644
      info.iterator_words = CollectIteratorWords(program);
      info.atomic_pointers = CollectAtomicPointers(program);
      const auto collect = [&] {
-@@ -1577,11 +1622,22 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+@@ -1577,15 +1627,31 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
          }
      };
      collect();
@@ -2238,13 +2480,25 @@ index 7ca477cc..8cd7bad2 100644
      if (info.tables_seen && info.set.size() < Info::MAX_SSBOS) {
          // Again with pointer table entries, in the bindings the first pass left free.
          StorageInfo with_tables;
-         with_tables.iterator_words = std::move(info.iterator_words);
-         with_tables.atomic_pointers = std::move(info.atomic_pointers);
+-        with_tables.iterator_words = std::move(info.iterator_words);
+-        with_tables.atomic_pointers = std::move(info.atomic_pointers);
++        with_tables.iterator_words = info.iterator_words;
++        with_tables.atomic_pointers = info.atomic_pointers;
 +        with_tables.bind_competing_loaded = info.bind_competing_loaded;
          with_tables.tables_enabled = true;
          with_tables.table_budget = Info::MAX_SSBOS - info.set.size();
-         info = std::move(with_tables);
-@@ -1609,10 +1665,11 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+-        info = std::move(with_tables);
++        with_tables.counted = info.set;
++        std::swap(info, with_tables);
+         collect();
++        if (info.set.size() > Info::MAX_SSBOS) {
++            // Never more storage buffers than a stage binds: without the table entries, then.
++            info = std::move(with_tables);
++        }
+     }
+     program.info.native_global_bounds |= info.native_runtime_bounds;
+     for (const StorageBufferAddr& storage_buffer : info.set) {
+@@ -1609,10 +1675,11 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
      }
  }
  
@@ -2257,7 +2511,7 @@ index 7ca477cc..8cd7bad2 100644
      for (auto& desc : source.storage_buffers_descriptors) {
          auto it{std::ranges::find_if(descriptors, [&desc](const auto& existing) {
              return desc.cbuf_index == existing.cbuf_index &&
-@@ -1621,10 +1678,13 @@ void JoinStorageInfo(Info& base, Info& source) {
+@@ -1621,10 +1688,13 @@ void JoinStorageInfo(Info& base, Info& source) {
          })};
          if (it != descriptors.end()) {
              it->is_written |= desc.is_written;
@@ -3074,7 +3328,7 @@ index 2ed83d01..a89ccfab 100644
              const u32 false_value = pop(), true_value = pop(), condition = pop();
              push(condition != 0 ? true_value : false_value);
 diff --git a/src/tests/CMakeLists.txt b/src/tests/CMakeLists.txt
-index d9107222..9763f180 100644
+index d9107222..4acd0383 100644
 --- a/src/tests/CMakeLists.txt
 +++ b/src/tests/CMakeLists.txt
 @@ -65,6 +65,7 @@ add_executable(tests
@@ -3093,23 +3347,25 @@ index d9107222..9763f180 100644
      video_core/uniform_cache_history.cpp
      video_core/x8d24_conversion.cpp
      video_core/ampere_ported_half_compare.cpp
-@@ -95,6 +97,7 @@ add_executable(tests
+@@ -95,6 +97,8 @@ add_executable(tests
      video_core/ampere_matrix.cpp
      video_core/spirv_software_matrix.cpp
      video_core/spirv_builtin_capabilities.cpp
 +    video_core/spirv_min_max_denorms.cpp
++    video_core/virtual_range_cache.cpp
      common/bit_field.cpp
      common/cityhash.cpp
      common/container_hash.cpp
 diff --git a/src/tests/common/range_set_subtract.cpp b/src/tests/common/range_set_subtract.cpp
 new file mode 100644
-index 00000000..87ca1031
+index 00000000..bfbd1478
 --- /dev/null
 +++ b/src/tests/common/range_set_subtract.cpp
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,144 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
++#include <algorithm>
 +#include <array>
 +#include <random>
 +
@@ -3175,6 +3431,80 @@ index 00000000..87ca1031
 +        }
 +        REQUIRE(Contents(set) == model);
 +    }
++}
++
++TEST_CASE("RangeSet stays sorted and joined, and its lookups match a per-address model",
++          "[range_sets]") {
++    std::mt19937_64 rng{0x0400486024DEC001ULL};
++    Common::RangeSet<u64> set;
++    std::array<bool, SPACE> model{};
++    for (int step = 0; step < 20000; ++step) {
++        // Mostly small ranges, so that the set holds many.
++        const u64 base = rng() % SPACE;
++        const u64 limit = rng() % 8 == 0 ? SPACE - base : (std::min<u64>)(16, SPACE - base);
++        const u64 size = rng() % (limit + 1);
++        const bool add = rng() % 2 == 0;
++        if (add) {
++            set.Add(base, size);
++        } else {
++            set.Subtract(base, size);
++        }
++        for (u64 address = base; address < base + size; ++address) {
++            model[address] = add;
++        }
++
++        u64 previous_end = 0;
++        bool first = true;
++        set.ForEach([&](u64 begin, u64 end) {
++            REQUIRE(begin < end);
++            // Touching ranges would have joined.
++            REQUIRE((first || previous_end < begin));
++            previous_end = end;
++            first = false;
++        });
++        REQUIRE(set.Empty() == first);
++
++        const u64 query = rng() % SPACE;
++        const u64 query_size = rng() % (SPACE - query + 1);
++        bool expected_hit = false;
++        std::array<bool, SPACE> expected{};
++        for (u64 address = query; address < query + query_size; ++address) {
++            expected[address] = model[address];
++            expected_hit = expected_hit || model[address];
++        }
++        REQUIRE(set.Intersects(query, query_size) == expected_hit);
++        std::array<bool, SPACE> visited{};
++        set.ForEachInRange(query, query_size, [&](u64 begin, u64 end) {
++            REQUIRE(begin >= query);
++            REQUIRE(end <= query + query_size);
++            REQUIRE(begin < end);
++            for (u64 address = begin; address < end; ++address) {
++                visited[address] = true;
++            }
++        });
++        REQUIRE(visited == expected);
++    }
++}
++
++TEST_CASE("RangeSet joins touching ranges and splits on a cut", "[range_sets]") {
++    const auto count = [](const Common::RangeSet<u64>& set) {
++        int ranges = 0;
++        set.ForEach([&](u64, u64) { ++ranges; });
++        return ranges;
++    };
++    Common::RangeSet<u64> set;
++    set.Add(10, 10);
++    set.Add(30, 10);
++    REQUIRE(count(set) == 2);
++    set.Add(20, 10); // Touches both.
++    REQUIRE(count(set) == 1);
++    set.Subtract(20, 5);
++    REQUIRE(count(set) == 2);
++    set.Add(5, 0);
++    set.Add(50, 0);
++    REQUIRE(count(set) == 2);
++    set.Subtract(0, 100);
++    REQUIRE(set.Empty());
 +}
 diff --git a/src/tests/qt_compatibility/CMakeLists.txt b/src/tests/qt_compatibility/CMakeLists.txt
 new file mode 100644
@@ -4340,7 +4670,7 @@ index 00000000..d47d2be6
 +    CheckModes(fixture, false, false);
 +}
 diff --git a/src/tests/video_core/storage_buffer_pointer_tracking.cpp b/src/tests/video_core/storage_buffer_pointer_tracking.cpp
-index e93d18ef..d5a44d8b 100644
+index e93d18ef..af2474f9 100644
 --- a/src/tests/video_core/storage_buffer_pointer_tracking.cpp
 +++ b/src/tests/video_core/storage_buffer_pointer_tracking.cpp
 @@ -2,6 +2,8 @@
@@ -4368,7 +4698,7 @@ index e93d18ef..d5a44d8b 100644
          Shader::Optimization::GlobalMemoryToStorageBufferPass(env, program, host);
          std::vector<u32> offsets;
          for (const auto& descriptor : program.info.storage_buffers_descriptors) {
-@@ -334,6 +338,143 @@ TEST_CASE("Loaded global pointers do not inherit the source buffer descriptor",
+@@ -334,6 +338,204 @@ TEST_CASE("Loaded global pointers do not inherit the source buffer descriptor",
      }
  }
  
@@ -4507,6 +4837,67 @@ index e93d18ef..d5a44d8b 100644
 +    CHECK(program.LoadedDescriptors() == 0);
 +    CHECK(program.Count(IR::Opcode::LoadStorage128) == 1);
 +    CHECK(program.Count(IR::Opcode::LoadGlobal128) == 0);
++}
++
++TEST_CASE("Pointer table entries are charged only for bindings the first pass left free",
++          "[shader][storage_buffer]") {
++    // The loop reads its records through the table entry at *c0[0x30] or *c0[0x38], loaded before
++    // it. That load binds c0[0x30] and c0[0x38] in the first pass, and with 28 more pointers they
++    // leave a binding for each entry. The loop is collected first: charged for its holder as well,
++    // the first entry shut out the second, as Ocarina of Time's foliage culling compute
++    // 331e607152ce78d5 bound 4 of its 8 per-type instance tables.
++    KernelProgram fixture;
++    fixture.env.native = true;
++    fixture.entry.AddBranch(&fixture.loop);
++    fixture.loop.AddBranch(&fixture.loop);
++    fixture.program.blocks = {&fixture.entry, &fixture.loop};
++    fixture.program.post_order_blocks = {&fixture.loop, &fixture.entry};
++    IR::IREmitter entry{fixture.entry};
++    const IR::U32 lane{entry.LocalInvocationIdX()};
++    const IR::U1 first{entry.ILessThan(lane, entry.Imm32(16), false)};
++    const IR::U32 holder_low{entry.Select(first, Word(entry, 0x30), Word(entry, 0x38))};
++    const IR::U32 holder_high{entry.Select(first, Word(entry, 0x34), Word(entry, 0x3c))};
++    const IR::Value table{entry.LoadGlobal64(Address(entry, holder_low, holder_high))};
++    for (u32 slot = 0; slot < Shader::Info::MAX_SSBOS - 4; ++slot) {
++        const u32 offset{0x100 + slot * 8};
++        static_cast<void>(
++            entry.LoadGlobal32(Address(entry, Word(entry, offset), Word(entry, offset + 4))));
++    }
++    IR::IREmitter body{fixture.loop};
++    const IR::U32 record{body.IAdd(IR::U32{body.CompositeExtract(table, 0)},
++                                   body.ShiftLeftLogical(lane, body.Imm32(4)))};
++    static_cast<void>(
++        body.LoadGlobal128(Address(body, record, IR::U32{body.CompositeExtract(table, 1)})));
++
++    CHECK(fixture.TrackedOffsets().size() == Shader::Info::MAX_SSBOS);
++    CHECK(std::ranges::count_if(fixture.program.info.storage_buffers_descriptors,
++                                [](const auto& desc) { return desc.indirect_offset != ~0U; }) == 2);
++}
++
++TEST_CASE("Pointer table entries that would overflow the storage buffers are left out",
++          "[shader][storage_buffer]") {
++    // Records at c0[0x30] or in the table *c0[0x38], at an offset c0[0x40] the environment cannot
++    // tell from a pointer. The table entry competes with the pair, so with it the access binds
++    // every candidate, c0[0x40] too: 33 storage buffers with 29 more pointers. The program keeps
++    // the 30 of the pass without table entries.
++    KernelProgram fixture;
++    fixture.env.native = true;
++    IR::IREmitter ir{fixture.entry};
++    const IR::Value table{
++        ir.LoadGlobal64(ir.PackUint2x32(ir.GetCbuf(ir.Imm32(0), ir.Imm32(0x38), 64, false)))};
++    const IR::U1 direct{ir.ILessThan(ir.LocalInvocationIdX(), ir.Imm32(16), false)};
++    const IR::U32 low{ir.Select(direct, Word(ir, 0x30), IR::U32{ir.CompositeExtract(table, 0)})};
++    const IR::U32 high{ir.Select(direct, Word(ir, 0x34), IR::U32{ir.CompositeExtract(table, 1)})};
++    static_cast<void>(ir.LoadGlobal128(Address(ir, ir.IAdd(low, Word(ir, 0x40)), high)));
++    for (u32 slot = 0; slot < Shader::Info::MAX_SSBOS - 3; ++slot) {
++        const u32 offset{0x100 + slot * 8};
++        static_cast<void>(ir.LoadGlobal32(Address(ir, Word(ir, offset), Word(ir, offset + 4))));
++    }
++
++    CHECK(fixture.TrackedOffsets().size() == Shader::Info::MAX_SSBOS - 2);
++    CHECK_FALSE(fixture.program.info.native_global_bounds);
++    CHECK(std::ranges::none_of(fixture.program.info.storage_buffers_descriptors,
++                               [](const auto& desc) { return desc.indirect_offset != ~0U; }));
 +}
 +
  TEST_CASE("NVN fallback descriptors use guest slots rather than compact binding indices",
@@ -4866,6 +5257,96 @@ index 6059b70e..bcfee7e3 100644
  };
  
  struct Runtime {
+diff --git a/src/tests/video_core/virtual_range_cache.cpp b/src/tests/video_core/virtual_range_cache.cpp
+new file mode 100644
+index 00000000..5cbc8cb8
+--- /dev/null
++++ b/src/tests/video_core/virtual_range_cache.cpp
+@@ -0,0 +1,84 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <optional>
++#include <utility>
++#include <vector>
++
++#include <catch2/catch_test_macros.hpp>
++
++#include "video_core/buffer_cache/virtual_range_cache.h"
++
++namespace {
++
++using VideoCommon::VirtualRangeCache;
++
++constexpr GPUVAddr BASE = 0x100000;
++constexpr GPUVAddr HOLE = 0x10000;
++
++/// GPU memory that is contiguous, except for a device address jump HOLE into a split range.
++struct FakeMemory {
++    bool split{};
++    mutable int walks{};
++
++    size_t GetID() const {
++        return 1;
++    }
++
++    std::vector<std::pair<GPUVAddr, size_t>> GetSubmappedRange(GPUVAddr gpu_addr,
++                                                               size_t size) const {
++        ++walks;
++        if (split && gpu_addr < BASE + HOLE && gpu_addr + size > BASE + HOLE) {
++            const size_t first = BASE + HOLE - gpu_addr;
++            return {{gpu_addr, first}, {BASE + HOLE, size - first}};
++        }
++        return {{gpu_addr, size}};
++    }
++
++    std::optional<DAddr> GpuToCpuAddress(GPUVAddr gpu_addr) const {
++        return DAddr{gpu_addr + 0x1000};
++    }
++};
++
++} // Anonymous namespace
++
++TEST_CASE("VirtualRangeCache walks a contiguous address once for its longest size",
++          "[video_core][virtual_range_cache]") {
++    FakeMemory memory;
++    VirtualRangeCache cache;
++    REQUIRE(cache.Query(memory, BASE, 0x4000)->size() == 1);
++    REQUIRE(memory.walks == 1);
++    // Longer: walked again, and kept.
++    REQUIRE(cache.Query(memory, BASE, 0x200000)->size() == 1);
++    REQUIRE(memory.walks == 2);
++    // Alternating sizes up to the longest walk nothing.
++    for (int i = 0; i < 16; ++i) {
++        REQUIRE(cache.Query(memory, BASE, 0x4000)->size() == 1);
++        REQUIRE(cache.Query(memory, BASE, 0x200000)->size() == 1);
++        REQUIRE(cache.Query(memory, BASE, 0x1000)->size() == 1);
++    }
++    REQUIRE(memory.walks == 2);
++}
++
++TEST_CASE("VirtualRangeCache walks again for ranges of a split address",
++          "[video_core][virtual_range_cache]") {
++    FakeMemory memory{.split = true};
++    VirtualRangeCache cache;
++    REQUIRE(cache.Query(memory, BASE, HOLE * 2)->size() == 2);
++    // A prefix of a split range may be whole: the list of the longer range doesn't answer it.
++    REQUIRE(cache.Query(memory, BASE, HOLE / 2)->size() == 1);
++    REQUIRE(memory.walks == 2);
++    REQUIRE(cache.Query(memory, BASE, HOLE * 2)->size() == 2);
++    REQUIRE(memory.walks == 3);
++}
++
++TEST_CASE("VirtualRangeCache forgets a kept range when its tail is unmapped",
++          "[video_core][virtual_range_cache]") {
++    FakeMemory memory;
++    VirtualRangeCache cache;
++    REQUIRE(cache.Query(memory, BASE, 0x200000)->size() == 1);
++    cache.Unmap(memory.GetID(), BASE + 0x100000, 0x1000);
++    memory.split = true;
++    REQUIRE(cache.Query(memory, BASE, HOLE * 2)->size() == 2);
++    REQUIRE(memory.walks == 2);
++}
 diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
 index a248222d..a0c6bbb5 100644
 --- a/src/video_core/buffer_cache/buffer_cache.h
@@ -5146,6 +5627,40 @@ index 1b678873..f6756368 100644
  };
  
  } // namespace VideoCommon
+diff --git a/src/video_core/buffer_cache/virtual_range_cache.h b/src/video_core/buffer_cache/virtual_range_cache.h
+index f4284d6a..6ec8a6da 100644
+--- a/src/video_core/buffer_cache/virtual_range_cache.h
++++ b/src/video_core/buffer_cache/virtual_range_cache.h
+@@ -30,7 +30,10 @@ public:
+     static constexpr size_t MAX_ENTRIES = 8192;
+     static constexpr size_t MAX_DEFERRED = 4096;
+ 
+-    const VirtualSegments* Query(Tegra::MemoryManager& memory, GPUVAddr gpu_addr, u32 size) {
++    /// The segments of a range when it has more than one. Fewer than two means that it needs no
++    /// splitting: one segment may then cover more than the range asked for.
++    template <typename Memory = Tegra::MemoryManager>
++    const VirtualSegments* Query(Memory& memory, GPUVAddr gpu_addr, u32 size) {
+         if (has_deferred.load(std::memory_order_acquire)) {
+             ApplyDeferred();
+         }
+@@ -40,9 +43,14 @@ public:
+         const size_t as_id = memory.GetID();
+         const u64 key = MakeKey(as_id, gpu_addr);
+         const auto it = entries.find(key);
+-        if (it != entries.end() && it->second.as_id == as_id &&
+-            it->second.gpu_addr == gpu_addr && it->second.size == size) {
+-            return &it->second.segments;
++        if (it != entries.end() && it->second.as_id == as_id && it->second.gpu_addr == gpu_addr) {
++            const Entry& cached = it->second;
++            // Titles bind one address with several sizes (Ocarina of Time ~2,000 times a second,
++            // half of them over 1 MiB). Keep the page table walk of the longest: its prefixes are
++            // contiguous too.
++            if (cached.size == size || (cached.segments.size() == 1 && size < cached.size)) {
++                return &cached.segments;
++            }
+         }
+         Entry entry{};
+         entry.as_id = as_id;
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
 index 391226c9..b8eeb3c3 100644
 --- a/src/video_core/dma_pusher.cpp
@@ -5391,7 +5906,7 @@ index fb875798..e93994d0 100644
      bool TryFireEmblemUpscale(bool allow_history = true);
      void CaptureFireEmblemJitter();
 diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
-index 86fb6d24..8f99501d 100644
+index 86fb6d24..3221fb3d 100644
 --- a/src/video_core/engines/maxwell_3d.cpp
 +++ b/src/video_core/engines/maxwell_3d.cpp
 @@ -11,6 +11,8 @@
@@ -5403,9 +5918,13 @@ index 86fb6d24..8f99501d 100644
  #include "common/assert.h"
  #include "common/bit_util.h"
  #include "common/scope_exit.h"
-@@ -1034,6 +1036,19 @@ struct Maxwell3D::FrontState {
+@@ -1033,7 +1035,23 @@ struct Maxwell3D::FrontState {
+     /// A method the draw manager handles was sent since the back last ran DrawDeferred: only
      /// then can it have a deferred instanced draw to issue at the end of a macro.
      bool draw_pending{true};
++    /// The back holds state writes in its method sink, which its next executable method consumes
++    /// (issuing a deferred draw a changed one ends). Front starts once the sink is consumed.
++    bool sink_pending{};
      bool skip_same{}; ///< SkipSameValueWrites() && FrontSkipSame(), read once
 +    u32 dma_reads{};
 +    /// Constant buffer words sent inline, keyed by device address like the split's write
@@ -5423,10 +5942,36 @@ index 86fb6d24..8f99501d 100644
  };
  
  namespace {
-@@ -1183,6 +1198,116 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
+@@ -1142,6 +1160,18 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
+         }
+         fs.regs[method] = value;
+     } else {
++        // Draw macros write these for every instance (~500,000 same values a second in Ocarina of
++        // Time). They only store the value, so an unchanged one is the same as a state write.
++        // topology_override is not part of an instance loop: any write to it ends a deferred draw.
++        // Kept while state writes wait in the back's sink: it would consume them before the next
++        // engine's work.
++        if (IsStoreOnlyExecutable(method) && DrawManager::IsInstanceLoopMethod(method) &&
++            fs.regs[method] == value && shadow_kept && fs.skip_same && !fs.sink_pending) {
++            if (Profile::Enabled()) [[unlikely]] {
++                Profile::Add(Profile::Counter::SameValueWrites, 1);
++            }
++            return;
++        }
+         fs.regs[method] = value;
+         constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
+         switch (method) {
+@@ -1179,9 +1209,122 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
+         }
+     }
+     if (from_macro) {
++        // Direct writes consume the sink first.
+         split.MacroWrite(this, method, argument);
++        fs.sink_pending = false;
      } else {
          split.Method(this, method, argument, is_last_call, nullptr);
-     }
++        fs.sink_pending = !execution_mask[method];
++    }
 +    if (execution_mask[method]) {
 +        FrontNoteWrites(split, fs, method, 1, &argument);
 +    }
@@ -5536,19 +6081,19 @@ index 86fb6d24..8f99501d 100644
 +                Tegra::Nx2MarkReportPages(*device, 1);
 +            }
 +        }
-+    }
+     }
  }
  
- void Maxwell3D::FrontCallMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
-@@ -1288,6 +1413,7 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
+@@ -1288,6 +1431,8 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
          }
      }
      split.MultiMethod(this, method, base_start, amount, methods_pending, nullptr);
++    fs.sink_pending = false; // The back consumes the sink before a run.
 +    FrontNoteWrites(split, fs, method, amount, base_start);
  }
  
  void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split,
-@@ -1357,8 +1483,99 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+@@ -1357,8 +1502,99 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
          memory_manager.ReadBlockUnsafe(source, diag_before.data(), read_bytes);
      }
      VideoCommon::Nx2Profile::CountDmaRead(macro);
@@ -5650,7 +6195,7 @@ index 86fb6d24..8f99501d 100644
          split.Run(
              [this, macro, method, source, read_bytes] {
                  if (VideoCommon::QueryDma::HasPendingQueries(memory_manager, *rasterizer, source,
-@@ -1372,16 +1589,46 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+@@ -1372,16 +1608,46 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
      if (VideoCommon::Nx2Profile::Enabled()) {
          VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
      }
@@ -5700,10 +6245,29 @@ index 86fb6d24..8f99501d 100644
              fs.parameters.push_back(word);
          } else if (ram + i < native_data_ram.size()) {
 diff --git a/src/video_core/engines/maxwell_3d.h b/src/video_core/engines/maxwell_3d.h
-index 9247deff..000067d3 100644
+index 9247deff..a9f80a8f 100644
 --- a/src/video_core/engines/maxwell_3d.h
 +++ b/src/video_core/engines/maxwell_3d.h
-@@ -3402,6 +3402,11 @@ private:
+@@ -3311,12 +3311,13 @@ private:
+ 
+     /// Whether state register writes that keep the register's value are dropped (CallMethod).
+     static bool SkipSameValueWrites() {
+-        static const bool skip = [] {
+-            const char* value = std::getenv("EDEN_NX2_SKIP_SAME");
+-            return value == nullptr || value[0] != '0';
+-        }();
+-        return skip;
++        return skip_same_value_writes;
+     }
++    /// Read once at startup: state writes check it one by one (no guard to check).
++    static inline const bool skip_same_value_writes = [] {
++        const char* value = std::getenv("EDEN_NX2_SKIP_SAME");
++        return value == nullptr || value[0] != '0';
++    }();
+ 
+     /// Handles writes to the macro uploading register.
+     void ProcessMacroUpload(u32 data);
+@@ -3402,6 +3403,11 @@ private:
      void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
      void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
                        u32 count);
@@ -6579,6 +7143,30 @@ index fc0cfd04..fb22a10b 100644
      std::vector<Waiter> waiters;
      std::atomic<size_t> count{};
  };
+diff --git a/src/video_core/nx2_perf.h b/src/video_core/nx2_perf.h
+index 0fe16cfb..ba085958 100644
+--- a/src/video_core/nx2_perf.h
++++ b/src/video_core/nx2_perf.h
+@@ -7,12 +7,14 @@
+ 
+ namespace VideoCommon::Nx2Perf {
+ 
++// Read once at startup: Verify() runs for every 3D method on the GPU thread (no guard to check).
++inline const bool g_verify = [] {
++    const char* value = std::getenv("EDEN_NX2_PERF_VERIFY");
++    return value != nullptr && value[0] == '1';
++}();
++
+ inline bool Verify() {
+-    static const bool verify = [] {
+-        const char* value = std::getenv("EDEN_NX2_PERF_VERIFY");
+-        return value != nullptr && value[0] == '1';
+-    }();
+-    return verify;
++    return g_verify;
+ }
+ 
+ } // namespace VideoCommon::Nx2Perf
 diff --git a/src/video_core/oot_network.h b/src/video_core/oot_network.h
 new file mode 100644
 index 00000000..a09df814
@@ -8726,10 +9314,109 @@ index 98787b9a..c34cfc71 100644
  
  void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
 diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
-index 65f84789..3f89065d 100644
+index 65f84789..76c2fc71 100644
 --- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
-@@ -1260,8 +1260,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <limits>
+ #include <array>
++#include <atomic>
+ #include <cstdlib>
+ #include <optional>
+ #include <set>
+@@ -178,6 +179,48 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
+     return bytes * info.resources.layers > (u64{1} << 30);
+ }
+ 
++// Whether a block-compressed copy of `info` has a mip level whose size in 4x4 blocks is not its
++// level 0 block count shifted down (341 texels: 86 blocks at level 0, 85 texels = 22 blocks at
++// level 2, not 86 >> 2 = 21). On AMD (RX 6600 XT, Windows driver) the BC1/BC3 copies of such
++// images show dark lines along the seams of distant terrain in title 1; RGBA8 copies don't.
++[[nodiscard]] bool HasUnevenBlockMips(const ImageInfo& info) {
++    const u32 blocks_x = Common::DivCeil(info.size.width, 4U);
++    const u32 blocks_y = Common::DivCeil(info.size.height, 4U);
++    for (s32 level = 1; level < info.resources.levels; ++level) {
++        const u32 level_x = Common::DivCeil((std::max)(info.size.width >> level, 1U), 4U);
++        const u32 level_y = Common::DivCeil((std::max)(info.size.height >> level, 1U), 4U);
++        if (level_x != (std::max)(blocks_x >> level, 1U) ||
++            level_y != (std::max)(blocks_y >> level, 1U)) {
++            return true;
++        }
++    }
++    return false;
++}
++
++// ASTC that would be re-compressed to BC1/BC3 but has uneven block mips (HasUnevenBlockMips) on
++// a driver that samples those wrong: kept as the GPU decoder's RGBA8 instead, like huge arrays.
++// EDEN_NX2_UNEVEN_BCN_RGBA8=1 does it on any driver, =0 on none.
++[[nodiscard]] bool IsUnevenMipRgba8Astc(const Device& device, const ImageInfo& info) {
++    static const char forced = [] {
++        const char* value = std::getenv("EDEN_NX2_UNEVEN_BCN_RGBA8");
++        return value == nullptr ? '\0' : value[0];
++    }();
++    if (forced == '0' || !IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported() ||
++        info.type != ImageType::e2D || info.size.depth != 1 || info.resources.levels <= 1 ||
++        Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu ||
++        Settings::GetAstcRecompression() == Settings::AstcRecompression::Uncompressed) {
++        return false;
++    }
++    if (forced != '1') {
++        const VkDriverIdKHR id = device.GetDriverID();
++        if (id != VK_DRIVER_ID_AMD_PROPRIETARY && id != VK_DRIVER_ID_AMD_OPEN_SOURCE &&
++            id != VK_DRIVER_ID_MESA_RADV) {
++            return false;
++        }
++    }
++    return HasUnevenBlockMips(info) && !IsHugeAstcArray(device, info);
++}
++
+ // A large image over Switch 2 sparse blocks nobody has written (title 1's terrain layer pools, 2.9
+ // GB of R8/RG16/R16 that stay empty in the attract demo) is all zeros: it gets no device memory
+ // until a write makes the texture cache replace it.
+@@ -289,9 +332,10 @@ enum class SparseTilesMode {
+                                                            : (VkDeviceSize{768} << 20);
+ }
+ 
+-// The host format of a huge ASTC array: the GPU decoder's RGBA8 (sRGB kept for sampling).
++// The host format of a huge ASTC array or of ASTC with uneven block mips: the GPU decoder's RGBA8
++// (sRGB kept for sampling).
+ [[nodiscard]] std::optional<VkFormat> HugeAstcHostFormat(const Device& device, const ImageInfo& info) {
+-    if (!IsHugeAstcArray(device, info)) {
++    if (!IsHugeAstcArray(device, info) && !IsUnevenMipRgba8Astc(device, info)) {
+         return std::nullopt;
+     }
+     return VideoCore::Surface::IsPixelFormatSRGB(info.format) ? VK_FORMAT_A8B8G8R8_SRGB_PACK32
+@@ -303,7 +347,8 @@ constexpr std::array<VkFormat, 2> HugeAstcViewFormats{VK_FORMAT_A8B8G8R8_UNORM_P
+ 
+ // Opaque ASTC (ImageInfo::astc_opaque) re-compressed to BC1 instead of BC3.
+ [[nodiscard]] bool IsOpaqueBc1Astc(const Device& device, const ImageInfo& info) {
+-    return info.astc_opaque && IsPixelFormatASTC(info.format) && !IsHugeAstcArray(device, info);
++    return info.astc_opaque && IsPixelFormatASTC(info.format) && !IsHugeAstcArray(device, info) &&
++           !IsUnevenMipRgba8Astc(device, info);
+ }
+ 
+ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
+@@ -321,7 +366,8 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
+ // decode, so streamed textures are ready the frame they are first used instead of seconds later.
+ [[nodiscard]] bool WillUseGpuBcnTranscode(const Device& device, const ImageInfo& info) {
+     if (!IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported() ||
+-        IsHugeAstcArray(device, info) || info.type != ImageType::e2D || info.size.depth != 1) {
++        IsHugeAstcArray(device, info) || IsUnevenMipRgba8Astc(device, info) ||
++        info.type != ImageType::e2D || info.size.depth != 1) {
+         return false;
+     }
+     return Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu &&
+@@ -332,7 +378,7 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
+     if (!IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported()) {
+         return false;
+     }
+-    if (IsHugeAstcArray(device, info)) {
++    if (IsHugeAstcArray(device, info) || IsUnevenMipRgba8Astc(device, info)) {
+         return true;
+     }
+     if (Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu) {
+@@ -1260,8 +1306,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
      }
  }
  
@@ -8740,7 +9427,44 @@ index 65f84789..3f89065d 100644
  }
  
  StagingBufferRef TextureCacheRuntime::UploadStagingBuffer(size_t size, bool deferred) {
-@@ -4580,6 +4580,10 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
+@@ -2889,7 +2935,8 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
+       runtime{&runtime_},
+       original_image(MakeImage(runtime_.device, runtime_.memory_allocator,
+                                TrimmedHostInfo(runtime_.device, info, host_level_offset),
+-                               IsHugeAstcArray(runtime_.device, info)
++                               IsHugeAstcArray(runtime_.device, info) ||
++                                       IsUnevenMipRgba8Astc(runtime_.device, info)
+                                    ? std::span<const VkFormat>{HugeAstcViewFormats}
+                                : IsOpaqueBc1Astc(runtime_.device, info)
+                                    ? std::span<const VkFormat>{OpaqueAstcViewFormats}
+@@ -2930,6 +2977,17 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
+                 WillUseGpuBcnTranscode(runtime->device, info)) {
+                 flags |= VideoCommon::ImageFlagBits::AcceleratedUpload;
+             }
++            if (IsUnevenMipRgba8Astc(runtime->device, info)) {
++                static std::atomic<u32> uneven_images{0};
++                const u32 count = ++uneven_images;
++                if (count <= 4 || (count & (count - 1)) == 0) {
++                    LOG_INFO(Render_Vulkan,
++                             "ASTC {}x{}x{} with {} levels kept as RGBA8 (uneven BC block mips), "
++                             "{} images so far",
++                             info.size.width, info.size.height, info.resources.layers,
++                             info.resources.levels, count);
++                }
++            }
+             break;
+         case Settings::AstcDecodeMode::CpuAsynchronous:
+             flags |= VideoCommon::ImageFlagBits::AsynchronousDecode;
+@@ -4190,7 +4248,7 @@ ImageView::ImageView(TextureCacheRuntime& runtime, const VideoCommon::ImageViewI
+         }
+     }
+     auto format_info = MaxwellToVK::SurfaceFormat(*device, FormatType::Optimal, true, format);
+-    if (IsHugeAstcArray(*device, image.info)) {
++    if (IsHugeAstcArray(*device, image.info) || IsUnevenMipRgba8Astc(*device, image.info)) {
+         format_info.format = VideoCore::Surface::IsPixelFormatSRGB(format)
+                                  ? VK_FORMAT_A8B8G8R8_SRGB_PACK32
+                                  : VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+@@ -4580,6 +4638,10 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
      key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
      key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();
      key.srgb_border = has_srgb_border_color && IsPixelFormatSRGB(image_view.format);
@@ -8751,7 +9475,7 @@ index 65f84789..3f89065d 100644
      if (needs_swizzle_mapping && !key.drop_custom_border && !image_view.HasIdentitySwizzle()) {
          const VkComponentMapping& mapping = image_view.Swizzle();
          key.swizzle = {mapping.r, mapping.g, mapping.b, mapping.a};
-@@ -4643,6 +4647,9 @@ VkSampler Sampler::Emplace(VariantKey key) {
+@@ -4643,6 +4705,9 @@ VkSampler Sampler::Emplace(VariantKey key) {
      }
  
      VkSamplerCreateInfo create_info = base_ci;
@@ -9010,10 +9734,10 @@ index cfdc47af..5621a8e5 100644
 +
  } // namespace VideoCommon
 diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
-index 8ca5df23..92e444aa 100644
+index 8ca5df23..3f21161e 100644
 --- a/src/video_core/texture_cache/texture_cache.h
 +++ b/src/video_core/texture_cache/texture_cache.h
-@@ -137,9 +137,52 @@ void TextureCache<P>::RunGarbageCollector() {
+@@ -137,9 +137,55 @@ void TextureCache<P>::RunGarbageCollector() {
      bool evict_old_costly = false;
      u64 ticks_to_destroy = 0;
      size_t num_iterations = 0;
@@ -9054,6 +9778,9 @@ index 8ca5df23..92e444aa 100644
 +                         entry.map.mapped_span, swizzle_data_buffer);
 +            runtime.FreeDeferredStagingBuffer(entry.map);
 +            ++gc_download_deletes;
++            // Guest memory holds the GPU's data now (DeleteImage must not mark it stale).
++            image.flags &= ~ImageFlagBits::GpuModified;
++            ClearStaleImage(image);
 +            Evict(entry.image_id);
 +        }
 +        pending.clear();
@@ -9068,7 +9795,7 @@ index 8ca5df23..92e444aa 100644
          ticks_to_destroy = aggressive_mode ? 10ULL : high_priority_mode ? 25ULL : 50ULL;
          // EDEN_NX2_TC_MIN_AGE=<frames>: never evict images used more recently (thrash tests).
          static const u64 min_age = [] {
-@@ -149,11 +192,15 @@ void TextureCache<P>::RunGarbageCollector() {
+@@ -149,11 +195,15 @@ void TextureCache<P>::RunGarbageCollector() {
          ticks_to_destroy = (std::max)(ticks_to_destroy, min_age);
          num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
      };
@@ -9086,7 +9813,7 @@ index 8ca5df23..92e444aa 100644
          --num_iterations;
          auto& image = slot_images[image_id];
          if (True(image.flags & ImageFlagBits::IsDecoding)) {
-@@ -165,23 +212,28 @@ void TextureCache<P>::RunGarbageCollector() {
+@@ -165,23 +215,29 @@ void TextureCache<P>::RunGarbageCollector() {
              return false;
          }
          if (must_download) {
@@ -9114,6 +9841,7 @@ index 8ca5df23..92e444aa 100644
 +                             ImageMemoryBytes(image);
 +            pending.push_back(CollectorDownload{image_id, map, std::move(copies)});
 +        } else {
++            MarkStale(image); // before UntrackImage (see MarkStale)
 +            Evict(image_id);
          }
 -        ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
@@ -9128,7 +9856,7 @@ index 8ca5df23..92e444aa 100644
              num_iterations >>= 1;
              high_priority_mode = false;
          }
-@@ -198,6 +250,11 @@ void TextureCache<P>::RunGarbageCollector() {
+@@ -198,6 +254,11 @@ void TextureCache<P>::RunGarbageCollector() {
              std::vector<ImageId> candidates;
              const size_t limit = num_iterations * 8;
              lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, [&](ImageId image_id) {
@@ -9140,7 +9868,7 @@ index 8ca5df23..92e444aa 100644
                  candidates.push_back(image_id);
                  return candidates.size() >= limit;
              });
-@@ -249,18 +306,27 @@ void TextureCache<P>::RunGarbageCollector() {
+@@ -249,18 +310,163 @@ void TextureCache<P>::RunGarbageCollector() {
          evict_old_costly = false;
      }
      Collect();
@@ -9150,6 +9878,142 @@ index 8ca5df23..92e444aa 100644
          Collect();
      }
 +    FlushPending();
++}
++
++template <class P>
++void TextureCache<P>::UpdateStaleTracking(u64 run_begin, u64 run_pages, s32 delta) {
++    if (run_pages != 0) {
++        device_memory.UpdatePagesCachedCount(run_begin << STALE_PAGE_BITS,
++                                             run_pages << STALE_PAGE_BITS, delta);
++    }
++}
++
++template <class P>
++void TextureCache<P>::MarkStale(const ImageBase& image) {
++    if (!tc_skip_stale || False(image.flags & ImageFlagBits::GpuModified) ||
++        True(image.flags & (ImageFlagBits::Sparse | ImageFlagBits::Unbacked)) ||
++        image.guest_size_bytes == 0) {
++        return;
++    }
++    // Whole pages only: a page the image shares with other data keeps that data's state.
++    constexpr u64 page_size = u64{1} << STALE_PAGE_BITS;
++    const u64 first = (image.cpu_addr + page_size - 1) >> STALE_PAGE_BITS;
++    const u64 end = (image.cpu_addr + image.guest_size_bytes) >> STALE_PAGE_BITS;
++    if (end <= first || end > (u64{1} << 28)) {
++        return;
++    }
++    if (stale_bits.size() * 64 < end) {
++        stale_bits.resize((end + 63) / 64);
++    }
++    // Tracked from here on so CPU writes reach WriteMemory. Marking before the image's own
++    // tracking goes keeps the pages' write protection from switching off and on again.
++    u64 run_begin = 0;
++    u64 run_pages = 0;
++    for (u64 page = first; page < end; ++page) {
++        u64& word = stale_bits[page / 64];
++        const u64 bit = u64{1} << (page % 64);
++        if ((word & bit) != 0) {
++            UpdateStaleTracking(run_begin, run_pages, 1);
++            run_pages = 0;
++            continue;
++        }
++        word |= bit;
++        ++stale_page_count;
++        if (run_pages == 0) {
++            run_begin = page;
++        }
++        ++run_pages;
++    }
++    UpdateStaleTracking(run_begin, run_pages, 1);
++}
++
++template <class P>
++void TextureCache<P>::ClearStale(DAddr addr, size_t size) {
++    if (stale_page_count == 0 || size == 0) {
++        return;
++    }
++    constexpr u64 page_size = u64{1} << STALE_PAGE_BITS;
++    const u64 first = addr >> STALE_PAGE_BITS;
++    const u64 end = (std::min<u64>)((addr + size + page_size - 1) >> STALE_PAGE_BITS,
++                                    stale_bits.size() * 64);
++    u64 run_begin = 0;
++    u64 run_pages = 0;
++    for (u64 page = first; page < end;) {
++        u64& word = stale_bits[page / 64];
++        if (word == 0 && page % 64 == 0) {
++            UpdateStaleTracking(run_begin, run_pages, -1);
++            run_pages = 0;
++            page += 64;
++            continue;
++        }
++        const u64 bit = u64{1} << (page % 64);
++        if ((word & bit) != 0) {
++            word &= ~bit;
++            --stale_page_count;
++            if (run_pages == 0) {
++                run_begin = page;
++            }
++            ++run_pages;
++        } else {
++            UpdateStaleTracking(run_begin, run_pages, -1);
++            run_pages = 0;
++        }
++        ++page;
++    }
++    UpdateStaleTracking(run_begin, run_pages, -1);
++}
++
++template <class P>
++void TextureCache<P>::ClearStaleImage(const ImageBase& image) {
++    if (stale_page_count == 0) {
++        return;
++    }
++    if (False(image.flags & ImageFlagBits::Sparse)) {
++        ClearStale(image.cpu_addr, image.guest_size_bytes);
++        return;
++    }
++    ClearStaleGpu(image.gpu_addr, image.guest_size_bytes);
++}
++
++template <class P>
++void TextureCache<P>::ClearStaleGpu(GPUVAddr gpu_addr, size_t size) {
++    if (stale_page_count == 0) {
++        return;
++    }
++    // Each piece is contiguous in device memory (GetSubmappedRange splits where it is not).
++    for (const auto& [piece_addr, piece_size] : gpu_memory->GetSubmappedRange(gpu_addr, size)) {
++        if (const auto device_addr = gpu_memory->GpuToCpuAddress(piece_addr)) {
++            ClearStale(*device_addr, piece_size);
++        }
++    }
++}
++
++template <class P>
++bool TextureCache<P>::IsAllStale(DAddr addr, size_t size) const {
++    if (stale_page_count == 0 || size == 0) {
++        return false;
++    }
++    constexpr u64 page_size = u64{1} << STALE_PAGE_BITS;
++    const u64 first = addr >> STALE_PAGE_BITS;
++    const u64 end = (addr + size + page_size - 1) >> STALE_PAGE_BITS;
++    if (end > stale_bits.size() * 64) {
++        return false;
++    }
++    for (u64 page = first; page < end;) {
++        const u64 word = stale_bits[page / 64];
++        if (page % 64 == 0 && page + 64 <= end) {
++            if (word != ~u64{0}) {
++                return false;
++            }
++            page += 64;
++            continue;
++        }
++        if (((word >> (page % 64)) & 1) == 0) {
++            return false;
++        }
++        ++page;
++    }
++    return true;
  }
  
  template <class P>
@@ -9171,7 +10035,7 @@ index 8ca5df23..92e444aa 100644
      expected_memory =
          (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
      minimum_memory =
-@@ -426,9 +492,9 @@ void TextureCache<P>::TickFrame() {
+@@ -426,12 +632,18 @@ void TextureCache<P>::TickFrame() {
          if constexpr (requires { runtime.LogMemoryStatistics(); }) {
              runtime.LogMemoryStatistics();
          }
@@ -9183,7 +10047,16 @@ index 8ca5df23..92e444aa 100644
                   async_decodes_queued, astc_opaque_images, astc_alpha_images);
          LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} uploads from guest memory, {} MiB (largest {} MiB, {} by layer)",
                   images_uploaded, uploaded_bytes >> 20, largest_upload >> 20, layer_uploads);
-@@ -447,7 +513,8 @@ void TextureCache<P>::TickFrame() {
++        LOG_INFO(HW_GPU,
++                 "Texture cache last 600 frames: stale uploads skipped {} ({} MiB), {} uploaded "
++                 "for buffer-written pages; {} MiB of pages marked stale",
++                 tc_stale_skips, tc_stale_skip_bytes >> 20, tc_stale_gpu_written,
++                 (stale_page_count << STALE_PAGE_BITS) >> 20);
++        tc_stale_skips = tc_stale_skip_bytes = tc_stale_gpu_written = 0;
+         images_uploaded = uploaded_bytes = largest_upload = layer_uploads = 0;
+         astc_opaque_images = astc_alpha_images = 0;
+         std::vector<std::pair<u32, u64>> shapes;
+@@ -447,7 +659,8 @@ void TextureCache<P>::TickFrame() {
          created_shapes.clear();
          // The per-image and per-shape tallies only feed debug lines: skip them while those are off.
          debug_stats = Common::Log::IsLevelEnabled(Common::Log::Class::HW_GPU, Common::Log::Level::Debug);
@@ -9193,7 +10066,7 @@ index 8ca5df23..92e444aa 100644
          images_created = images_deleted = 0;
      }
      if (total_used_memory > minimum_memory) {
-@@ -508,8 +575,16 @@ void TextureCache<P>::FillImageViews(std::span<ImageViewInOut> views, bool compu
+@@ -508,8 +721,16 @@ void TextureCache<P>::FillImageViews(std::span<ImageViewInOut> views, bool compu
          if (blacklist) {
              has_blacklisted = false;
          }
@@ -9211,7 +10084,31 @@ index 8ca5df23..92e444aa 100644
              if (blacklist) {
                  if (view.blacklist && view.id != NULL_IMAGE_VIEW_ID) {
                      const ImageViewBase& image_view = slot_image_views[view.id];
-@@ -1081,10 +1156,20 @@ template <class P>
+@@ -921,6 +1142,7 @@ FramebufferId TextureCache<P>::GetFramebufferId(const RenderTargets& key) {
+ 
+ template <class P>
+ void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
++    ClearStale(cpu_addr, size);
+     ForEachImageInRegion(cpu_addr, size, [this, cpu_addr, size](ImageId image_id, Image& image) {
+         if (True(image.flags & ImageFlagBits::UnwrittenSparse)) {
+             // Written at last: a backed image replaces it where it is used next.
+@@ -998,6 +1220,7 @@ void TextureCache<P>::DownloadMemory(DAddr cpu_addr, size_t size) {
+             Image& image = slot_images[entry.image_id];
+             SwizzleImage(*gpu_memory, image.gpu_addr, image.info, entry.copies,
+                          entry.map.mapped_span, swizzle_data_buffer);
++            ClearStaleImage(image);
+         }
+         pending.clear();
+         pending_bytes = 0;
+@@ -1054,6 +1277,7 @@ void TextureCache<P>::UnmapMemory(DAddr cpu_addr, size_t size) {
+         UnregisterImage(id);
+         DeleteImage(id);
+     }
++    ClearStale(cpu_addr, size);
+ }
+ 
+ template <class P>
+@@ -1081,10 +1305,20 @@ template <class P>
  bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
                                  const Tegra::Engines::Fermi2D::Surface& src,
                                  const Tegra::Engines::Fermi2D::Config& copy) {
@@ -9232,7 +10129,52 @@ index 8ca5df23..92e444aa 100644
      const BlitImages images = *result;
      const ImageId dst_id = images.dst_id;
      const ImageId src_id = images.src_id;
-@@ -2990,6 +3075,11 @@ ImageId TextureCache<P>::FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr)
+@@ -1530,12 +1764,14 @@ void TextureCache<P>::PopAsyncFlushes() {
+                 std::span<u8> download_span =
+                     download_buffer.mapped_span.subspan(download_buffer.offset);
+                 SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, download_span, swizzle_data_buffer);
++                ClearStaleImage(image);
+             } else {
+                 const BufferDownload& buffer_info = slot_buffer_downloads[download_info.object_id];
+                 std::span<u8> download_span =
+                     download_buffer.mapped_span.subspan(download_buffer.offset);
+                 gpu_memory->WriteBlockUnsafe(buffer_info.address, download_span.data(),
+                                              buffer_info.size);
++                ClearStaleGpu(buffer_info.address, buffer_info.size);
+                 slot_buffer_downloads.erase(download_info.object_id);
+             }
+         }
+@@ -1578,6 +1814,7 @@ void TextureCache<P>::PopAsyncFlushes() {
+             const ImageBase& image = download_info.GetImage(slot_images);
+             const auto copies = FullDownloadCopies(image.info);
+             SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, download_span, swizzle_data_buffer);
++            ClearStaleImage(image);
+             download_map.offset += image.unswizzled_size_bytes;
+             download_span = download_span.subspan(image.unswizzled_size_bytes);
+         }
+@@ -1725,6 +1962,21 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
+         TrackImage(image, image_id);
+     }
+ 
++    // Made where a dropped GPU-written image left stale bytes (MarkStale): nothing to upload.
++    // Pages the buffer cache wrote on the GPU may hold data written back since: upload those.
++    if (tc_skip_stale && image.dirty_layers.empty() &&
++        False(image.flags & (ImageFlagBits::Sparse | ImageFlagBits::SparseLayers |
++                             ImageFlagBits::SparseTiles | ImageFlagBits::Unbacked)) &&
++        IsAllStale(image.cpu_addr, image.guest_size_bytes)) {
++        if (!Tegra::Nx2MayBeGpuWritten(image.cpu_addr, image.guest_size_bytes)) {
++            ++tc_stale_skips;
++            tc_stale_skip_bytes += image.guest_size_bytes;
++            runtime.TransitionImageLayout(image);
++            return;
++        }
++        ++tc_stale_gpu_written;
++    }
++
+     if (True(image.flags & ImageFlagBits::SparseLayers)) {
+         RefreshSparseLayers(image);
+         return;
+@@ -2990,6 +3242,11 @@ ImageId TextureCache<P>::FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr)
  template <class P>
  std::pair<u32, u32> TextureCache<P>::PrepareDmaImage(ImageId dst_id, GPUVAddr base_addr,
                                                       bool mark_as_modified) {
@@ -9244,7 +10186,15 @@ index 8ca5df23..92e444aa 100644
      const auto& image = slot_images[dst_id];
      const auto base = image.TryFindBase(base_addr);
      PrepareImage(dst_id, mark_as_modified, false);
-@@ -3747,6 +3837,8 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
+@@ -3456,6 +3713,7 @@ template <class P>
+ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
+     ImageBase& image = slot_images[image_id];
+     ++images_deleted;
++    MarkStale(image);
+     // Drop every decode still queued for it, whatever IsDecoding says: an image re-decoded while
+     // a decode was in flight has two, and the first to finish clears the flag. A decode left
+     // behind was uploaded into the next image to take this slot (another texture's data: garbage
+@@ -3747,6 +4005,8 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
          // same guest data, which is uploaded from guest memory instead.
          return;
      }
@@ -9254,10 +10204,18 @@ index 8ca5df23..92e444aa 100644
      if (is_rescaled) {
          ASSERT(True(dst.flags & ImageFlagBits::Rescaled));
 diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
-index 87d0d797..84fbad4b 100644
+index 87d0d797..e11feb1e 100644
 --- a/src/video_core/texture_cache/texture_cache_base.h
 +++ b/src/video_core/texture_cache/texture_cache_base.h
-@@ -125,7 +125,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <atomic>
++#include <cstdlib>
+ #include <deque>
+ #include <limits>
+ #include <map>
+@@ -125,7 +126,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
      // Periodic statistics (TickFrame).
      u64 gc_deletes{};
      u64 gc_costly_deletes{};
@@ -9267,6 +10225,36 @@ index 87d0d797..84fbad4b 100644
      u64 async_decodes_queued{};
      u64 images_created{};
      u64 images_uploaded{};   ///< Image contents uploaded from guest memory (last 600 frames)
+@@ -553,6 +555,29 @@ private:
+     /// Applies EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB and logs the thresholds.
+     void ApplyThresholdOverrides(bool log = true);
+ 
++    /// A GPU-written image dropped without being written back leaves its
++    /// guest memory stale (the GPU's data is gone). Its whole pages are marked here and kept
++    /// tracked, so CPU writes, unmaps and write-backs clear them. An image made entirely on marked
++    /// pages starts without an upload: the upload would only copy stale bytes the GPU overwrites.
++    void MarkStale(const ImageBase& image);
++    void ClearStale(DAddr addr, size_t size);
++    void ClearStaleImage(const ImageBase& image);
++    /// Clears every device range [gpu_addr, gpu_addr + size) maps to.
++    void ClearStaleGpu(GPUVAddr gpu_addr, size_t size);
++    [[nodiscard]] bool IsAllStale(DAddr addr, size_t size) const;
++    void UpdateStaleTracking(u64 run_begin, u64 run_pages, s32 delta);
++    bool tc_skip_stale{[] {
++        const char* value = std::getenv("EDEN_NX2_TC_SKIP_STALE");
++        return value == nullptr || value[0] != '0'; // EDEN_NX2_TC_SKIP_STALE=0: off
++    }()};
++    /// Device memory pages (Core::Memory::YUZU_PAGEBITS), not this cache's 1 MiB lookup pages.
++    static constexpr u64 STALE_PAGE_BITS = 12;
++    std::vector<u64> stale_bits; ///< One bit per device page
++    u64 stale_page_count{};
++    u64 tc_stale_skips{};        ///< Uploads skipped (last 600 frames)
++    u64 tc_stale_skip_bytes{};
++    u64 tc_stale_gpu_written{};  ///< Stale but buffer-written pages: uploaded after all
++
+     /// The CPU address an image at gpu_addr is keyed by: its backing, or a fixed stand-in.
+     [[nodiscard]] std::optional<DAddr> ImageCpuAddress(GPUVAddr gpu_addr, size_t size) const;
+ 
 diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
 index d28dd131..34f972d7 100644
 --- a/src/video_core/vulkan_common/vulkan_device.cpp
