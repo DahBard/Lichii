@@ -3433,6 +3433,7 @@ private:
     /// Calls func(index, device address) for `count` words from `begin`, while it returns true.
     template <typename Func>
     bool DeviceWords(GPUVAddr begin, u32 count, Func&& func);
+    void FrontNoteReport(VideoCommon::GpuSplit& split, const FrontState& state);
     void FrontVerify(VideoCommon::GpuSplit& split, FrontState& state);
     void FinishFrontMacro(Core::System& system);
     std::unique_ptr<FrontState> front;
