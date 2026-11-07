@@ -60,10 +60,12 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
  trace-preflush.bat           ab-7 with the logging of perf-trace.bat
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
- trace-native-shuffle.bat     fragment shader shuffles stay native on AMD instead of running
-                              as loops (EDEN_AMD_FRAGMENT_SHUFFLE=1), logged like perf-trace.bat.
-                              An older AMD driver crashed building one Ocarina shader this way:
-                              if the emulator closes while building shaders, don't use it
+ trace-dynfps-raw.bat         Ocarina's Dynamic FPS follows each frame's own time instead of an
+                              8-frame average (LICHII_DYNFPS_SMOOTHING=1): the average makes the
+                              game run fast for a moment after slow frames; logs like perf-trace
+ trace-dynfps-official.bat    Dynamic FPS keeps real speed only down to 20 fps as in official
+                              builds (LICHII_DYNFPS_MIN_FPS=20; this build: 10 fps), so the game
+                              slows down below 20 fps; logs like perf-trace.bat
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
                               (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1)
