@@ -65,10 +65,11 @@ through compute (#569), NVIDIA DLSS for Ocarina with camera motion vectors
 (#616), `pin_gpu_threads` (#418, #530; off, our hybrid placement stays), #351 table-pointer
 pools bound to the storage buffer reach (replaces our 256 MiB cap), #397, #440, #178, #245, #186,
 64 storage buffers (6645721f2). Merge choices are in the merge commit `82ad59467`. On top: #591
-(v53 caches carry over to v54), a log line counting cached pipelines left out by reason, Kitsu's
-exit-hang fix, Frizti v3's drain-free acquire polls (`LICHII_ACQUIRE_POLL=0` undoes),
-MME DMA reads of report pages drain only for reports that can stay pending
-(`LICHII_REPORT_DRAIN=all` undoes), expiring preflush marks (`LICHII_PREFLUSH_FRAMES`, 120).
+(v53 caches carry over to v54), a log line counting cached pipelines left out by reason, cached
+pipelines from other drivers adopted (d92a29336), Kitsu's exit-hang fix, Frizti v3's drain-free
+acquire polls (`LICHII_ACQUIRE_POLL=0` undoes), MME DMA reads of report pages drain only for
+reports that can stay pending (`LICHII_REPORT_DRAIN=all` undoes), expiring preflush marks
+(`LICHII_PREFLUSH_FRAMES`, 120).
 What follows describes rounds 1-12.
 
 Upstream nx2 up to `09b78bd2df`, which is build 93, the newest published build (builds 89-92 were
@@ -332,13 +333,19 @@ Own changes:
     22-35 to 15-20 as the downloads grew (median 20.6); guest cores 4 and 5 40.2 and 37.9 ms a
     frame, GPU busy 46.8 ms. Round 13 lets marks expire.
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
-  `b06d1818e`, cache v53 like r18) built only ~1,700 pipelines at boot on r18, even with
-  `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` (r18 builds up to 4,096 without it, so the loader accepted
-  only ~1,700 records). Either the file wasn't the one read (`shader\0400486024dec000\
-  vulkan.fork-v53.bin`; the owner's own had 1,927-2,009) or its records carry dynamic state
-  flags this GPU and settings (EDS2, vertex input dynamic state on) don't match, which the loader
-  dropped without a word; round 13 logs them by reason. A file of another version is deleted at
-  boot, so the owner keeps a copy.
+  `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
+  vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
+  `EDEN_NX2_PRELOAD_ALL_PIPELINES=1`), the game built everything again in game, and the file grew
+  with the new records. Cause: a graphics key holds the recording driver's id and version
+  (`FixedPipelineState::driver_id`, `driver_version`, inside `Size()`), so no record from another
+  GPU or driver version ever met a runtime key, and records whose dynamic state flags differ were
+  dropped at load without a word. Round 13 logs the drops by reason; d92a29336 gives records this
+  driver's id and version and converts records made without dynamic vertex input (NVIDIA before
+  580.119.02 has it off) and with the other color write enable form. Other flag differences
+  (an EDS level) still drop; the log names them. A file of another cache version is deleted at
+  boot, so the owner keeps a copy. With 22,000 records, `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` builds
+  them all at boot (~0.45 MB of driver memory each); without it 4,096 build at boot and the rest
+  in the background.
 - Sharkiix (2026-11-07): Shakoquo/Lichii-sharkiix-version, AMD- and Ocarina-focused, tested on an RX
   9060 XT. No history of its own: v1/v2 are Lichii `99ac3d59` plus one commit (faster tensor
   emulation, semaphore acquire resumes, texture cache GC min age, the sampler and blend fixes), 3.0
