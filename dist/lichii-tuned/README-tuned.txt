@@ -39,6 +39,12 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Ocarina's built-in Dynamic FPS mod takes each frame's own time instead of an average of the
    last 8 frames, so the game no longer runs fast for a moment after a slow stretch
    (LICHII_DYNFPS_SMOOTHING=8 brings the average back).
+ * The split GPU thread waits less for its back thread: a waiting semaphore is polled from
+   memory instead of draining the back each time (ported from Frizti's fork), and macro reads of
+   pages with already-answered occlusion reports no longer drain it.
+ * Older shader caches carry over: a new cache version starts from the newest compatible older
+   one (Lichii #591), and the log says how many cached pipelines were left out and why (another
+   GPU or another dynamic state setting).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -57,7 +63,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
  ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
  ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
-                              over OCuLink, but some flicker was reported
+                              over OCuLink; a page stays preflushed for 120 frames, longer if the
+                              game reads it again (LICHII_PREFLUSH_FRAMES=0 keeps it for good)
  ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
                               (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
                               can be missing for a few frames; logs like perf-trace.bat
@@ -75,8 +82,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
- trace-strict.bat             ab-4 (emulated CPU cores on P-cores too) logged like
-                              perf-trace.bat
+ trace-downloads.bat          trace-preflush.bat plus a list of what the GPU copies back and
+                              which GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
+ trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
+                              (LICHII_ACQUIRE_POLL=0, LICHII_REPORT_DRAIN=all), logged like
+                              perf-trace.bat: for comparison, or if the new waits misbehave
  trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
                               logged like perf-trace.bat: slower, for comparison
  perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
