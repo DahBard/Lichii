@@ -27,6 +27,7 @@
 #include "video_core/gpu_thread.h"
 #include "video_core/nx2.h"
 #include "video_core/gpu_split.h"
+#include "video_core/gpu_wait_stats.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/renderer_base.h"
@@ -114,12 +115,14 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         auto& split = VideoCommon::GpuSplit::Get();
         ThreadStats* const thread_stats =
             std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr ? new ThreadStats{} : nullptr;
+        namespace WaitStats = VideoCommon::GpuWaitStats;
         while (!stop_token.stop_requested()) {
             if (thread_stats) {
                 thread_stats->MaybeLog(scheduler.HasPendingChannels());
             }
             Profile::Report();
             split.MaybeStart(system);
+            WaitStats::MaybeReport(split.Active());
             if (scheduler.HasPendingChannels()) {
                 // Suspended channels wait on semaphores the CPU releases: poll them meanwhile.
                 const u64 seen_latch = Tegra::Nx2SemaphoreWaiters::Get().LatchEpoch();
@@ -147,6 +150,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     // still waiting after 2 s (menus, loading) goes back to 1 ms sleeps.
                     Profile::Scope scope{Profile::Zone::PendingSleep};
                     const ThreadStats::Timer timer{thread_stats, ThreadStats::PendingEmpty};
+                    const WaitStats::IdleScope idle{WaitStats::g_front_poll_ns};
                     const auto waited = std::chrono::steady_clock::now() - last_progress;
                     if (waited < std::chrono::microseconds{500}) {
                         std::this_thread::yield();
@@ -169,6 +173,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             } else {
                 Profile::Scope scope{Profile::Zone::Idle};
                 const ThreadStats::Timer timer{thread_stats, ThreadStats::Idle};
+                const WaitStats::IdleScope idle{WaitStats::g_front_idle_ns};
                 state.queue.PopWait(next, stop_token);
             }
             if (stop_token.stop_requested()) {

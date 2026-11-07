@@ -26,6 +26,7 @@
 #include "video_core/engines/engine_interface.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu_split.h"
+#include "video_core/gpu_wait_stats.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_fast_draw.h"
@@ -501,6 +502,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
         u64 available = published.load(std::memory_order_acquire);
         if (available == read_position) {
             Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
+            const GpuWaitStats::IdleScope idle{GpuWaitStats::g_back_idle_ns};
             // The front usually sends more within microseconds: spin briefly before sleeping.
             Common::SpinUntil(&published, 8192, [&] {
                 available = published.load(std::memory_order_acquire);
