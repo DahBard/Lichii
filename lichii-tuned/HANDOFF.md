@@ -146,6 +146,8 @@ Own changes:
   9.2, p90 30.8), GPU busy per frame median 53.3 ms (62% of frames over 40 ms): more time in
   the heavy views. Frame rate follows GPU time window by window. The "1X (720p/1080p)" label is
   the resolution scale's Switch 1 wording; the game composites 2560x1440 docked.
+- Run #11 (round 5): `pgo` and `pgo-lto` built (artifacts `lichii-tuned-r11-pgo`,
+  `lichii-tuned-r11-pgo-lto`). Untested.
 
 ## Next steps
 
