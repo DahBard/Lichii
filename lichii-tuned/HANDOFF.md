@@ -251,6 +251,8 @@ Own changes:
   it. The game reports ~20,000 occlusion counts a second (~1,400 a frame), reads them on the CPU to
   set render enable (~19,000 `DKB_CONDITION ... cpu` a second), and those reads cause the 33.7 full
   GPU waits a second (163 ms/s) at buffer_cache.h:407.
+- Run #15 (round 9) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r15-pgo`,
+  `lichii-tuned-r15-pgo-lto`).
 - Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
   not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
   build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
