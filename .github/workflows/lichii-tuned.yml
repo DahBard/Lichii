@@ -35,10 +35,11 @@ jobs:
           - variant: pgo-lto
             lto: "ON"
           # The same source built like the official MSVC download (MSVC, no PGO, baseline x86-64),
-          # to tell compiler differences from source changes.
-          - variant: msvc
-            lto: "OFF"
-            msvc: true
+          # to tell compiler differences from source changes. Off until a glitch shows up only in
+          # the pgo builds; run lichii-tuned/check_patch_warnings.py before turning it on.
+          # - variant: msvc
+          #   lto: "OFF"
+          #   msvc: true
           # Instrumented build that records an Ocarina profile while you play (slower). Off until
           # a profile is wanted: the r7 pgo-train download records one for this code too.
           # - variant: pgo-train

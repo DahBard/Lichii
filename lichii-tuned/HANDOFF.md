@@ -23,17 +23,18 @@ he tests and sends `eden_log.txt`, analyze, next build.
   + this folder. The workflow applies `lichii-tuned/lichii-tuned.patch` and builds on every push to
   `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with `[skip ci]` doesn't).
 - Variants (windows-2022): `pgo` (MSYS2 UCRT64 clang, repo's `eglantine.profdata`,
-  `-march=x86-64-v3 -mtune=arrowlake -ffp-contract=off`), `pgo-lto` (+ ThinLTO), `msvc` (built
-  like the official MSVC download, for compiler A/B of glitches). `pgo-train` (instrumented, writes
-  `lichii-pgo-*.profraw`) is commented out; profiles put in `lichii-tuned/pgo/` (raw or zipped) are
-  merged 4:1 with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only
-  behind the same variant of the previous run. ~40-50 min with warm caches.
+  `-march=x86-64-v3 -mtune=arrowlake -ffp-contract=off`), `pgo-lto` (+ ThinLTO). Commented out
+  until needed: `msvc` (built like the official MSVC download, to A/B a glitch that only the pgo
+  builds show; off since 2026-11-07) and `pgo-train` (instrumented, writes
+  `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
+  with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
+  same variant of the previous run. ~40-50 min with warm caches.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (49 commits over 588bfa6; pushing it
   doesn't trigger builds). `lichii-tuned/tuned4.bundle` holds the same history as a backup
   (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has 588bfa6). The patch
   is `git diff --binary 588bfa6 tuned4`; check it with `git apply --check` on a clean 588bfa6
   checkout before committing it.
-- Before committing a new patch, run `python3 -I lichii-tuned/check_patch_warnings.py <tuned4
+- Before turning `msvc` on, run `python3 -I lichii-tuned/check_patch_warnings.py <tuned4
   checkout>`. It compiles the changed files with clang and GCC and reports warnings on added
   lines that the msvc variant treats as errors (shadowing, signed/unsigned compares, unused
   locals and captures, unhandled enumerators, video_core conversions). The pgo builds don't
@@ -113,19 +114,21 @@ Own changes:
   `lichii-tuned-r9-pgo-lto`); `msvc` failed at 914/1880 on C4458 (#319's `state` in
   kepler_compute.cpp) and C4456/C4457 (#345's `[source, count]` in maxwell_3d.cpp), fixed in
   round 4. Rounds 3 and 3b are untested.
+- Run #10 (round 4): `pgo` and `pgo-lto` built (artifacts `lichii-tuned-r10-pgo`,
+  `lichii-tuned-r10-pgo-lto`); `msvc` was cancelled 10 minutes into its build, with no error
+  before that. Untested.
 
 ## Next steps
 
-1. Run #10 (round 4: round 3b, the PR updates above and the MSVC fix, started 00:02 UTC): when
-   `pgo-lto` / `pgo` finish, have the owner test r10-pgo-lto rather than r9, which
-   has the unsound #345 acquires and the #376 collector bug. Judge from the second launch (the
-   first recompiles shaders), run `perf-trace.bat` at the same spots, and compare with the
-   numbers above. If `msvc` fails, add the case to `check_patch_warnings.py`.
+1. Have the owner test r10-pgo-lto rather than r9, which has the unsound #345 acquires and the
+   #376 collector bug. Judge from the second launch (the first recompiles shaders), run
+   `perf-trace.bat` at the same spots, and compare with the numbers above.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
    try `ab-8-skip-unbuilt-draws.bat` for first-time shaders and `ab-4-strict-placement.bat`;
-   PGO training on Ocarina; compare `msvc` against `pgo` if glitches remain.
+   PGO training on Ocarina. If a glitch shows up that the official build doesn't have and the
+   A/B launchers don't remove, turn `msvc` back on to tell the compiler from the source.
 4. Each round, port new commits from the included pull requests (#354 was still changing late
    on 2026-11-06): `git fetch https://github.com/zortos293/Lichii refs/pull/<n>/head` and compare
    patch ids with tuned4. Per `AGENTS.md`, also check Eglantine (Djihads80/Eglantine).
