@@ -192,28 +192,42 @@ Own changes:
   1440p), but the rest of the GPU time is spread over ~40 submissions per frame at ~1 ms each, so it
   is mostly not pixel cost: per-submission and render pass overhead (1,400-2,500 render pass ends
   per second) and untimed mesh draws are the suspects.
-- Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's
-  Eglantine fork) is not an AMD performance fork and was merged into Eglantine (#149). Lichii
-  issue #403 (RX 9070 XT, build 93): ~18 -> ~29 fps after log filter `*:Error`, high process
-  priority and Xbox Game Bar capture off. FSR SDK 2.4.0 (October 2026) runs the FSR 4 ML
-  upscaler on Vulkan through AMD's signed `amd_fidelityfx_loader_vk.dll` /
-  `amd_fidelityfx_upscaler_vk.dll` (binary redistribution only), RX 6000 and newer; it takes
-  color, depth, motion vectors and jitter like FSR 3.1. No emulator has integrated it; Lichii's
-  DLSS replacement of Ocarina's AA network (#253, #387) is the place to add it.
-  Details and links: `lichii-tuned/research-forks-amd.md`.
+- Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
+  not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
+  build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
+  capture off; our logs are small (~4,700 lines in 4 minutes), so the filter matters less here.
+  Upstream #408 (opened 2026-11-07, after the snapshot) keys pipelines only by the vertex attributes
+  a program reads (Ocarina's task and mesh programs had 191 keys for 31 shader sets), evicts
+  pipelines only past a RAM budget and stops inlining the global memory helpers (compute builds of
+  up to 7.6 s). Its author reports 60 fps (the vsync cap) at 2560x1440 on an RTX 3060 with the GPU
+  ~65% busy, so the 9070 XT's 35-77 ms per frame comes from AMD or this eGPU link, not from the
+  game's workload. FSR SDK 2.4.0 (October 2026) runs the FSR 4 ML upscaler on Vulkan through AMD's
+  signed `amd_fidelityfx_loader_vk.dll` / `amd_fidelityfx_upscaler_vk.dll` (binary redistribution
+  only), RX 6000 and newer. Like FSR 3.1 it needs depth, motion vectors and jitter, and Ocarina
+  renders with neither jitter nor motion vectors (`docs/nx2/oot-network-bypass.md`). Open upstream
+  #253 adds both for NVIDIA DLSS in place of the network (Halton jitter on the scene camera's
+  viewport, camera motion vectors from depth), and the tree already runs AMD's FSR 3.1 in place of
+  other games' DLSS (`vk_fsr3_upscaler.cpp`). Going from 1440p to 4K at that point also needs the
+  resolution scaler to scale only the images after the network. The owner's settings use the
+  ScaleForce window filter and FXAA; the FSR window filter (FSR 1) or Lichii's "FSR 3" present
+  filter (its own optical flow, not AMD's FSR 3) can scale 1440p to 4K today. Details and links:
+  `lichii-tuned/research-forks-amd.md`.
 
 ## Next steps
 
-1. Run #13 (round 7), docked, same Kokiri spots: `perf-trace.bat` (new JIT), `trace-old-jit.bat`
-   (compare guest core 4 ms per frame) and `trace-flush4096.bat` (submits and render passes per
-   second, GPU span against busy time). Read the `m1:` entries and `mesh_draws=` to see whether
-   mesh draws are the untimed GPU time. For normal play, log filter `*:Error` and Xbox Game Bar
-   capture off (#403). Next: cut render pass ends at their biggest sources (`Render pass ends`
-   lines: vk_rasterizer.cpp:1871, vk_query_cache.cpp:1640, ...); if mesh draws dominate, look at
-   their task/mesh workgroup sizes on AMD; FSR 4 through the DLSS replacement path. A Radeon
-   GPU Profiler capture of one Kokiri frame would show barriers and per-draw cost directly.
-   fp16 stays off; preflush is safe but showed no gain yet. Port candidates: upstream #264,
-   #267's grass-on-sword-swing and sunlight fixes, nx2's commits since build 93.
+1. Run #13 (round 7), docked, same Kokiri spots, log filter unchanged (the trace lines are Info):
+   `perf-trace.bat` (new JIT), `trace-old-jit.bat` (compare guest core 4 ms per frame) and
+   `trace-flush4096.bat` (submits and render passes per second, GPU span against busy time). Read
+   the `m1:` entries and `mesh_draws=` to see whether mesh draws are the untimed GPU time. Ask for
+   GPU-Z's "Bus Interface" and "Resizable BAR" fields. Round 8 candidates: port #408; log the memory
+   heaps, the stream and staging buffers' memory types and the bytes uploaded and downloaded per
+   second (the eGPU link is PCIe 4.0 x4); cut render pass ends at their biggest sources (`Render
+   pass ends` lines: vk_rasterizer.cpp:1871, vk_query_cache.cpp:1640, ...); if mesh draws dominate,
+   look at their task/mesh workgroup sizes on AMD. A Radeon GPU Profiler capture of one Kokiri frame
+   (kept on the owner's PC) would show barriers and per-draw cost directly. For 4K: port #253's
+   jitter and motion vectors and feed the FSR 3.1 path, then FSR 4 through the SDK 2.4 DLLs. fp16
+   stays off; preflush is safe but showed no gain yet. Port candidates: upstream #264, #267's
+   grass-on-sword-swing and sunlight fixes, nx2's commits since build 93.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
