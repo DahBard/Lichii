@@ -231,6 +231,8 @@ Own changes:
   buffer (128 MiB) prefers device-local host-visible memory, which is then the 256 MiB BAR window
   (round 8 logs where it lands: `Stream buffer:`); uploads over 1/16 of it and all downloads go
   through host memory across the x4 link.
+- Run #14 (round 8) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r14-pgo`,
+  `lichii-tuned-r14-pgo-lto`).
 - Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
   not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
   build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
