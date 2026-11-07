@@ -2511,7 +2511,10 @@ void RasterizerVulkan::UpdateDynamicStates(const GraphicsPipeline* pipeline) {
     }
 
     if (device.IsExtVertexInputDynamicStateSupported()) {
-        if (auto* gp = pipeline_cache.CurrentGraphicsPipeline(); gp && gp->HasDynamicVertexInput()) {
+        // A draw passes the pipeline it looked up: a second lookup was ~2.5% of the back thread.
+        const GraphicsPipeline* const gp =
+            pipeline != nullptr ? pipeline : pipeline_cache.CurrentGraphicsPipeline();
+        if (gp && gp->HasDynamicVertexInput()) {
             UpdateVertexInput(regs);
         }
     }
