@@ -336,7 +336,9 @@ Own changes:
    against #345's versions; measure #345's per-bind native bank memcmp with
    `EDEN_NX2_MME_DMA_STATS=1` (Firefly's upload replaces it); build with clang-cl to use upstream's
    Ocarina PGO profile; #432 with #591 so caches survive; HMMA cooperative matrices for the "Game"
-   AA mode. For 4K: #253's jitter and motion vectors into the FSR 3.1 path, then FSR 4.
+   AA mode. Small next-round picks: Kitsu's exit-hang fix 4276c9c7d (applies cleanly); not Frizti's
+   049f87818 (no effect on flashes by its own count). For 4K: #253's jitter and motion vectors into
+   the FSR 3.1 path, then FSR 4.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);

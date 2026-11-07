@@ -150,6 +150,12 @@ Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d54
   EvilOOT's fix), preflushed reads flush on demand (049f87818), pinned split GPU threads,
   genlocked host pacing and low-latency 30 fps, fewer shader stalls (pipelines < 8000, skip
   unbuilt native draws). Most conflict with #345 in tuned4.
+- **Frizti, rechecked 2026-11-07 ~19:30 UTC**: no release after `frizti-v3` (72e5ad6c, the
+  low-latency 30 fps commit); the nx2 head (f66ea633) only adds a README note and
+  `test/no-sky-fold` is a 2026-11-05 bisect branch. Its preflush fix 049f87818 applies to tuned4
+  but by Frizti's own count didn't help (213 vs 232 white-flash reports): skip unless preflush
+  becomes the default. Kitsu (built on Frizti) has a 4-line exit-hang fix, 4276c9c7d
+  (QThread::terminate deadlock on File > Exit), which applies cleanly: take it next round.
 - **Kradnah/Firefly** (OoT): 64 KiB uniform bank uploads without page protection churn
   (bd87a1a37, ~11% of the back thread upstream; tuned4's #345 compares bank pages with memcmp on
   every bind instead), skip upload scans of unwritten buffers (f5c4496f8), cheaper back-thread
