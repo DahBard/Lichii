@@ -115,10 +115,17 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
 StagingBufferPool::~StagingBufferPool() = default;
 
 StagingBufferRef StagingBufferPool::Request(size_t size, MemoryUsage usage, bool deferred) {
-    if (!deferred && usage == MemoryUsage::Upload && size <= region_size) {
-        return GetStreamBuffer(size);
+    StagingBufferRef ref = !deferred && usage == MemoryUsage::Upload && size <= region_size
+                               ? GetStreamBuffer(size)
+                               : GetStagingBuffer(size, usage, deferred);
+    if (usage == MemoryUsage::Upload) {
+        CountStagingTraffic(ref.buffer == *stream_buffer ? StagingTraffic::StreamUpload
+                                                         : StagingTraffic::HostUpload,
+                            size);
+    } else if (usage == MemoryUsage::Download) {
+        CountStagingTraffic(StagingTraffic::Download, size);
     }
-    return GetStagingBuffer(size, usage, deferred);
+    return ref;
 }
 
 void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {

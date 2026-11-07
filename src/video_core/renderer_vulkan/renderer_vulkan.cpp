@@ -310,6 +310,33 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
+    {
+        // Where the host-visible heaps are: without Resizable BAR, device-local host-visible
+        // memory is a 256 MiB window and other host-visible memory is across the PCIe link.
+        const VkPhysicalDeviceMemoryProperties memory =
+            device.GetPhysical().GetMemoryProperties().memoryProperties;
+        std::string heaps;
+        for (u32 i = 0; i < memory.memoryHeapCount; ++i) {
+            const VkMemoryHeap& heap = memory.memoryHeaps[i];
+            heaps += fmt::format("{}{}: {} MiB{}", heaps.empty() ? "" : ", ", i, heap.size >> 20,
+                                 (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0
+                                     ? " device-local"
+                                     : "");
+        }
+        std::string types;
+        for (u32 i = 0; i < memory.memoryTypeCount; ++i) {
+            const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
+            types += fmt::format("{}{}: heap {}{}{}{}{}", types.empty() ? "" : ", ", i,
+                                 memory.memoryTypes[i].heapIndex,
+                                 (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 ? " DL" : "",
+                                 (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 ? " HV" : "",
+                                 (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 ? " HC" : "",
+                                 (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 ? " cached"
+                                                                                   : "");
+        }
+        LOG_INFO(Render_Vulkan, "Memory heaps: {}", heaps);
+        LOG_INFO(Render_Vulkan, "Memory types: {}", types);
+    }
     if (VideoCommon::RenderTrace::Enabled()) {
         LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
                  Settings::values.log_filter.GetValue());

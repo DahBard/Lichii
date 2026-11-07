@@ -44,6 +44,10 @@ class StateTracker;
 
 struct QueryCacheParams;
 
+/// Bytes requested from the staging pool, reported every 10 s with EDEN_NX2_GPU_PROFILE.
+enum class StagingTraffic { StreamUpload, HostUpload, Download };
+void CountStagingTraffic(StagingTraffic kind, u64 bytes);
+
 /// The scheduler abstracts command buffer and fence management with an interface that's able to do
 /// OpenGL-like operations on Vulkan command buffers.
 class Scheduler {
@@ -91,7 +95,7 @@ public:
         if (mesh && trace_gpu_recording) {
             ++trace_work.mesh_draws;
         }
-        if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
+        if (!trace_gpu_recording || !trace_time_draws || trace_work_count == TraceMaxWork) {
             work();
             return;
         }
@@ -125,6 +129,13 @@ public:
 
     void DeferFragmentBarrier() {
         fragment_barrier.Defer(state.renderpass != VK_NULL_HANDLE);
+    }
+
+    /// A wait for idle inside a render pass (LICHII_WFI_DEFER=1): later draws break the render
+    /// pass only as after a fragment barrier, and the full barrier follows the render pass end.
+    void DeferWaitForIdle() {
+        DeferFragmentBarrier();
+        wait_for_idle_pending = true;
     }
 
     bool HasFragmentBarrier() const {
@@ -451,6 +462,7 @@ private:
 
     std::unique_ptr<MasterSemaphore> master_semaphore;
     FragmentBarrierState fragment_barrier;
+    bool wait_for_idle_pending{};
     bool render_pass_has_stores{};
     bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
@@ -494,6 +506,11 @@ private:
     u32 trace_timestamp_bits{};
     float trace_timestamp_period{};
     bool trace_gpu_recording{};
+    /// Draws are timed in every trace_draws_every-th sampled frame (LICHII_TRACE_DRAWS_EVERY,
+    /// default 4, 0 = never): their timestamps lengthen the frame they measure.
+    bool trace_time_draws{};
+    u32 trace_draws_every{4};
+    u32 trace_samples{};
     bool trace_gpu_sampling{};
     bool trace_gpu_pending{};
     bool trace_gpu_failed{};

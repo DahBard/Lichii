@@ -44,6 +44,9 @@ std::atomic<u64> g_profile_renderpasses{};
 std::atomic<u64> g_profile_finishes{};
 std::atomic<u64> g_profile_finish_ns{};
 std::atomic<u64> g_profile_window_start{};
+std::atomic<u64> g_profile_stream_upload_bytes{};
+std::atomic<u64> g_profile_host_upload_bytes{};
+std::atomic<u64> g_profile_download_bytes{};
 std::mutex g_profile_end_mutex;
 std::map<std::string, u64> g_profile_ends;
 /// Finish (a full GPU wait) by call site: count and nanoseconds waited.
@@ -95,6 +98,13 @@ void ReportSubmitCounts() {
              static_cast<double>(g_profile_renderpasses.exchange(0)) / seconds,
              static_cast<double>(g_profile_finishes.exchange(0)) / seconds,
              static_cast<double>(g_profile_finish_ns.exchange(0)) / 1e6 / seconds);
+    constexpr double MiB = 1024.0 * 1024.0;
+    LOG_INFO(Render_Vulkan,
+             "Staging traffic per second: {:.1f} MiB uploaded through the stream buffer, {:.1f} "
+             "MiB through host memory, {:.1f} MiB downloaded",
+             static_cast<double>(g_profile_stream_upload_bytes.exchange(0)) / MiB / seconds,
+             static_cast<double>(g_profile_host_upload_bytes.exchange(0)) / MiB / seconds,
+             static_cast<double>(g_profile_download_bytes.exchange(0)) / MiB / seconds);
     std::vector<std::pair<u64, std::string>> ends;
     {
         std::scoped_lock lock{g_profile_end_mutex};
@@ -127,6 +137,23 @@ void ReportSubmitCounts() {
 }
 }
 
+void CountStagingTraffic(StagingTraffic kind, u64 bytes) {
+    if (!VideoCommon::Nx2Profile::Enabled()) {
+        return;
+    }
+    switch (kind) {
+    case StagingTraffic::StreamUpload:
+        g_profile_stream_upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        break;
+    case StagingTraffic::HostUpload:
+        g_profile_host_upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        break;
+    case StagingTraffic::Download:
+        g_profile_download_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        break;
+    }
+}
+
 void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
                                          vk::CommandBuffer upload_cmdbuf) {
     auto command = first;
@@ -148,6 +175,9 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)} {
 
     if (Common::DkbFrameTrace::Enabled()) {
+        if (const char* every = std::getenv("LICHII_TRACE_DRAWS_EVERY")) {
+            trace_draws_every = static_cast<u32>(std::strtoul(every, nullptr, 10));
+        }
         const auto physical = device.GetPhysical();
         trace_timestamp_bits =
             physical.GetQueueFamilyProperties()[device.GetGraphicsFamily()].timestampValidBits;
@@ -159,7 +189,7 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .pNext = nullptr,
                     .flags = 0,
                     .queryType = VK_QUERY_TYPE_TIMESTAMP,
-                    .queryCount = TraceMaxSubmissions * 2,
+                    .queryCount = TraceMaxSubmissions * 3,
                     .pipelineStatistics = 0,
                 });
                 trace_submissions.resize(TraceMaxSubmissions);
@@ -740,9 +770,9 @@ void Scheduler::TraceGpuSubmission() {
             u64 timestamp;
             u64 available;
         };
-        std::array<Result, TraceMaxSubmissions * 2> results{};
+        std::array<Result, TraceMaxSubmissions * 3> results{};
         const auto result = device.GetLogical().GetQueryResults(
-            *trace_query_pool, 0, trace_gpu_count * 2, trace_gpu_count * 2 * sizeof(Result),
+            *trace_query_pool, 0, trace_gpu_count * 3, trace_gpu_count * 3 * sizeof(Result),
             results.data(), sizeof(Result),
             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
         if (result == VK_NOT_READY) {
@@ -754,33 +784,37 @@ void Scheduler::TraceGpuSubmission() {
             trace_gpu_failed = true;
             return;
         }
+        const auto elapsed_ms = [&](u32 from, u32 to) {
+            return static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
+                       results[from].timestamp, results[to].timestamp, trace_timestamp_bits)) *
+                   trace_timestamp_period / 1e6;
+        };
         double total_ms{};
+        double upload_ms{};
         std::array<std::pair<double, u32>, 4> slowest{};
-        for (u32 i = 0; i < trace_gpu_count * 2; i += 2) {
-            if (results[i].available == 0 || results[i + 1].available == 0) {
+        for (u32 i = 0; i < trace_gpu_count * 3; i += 3) {
+            if (results[i].available == 0 || results[i + 1].available == 0 ||
+                results[i + 2].available == 0) {
                 return;
             }
-            const auto ticks = Common::DkbFrameTrace::TimestampDelta(
-                results[i].timestamp, results[i + 1].timestamp, trace_timestamp_bits);
-            const double duration_ms = static_cast<double>(ticks) * trace_timestamp_period / 1e6;
+            const double duration_ms = elapsed_ms(i, i + 1);
             total_ms += duration_ms;
+            upload_ms += elapsed_ms(i, i + 2);
             if (duration_ms >= 10.0 && duration_ms > slowest.back().first) {
-                slowest.back() = {duration_ms, i / 2};
+                slowest.back() = {duration_ms, i / 3};
                 std::ranges::sort(slowest, std::greater<>{});
             }
         }
-        const double span_ms = trace_gpu_skipped == 0
-            ? static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
-                  results[0].timestamp, results[trace_gpu_count * 2 - 1].timestamp,
-                  trace_timestamp_bits)) * trace_timestamp_period / 1e6
-            : -1.0;
+        const double span_ms =
+            trace_gpu_skipped == 0 ? elapsed_ms(0, trace_gpu_count * 3 - 2) : -1.0;
         LOG_INFO(Render_Vulkan,
                  "DKB gpu_frame renderer_frame={} last_submission_tick={} "
                  "gpu_frame_span_ms={:.3f} gpu_submission_sum_ms={:.3f} "
                  "measured_submissions={} dropped_submissions={} "
-                 "valid_bits={} period_ns={}",
+                 "valid_bits={} period_ns={} gpu_upload_sum_ms={:.3f} draws_timed={}",
                  trace_sample_frame, trace_gpu_tick, span_ms, total_ms, trace_gpu_count,
-                 trace_gpu_skipped, trace_timestamp_bits, trace_timestamp_period);
+                 trace_gpu_skipped, trace_timestamp_bits, trace_timestamp_period, upload_ms,
+                 trace_time_draws ? 1 : 0);
         for (const auto& [duration_ms, index] : slowest) {
             if (duration_ms < 10.0) {
                 continue;
@@ -795,9 +829,10 @@ void Scheduler::TraceGpuSubmission() {
             LOG_INFO(Render_Vulkan,
                      "DKB gpu_submission renderer_frame={} tick={} gpu_ms={:.3f} "
                      "draw_attempts={} mesh_draws={} dispatch_attempts={} shaders={} "
-                     "untracked_uses={}",
+                     "untracked_uses={} upload_ms={:.3f}",
                      trace_sample_frame, work.tick, duration_ms, work.draw_attempts,
-                     work.mesh_draws, work.dispatch_attempts, shaders, work.untracked_uses);
+                     work.mesh_draws, work.dispatch_attempts, shaders, work.untracked_uses,
+                     elapsed_ms(index * 3, index * 3 + 2));
         }
         ReportWorkTimes();
         trace_gpu_tick = 0;
@@ -809,13 +844,18 @@ void Scheduler::TraceGpuSubmission() {
     if (!trace_gpu_sampling || trace_gpu_count == TraceMaxSubmissions) {
         return;
     }
-    current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 2, 2);
-    if (trace_gpu_count == 0 && trace_work_pool) {
-        // Draws are timed inside render passes, where queries cannot be reset.
-        current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
+    // Per submission: its start, its end and the end of its upload command buffer.
+    current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 3, 3);
+    if (trace_gpu_count == 0) {
+        trace_time_draws = trace_work_pool && trace_draws_every != 0 &&
+                           trace_samples++ % trace_draws_every == 0;
+        if (trace_time_draws) {
+            // Draws are timed inside render passes, where queries cannot be reset.
+            current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
+        }
     }
     current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
-                                        trace_gpu_count * 2);
+                                        trace_gpu_count * 3);
     trace_gpu_recording = true;
 }
 
@@ -837,10 +877,14 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
         };
         upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WRITE_BARRIER);
+        if (trace_gpu_recording) {
+            upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_query_pool,
+                                         trace_gpu_count * 3 + 2);
+        }
         upload_cmdbuf.End();
         if (trace_gpu_recording) {
             cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_query_pool,
-                                 trace_gpu_count * 2 + 1);
+                                 trace_gpu_count * 3 + 1);
             trace_gpu_tick = signal_value;
             trace_work.tick = signal_value;
             trace_submissions[trace_gpu_count] = trace_work;
@@ -922,6 +966,7 @@ void Scheduler::EndRenderPass()
         ++recording_epoch;
         fragment_barrier.Reset();
         render_pass_has_stores = false;
+        const bool wait_for_idle = std::exchange(wait_for_idle_pending, false);
 
         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);
 
@@ -937,7 +982,8 @@ void Scheduler::EndRenderPass()
         Record([num_images = num_renderpass_images,
                        images = renderpass_images,
                        ranges = renderpass_image_ranges,
-                       has_transform_feedback = device.IsExtTransformFeedbackSupported()](
+                       has_transform_feedback = device.IsExtTransformFeedbackSupported(),
+                       wait_for_idle](
                           vk::CommandBuffer cmdbuf) {
             std::array<VkImageMemoryBarrier, 9> barriers;
             for (size_t i = 0; i < num_images; ++i) {
@@ -988,6 +1034,16 @@ void Scheduler::EndRenderPass()
                 cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT,
                                        VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                                        0, XFB_OUTPUT_BARRIER);
+            }
+            if (wait_for_idle) {
+                static constexpr VkMemoryBarrier WFI_BARRIER{
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                };
+                cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WFI_BARRIER);
             }
         });
 
