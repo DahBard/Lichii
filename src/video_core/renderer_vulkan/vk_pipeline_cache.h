@@ -135,7 +135,7 @@ public:
 
     void TickFrame();
 
-    [[nodiscard]] ComputePipeline* CurrentComputePipeline();
+    [[nodiscard]] ComputePipeline* CurrentComputePipeline(u64& native_key);
 
     void LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                            const VideoCore::DiskResourceLoadCallback& callback);
@@ -152,13 +152,6 @@ private:
     /// FixedPipelineState::Refresh of graphics_key, keeping only the vertex attribute types the
     /// bound programs read (VideoCommon::KeyedAttributeTypes).
     void RefreshGraphicsKey();
-
-    /// Builds a cached pipeline from its newest record that loads; remembers it in
-    /// failed_disk_pipelines when none does.
-    std::unique_ptr<GraphicsPipeline> CreateCachedGraphicsPipeline(
-        const GraphicsPipelineCacheKey& key,
-        std::vector<std::vector<VideoCommon::FileEnvironment>>& records,
-        PipelineStatistics* statistics);
 
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         ShaderPools& pools, const GraphicsPipelineCacheKey& key,
@@ -187,6 +180,28 @@ private:
                                               u32 expected_cache_version);
 
     void QueueVulkanPipelineCacheFlush();
+
+    /// Queues one write of the driver pipeline cache file on the serialization thread, with no
+    /// throttle. For the end of a precache: its builds never reach the timed flush, which counts
+    /// only pipelines built during play.
+    void QueueVulkanPipelineCacheSave();
+
+    /// One build of the shader precache: builds a pipeline and destroys it, true when it built.
+    struct PrecacheJob {
+        u64 graphics_hash{}; ///< The cached graphics pipeline it builds, 0 for a compute program
+        Common::UniqueFunction<bool> build;
+    };
+
+    /// Shader precache before the game starts (precache_shaders), on every CPU thread: the cached
+    /// graphics pipelines this boot skipped (`jobs`; `precached` holds those built by earlier
+    /// precaches) and the compute programs of the title's precache file (made from the game files,
+    /// missing reads guessed) are built, then thrown away. They only fill the driver's shader
+    /// cache, so a later build of the same pipeline finds the driver's work done. Reports progress
+    /// through `callback` and returns when it is done, skipped from the loading screen or the load
+    /// is stopped.
+    void PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
+                         std::unordered_set<u64> precached, std::stop_token stop_loading,
+                         const VideoCore::DiskResourceLoadCallback& callback);
 
     const Device& device;
     Scheduler& scheduler;
@@ -235,9 +250,6 @@ private:
     /// (used_pipelines) are built at boot; the rest are built when first needed, and not stored
     /// again. Each built pipeline holds driver memory (title 1: 6.5k cached, a quarter used).
     std::unordered_set<u64> disk_pipelines;
-    /// Disk pipelines none of whose records loaded: the GPU thread's build of one is stored again.
-    std::unordered_set<u64> failed_disk_pipelines;
-    std::mutex failed_disk_pipelines_mutex;
     std::unordered_map<u64, u8> used_pipelines; ///< Key hash -> sessions since it was last used
     std::unordered_set<const GraphicsPipeline*> used_this_session;
     std::filesystem::path used_pipelines_filename;
@@ -251,6 +263,9 @@ private:
     std::atomic<size_t> last_cache_size{};
     std::atomic_bool flush_in_flight{};
 
+    /// Requested first when the cache is destroyed, to stop a rewrite of the disk cache: Android
+    /// and yuzu_cmd load with a stop token that never stops
+    std::stop_source serialization_stop;
     Common::ThreadWorker workers;
     /// Software HMMA compute pipelines on drivers that take minutes on them
     /// (Device::DefersSoftwareMatrixPipelines); nothing waits for this worker.

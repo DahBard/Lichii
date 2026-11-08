@@ -13,7 +13,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Intel WAITPKG waits: the GPU threads and idle emulated cores wait for each other with
    UMWAIT (the core idles until the other thread writes) instead of spinning on PAUSE, which
    leaves more of a laptop CPU's power budget to the busy cores.
- * The texture cache keeps up to 60% of the VRAM budget (about 9 GB of a 16 GB card) before
+ * The texture cache keeps up to 5/8 of the VRAM budget (about 9.5 GB of a 16 GB card) before
    it evicts, instead of 5 GB, so scenes you return to are not decoded and uploaded again.
  * Ocarina of Time fixes from open Lichii pull requests: a setting to skip the game's
    anti-aliasing network (#319; AMD GPUs run its tensor math in software), AMD drivers no
@@ -70,7 +70,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    again), cheaper texture uploads on the GPU thread (staging buffers kept, uploads that GPU
    copies overwrite skipped, large untiles on helper threads; LICHII_TEXTURE_UPLOADS=0 as
    before), texture handles that are really storage buffer addresses bind no texture (the
-   waterfall flicker; LICHII_NULL_POINTER_HANDLES=0 as before), macro reads that overlap
+   waterfall flicker; upstream Lichii now does this too), macro reads that overlap
    queued constant buffer writes take those words from the queue instead of waiting (94% of
    those waits in r23; LICHII_DMA_MIXED_READS=0 as before), pipelines keyed only by the vertex
    attributes their programs read, so the same shaders stop compiling again for leftover

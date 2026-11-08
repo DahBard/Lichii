@@ -167,7 +167,7 @@ private:
 /// loads the handle per invocation, which no draw-time evaluation can give (a light's texture
 /// read in a clustered light loop, Ocarina of Time's waterfall). Its low bits then name an
 /// unrelated texture, a different one whenever the game moves the buffer: every frame for a
-/// double-buffered one, so the surface flickered. From Fritchii v4 (Frizti/Lichii d603d98bb).
+/// double-buffered one, so the surface flickers. Bind no texture for it instead.
 template <typename Descriptor>
 [[nodiscard]] bool HandleIsStoragePointer(const Shader::Info& info, const Descriptor& desc,
                                           u32 index) {
@@ -183,19 +183,5 @@ template <typename Descriptor>
 
 /// A texture handle no table holds: the texture cache binds its null view and sampler.
 inline constexpr std::pair<u32, u32> NULL_TEXTURE_HANDLE{~0U, ~0U};
-
-/// LICHII_NULL_POINTER_HANDLES=0 (or Fritchii's EDEN_NX2_EXP21=0) binds such handles as before.
-inline bool NullPointerHandles() {
-    static const bool enabled = [] {
-        for (const char* name : {"LICHII_NULL_POINTER_HANDLES", "EDEN_NX2_EXP21"}) {
-            const char* value = std::getenv(name);
-            if (value != nullptr && value[0] != '\0') {
-                return value[0] != '0';
-            }
-        }
-        return true;
-    }();
-    return enabled;
-}
 
 } // namespace VideoCommon

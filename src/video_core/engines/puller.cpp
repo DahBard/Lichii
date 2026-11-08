@@ -179,7 +179,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     }
     // With delayed fence operations (Balanced or Accurate fences, accurate GPU), a release
     // queued after the acquire released the fences waits in the caches for the next fence. With
-    // every channel waiting none comes: release them again now and then while waiting (#687).
+    // every channel waiting none comes: release them again now and then while waiting.
     const bool delayed = Settings::IsGPUFenceBehaviorDefault()
                              ? Settings::IsGPULevelHigh()
                              : Settings::IsGPUFenceBehaviorBalanced() ||
@@ -384,6 +384,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             .value = regs.semaphore_sequence,
             .operation = static_cast<u32>(op),
             .since = std::chrono::steady_clock::now(),
+            .last_fences = std::chrono::steady_clock::now(),
             .reported = false,
         };
         if (op != GpuSemaphoreOperation::AcquireEqual && op != GpuSemaphoreOperation::AcquireGequal &&

@@ -81,10 +81,10 @@ public:
         u32 value;
         u32 operation;
         std::chrono::steady_clock::time_point since;
+        std::chrono::steady_clock::time_point last_fences; ///< When it last released fences
         bool reported;
         u32 unmet_polls{}; ///< polls answered from guest memory, unmet
         std::chrono::steady_clock::time_point last_drain{}; ///< of the back, for this acquire
-        std::chrono::steady_clock::time_point last_fences{}; ///< When it last released fences
 
         [[nodiscard]] bool Matches(u32 current) const;
     };
