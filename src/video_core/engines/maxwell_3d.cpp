@@ -1675,6 +1675,45 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                 shadow_words.clear();
             }
         }
+        // LICHII_DMA_MIXED_READS (1 default, 2 verify, 0 off): a read the shadow can't answer
+        // whole takes its still-queued constant buffer words from the shadow and the others from
+        // memory, when no queued write may change them: none queued to their 64-byte block, no
+        // untracked writer pending, and their page not GPU-written. In r23 such overlaps were
+        // 94% of Ocarina's macro DMA read waits (~200-240 ms/s of the front).
+        static const int mixed_reads = [] {
+            const char* const value = std::getenv("LICHII_DMA_MIXED_READS");
+            return value != nullptr && value[0] != '\0' ? std::atoi(value) : 1;
+        }();
+        static thread_local std::vector<u32> mixed_words;
+        bool mixed = false;
+        if (target > consumed && shadow_words.empty() && mixed_reads != 0) {
+            mixed_words.clear();
+            const u64 barrier = split.MemoryBarrierPosition();
+            mixed = DeviceWords(source, words, [&](u32 i, std::optional<DAddr> device) {
+                if (!device) {
+                    return false;
+                }
+                const GPUVAddr address = source + u64{i} * sizeof(u32);
+                const GPUVAddr address_end = address + sizeof(u32);
+                const auto it = fs.cb_shadow.find(*device);
+                if (it != fs.cb_shadow.end() && it->second.position > consumed &&
+                    it->second.position >=
+                        split.OpaqueReadyPosition(&memory_manager, address, address_end)) {
+                    mixed_words.push_back(it->second.value);
+                    return true;
+                }
+                if (barrier > consumed ||
+                    split.TrackedWritePosition(&memory_manager, address, address_end) > consumed ||
+                    Tegra::Nx2IsGpuWritten(*device)) {
+                    return false;
+                }
+                mixed_words.push_back(memory_manager.Read<u32>(address));
+                return true;
+            });
+            if (mixed && mixed_reads != 2) {
+                shadow_words.assign(mixed_words.begin(), mixed_words.end());
+            }
+        }
         const bool from_shadow = !shadow_words.empty();
         // EDEN_NX2_MME_DMA_STATS: why precise reads wait (writer = compute or copy work).
         if (static const bool stats = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr; stats) {
@@ -1701,6 +1740,27 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         }
         if (target > consumed && !from_shadow) {
             split.WaitForPosition(target, VideoCommon::DrainSite::MacroDmaRead);
+        }
+        // LICHII_DMA_MIXED_READS=2: the mixed read was made, then the wait as before; compare.
+        if (mixed && mixed_reads == 2) {
+            static std::atomic<u64> checked{};
+            static std::atomic<u64> differed{};
+            u32 differences = 0;
+            for (u32 i = 0; i < words; ++i) {
+                const u32 now = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
+                differences += now != mixed_words[i] ? 1 : 0;
+            }
+            const u64 total = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+            const u64 bad = differed.fetch_add(differences != 0 ? 1 : 0,
+                                               std::memory_order_relaxed) +
+                            (differences != 0 ? 1 : 0);
+            if ((differences != 0 && bad <= 32) || (total & 0x3fff) == 0) {
+                LOG_INFO(HW_GPU, "Mixed MME DMA reads (verify): {} checked, {} differed{}", total,
+                         bad,
+                         differences != 0 ? fmt::format(" (now {:#x}+{} words: {} differ)",
+                                                        source, words, differences)
+                                          : std::string{});
+            }
         }
     } else {
         split.Drain(VideoCommon::DrainSite::MacroDmaRead);
