@@ -45,6 +45,14 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Older shader caches carry over: a new cache version starts from the newest compatible older
    one (Lichii #591), and the log says how many cached pipelines were left out and why (another
    GPU or another dynamic state setting).
+ * Ocarina's compute shaders mark only the memory they really write as GPU-written (Lichii
+   #415): fewer stalls when the game reads its own data and less copied back from the GPU
+   (Graphics > Advanced > "Native compute write mark", Full = as before). Kokiri Forest's
+   shadow map resizes no longer upload what a copy overwrites (#288), and draws after a clear
+   stay in their render pass (#699).
+ * "GPU Clocks" (Boost by default) again shortens how long the game thinks its GPU work takes
+   (Lichii #664). Ocarina sizes its render resolution from that, so it can render sharper and
+   ask more of the GPU; Normal keeps the old behaviour.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -82,6 +90,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
+ trace-fsr.bat                AMD FSR 3.1 in place of Ocarina's own anti-aliasing pass
+                              (EDEN_NX2_DLSS_REPLACEMENT=fsr), logged like perf-trace.bat
  trace-downloads.bat          trace-preflush.bat plus a list of what the GPU copies back and
                               which GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
  trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
