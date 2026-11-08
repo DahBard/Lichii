@@ -64,6 +64,23 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
    perf-trace.bat or frame-times.bat) and, with perf-trace.bat, what each emulated CPU core
    spends its time on ("Guest core N per second:").
+ * Round 16, from Fritchii v4.1 (Frizti's fork, the fastest Ocarina build of the moment) and
+   our own logs: the native uniform bank check compares only pages that may have changed
+   (r23: ~650,000 page compares a second, 99.7% unchanged; LICHII_BANK_CHECK=0 compares all
+   again), cheaper texture uploads on the GPU thread (staging buffers kept, uploads that GPU
+   copies overwrite skipped, large untiles on helper threads; LICHII_TEXTURE_UPLOADS=0 as
+   before), texture handles that are really storage buffer addresses bind no texture (the
+   waterfall flicker; LICHII_NULL_POINTER_HANDLES=0 as before), macro reads that overlap
+   queued constant buffer writes take those words from the queue instead of waiting (94% of
+   those waits in r23; LICHII_DMA_MIXED_READS=0 as before), pipelines keyed only by the vertex
+   attributes their programs read, so the same shaders stop compiling again for leftover
+   attribute types (LICHII_KEY_ALL_ATTRIBUTES=1 as before), and cached pipelines whose newest
+   record fails to load are built from an older one and stored again. ab-12 turns all of these
+   off at once; verify-r16.bat checks the two new shortcuts against the old way.
+ * Fritchii's host frame pacer, off unless asked for: LICHII_HOST_PACE=1 (trace-host-pace.bat)
+   holds each frame for its display refresh and locks the game's frame clock to the display,
+   for evenly shown frames at 60 fps on 120 Hz displays; LICHII_HOST_PACE=2
+   (trace-display.bat) only measures how many refreshes frames stay on screen.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -91,6 +108,17 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               GPU does not idle between frames; logs like perf-trace.bat
  ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
+ ab-12-round15-paths.bat      round 16's new shortcuts off (bank check, texture uploads,
+                              storage-pointer handles, mixed macro reads, attribute keys),
+                              logged like perf-trace.bat: if a glitch or a frame-rate change
+                              goes away here, one of them caused it
+ verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
+                              way on every use and logs differences ("missed" and "differed"
+                              should stay 0); slower
+ trace-host-pace.bat          Fritchii's host frame pacer on (LICHII_HOST_PACE=1), logged like
+                              perf-trace.bat plus "Host pacing on:" lines every 10 s
+ trace-display.bat            the pacer only measuring (LICHII_HOST_PACE=2): the same lines
+                              without holding frames, and the display's refresh rate
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
  trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
                               (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
@@ -103,9 +131,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
  trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
                               perf-trace.bat
- trace-no-list-wait.bat       experiment: the GPU thread reads the next commands without waiting
-                              for queued compute work (LICHII_LIST_WRITER_WAIT=0), logged like
-                              perf-trace.bat; look for flicker, broken objects or crashes
  trace-downloads.bat          perf-trace.bat plus a list of what the GPU copies back and which
                               GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
  trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
@@ -121,6 +146,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
 Each start replaces the log, so copy it after every run you want to compare.
+
+The CachyOS (Linux) download of the same run has a .sh twin of each launcher and its own
+README-cachyos.md (no FSR 4 there: AMD's libraries are Windows-only).
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
 
