@@ -1017,7 +1017,10 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
             const std::array<u32, 3> block{qmd.block_dim_x.Value(), qmd.block_dim_y.Value(),
                                            qmd.block_dim_z.Value()};
             std::optional<std::array<u32, 3>> grid;
-            if (!kepler_compute->GetIndirectComputeAddress()) {
+            // A dispatch from GPU-written list words (Nx2ListIndirect) has the slot's placeholders
+            // in its grid, not the counts the host GPU dispatches: its grid is unknown here too.
+            if (!kepler_compute->GetIndirectComputeAddress() &&
+                !kepler_compute->GetIndirectListSlot()) {
                 grid = std::array<u32, 3>{qmd.grid_dim_x.Value(), qmd.grid_dim_y.Value(),
                                           qmd.grid_dim_z.Value()};
             }
@@ -2087,11 +2090,16 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
             needs_alignment_stream ||
             (has_host_buffer && size <= channel_state->uniform_buffer_skip_cache_size &&
              !memory_tracker.IsRegionGpuModified(binding.device_addr, size));
+        // GPU-written list words owed there go over their placeholders (Nx2ListIndirect).
+        const auto guest_word = [this](DAddr word) { return device_memory.Read<u32>(word); };
         if constexpr (!IS_OPENGL) {
             if (use_fast_buffer) {
                 const std::span<u8> span =
                     runtime.BindMappedUniformBuffer(0, binding_index, size);
                 device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
+                const auto stream = runtime.LastStreamUniformRef();
+                runtime.Nx2PatchComputeUniform(binding.device_addr, size, stream.buffer,
+                                               stream.offset, guest_word);
                 return;
             }
         }
@@ -2099,6 +2107,12 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
         SynchronizeBuffer(buffer, binding.device_addr, size);
 
         buffer.MarkUsage(offset, size);
+        if constexpr (!IS_OPENGL) {
+            runtime.Nx2PatchComputeUniform(binding.device_addr, size, buffer.Handle(), offset,
+                                           guest_word);
+        } else {
+            (void)guest_word;
+        }
         if constexpr (NEEDS_BIND_UNIFORM_INDEX) {
             runtime.BindComputeUniformBuffer(binding_index, buffer, offset, size);
             ++binding_index;
