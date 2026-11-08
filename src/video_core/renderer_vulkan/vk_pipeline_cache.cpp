@@ -85,8 +85,11 @@ using VideoCommon::GuessMissing;
 using VideoCommon::GraphicsEnvironment;
 
 constexpr u32 CACHE_VERSION = VideoCommon::VulkanPipelineCacheVersion;
-constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
-constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
+// The driver's pipeline cache is saved every 32 new pipelines, at most every 10 s, and the used
+// list every 5 s (from medicinauvsecretaria-lang's Lichii OoT AMD r1, 7d96f498f): an AMD driver
+// crash lost up to 128 pipelines and 30 s of the list before.
+constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 32;
+constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 10;
 constexpr auto& VULKAN_CACHE_MAGIC_NUMBER = VideoCommon::VulkanDriverPipelineCacheMagic;
 
 template <typename Container>
@@ -1890,7 +1893,7 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
     if (!pipeline) {
         return nullptr;
     }
-    constexpr auto save_interval = std::chrono::seconds{15};
+    constexpr auto save_interval = std::chrono::seconds{5};
     if (used_this_session.insert(pipeline.get()).second &&
         std::chrono::steady_clock::now() - used_pipelines_saved > save_interval) {
         SaveUsedPipelines();
