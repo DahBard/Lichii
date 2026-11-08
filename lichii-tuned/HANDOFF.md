@@ -56,10 +56,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii`, `nx2_switches.txt` (checked for the preload switch), the Windows README,
   `README-cachyos.md`, `cachyos-packages.txt` (pacman owners of what `ldd` shows, plus the Qt
   Wayland and SVG plugins) and a `.sh` twin of every `.bat` launcher, written by
-  `lichii-tuned/make_linux_launchers.py` (fails on any .bat line it doesn't understand). Not yet
-  built (round 16 is its first run); the cloud session can't test it: its proxy blocks the
-  CachyOS and Arch mirrors. `workflow_dispatch` takes `only: windows|cachyos` to rebuild one
-  platform.
+  `lichii-tuned/make_linux_launchers.py` (fails on any .bat line it doesn't understand). Round 16's
+  Windows builds are run #24; its CachyOS jobs failed there in pacman (`zlib` conflicts with
+  CachyOS's `zlib-ng-compat`; dropped) and were rebuilt alone as run #25 (`workflow_dispatch`
+  with `only: cachyos`, which rebuilds one platform; `windows` the other). In run #25 the
+  toolchain step used CachyOS's own clang (it reads the profile) and configure passed. The cloud
+  session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (174 commits over upstream nx2
   `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
@@ -557,7 +559,7 @@ Own changes:
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
    must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 16
-   (run #24, Windows and the first CachyOS build): from its logs, the back thread's bank check
+   (Windows run #24, CachyOS run #25): from its logs, the back thread's bank check
    and split wait (EXP9), the front's macro dma read waits (mixed reads) and the 1% lows
    (EXP8, pipeline keys); verify-r16 must log 0 missed and 0 differed, ab-12 tells a regression
    from one of them. Ask the owner for the monitor's refresh rate and whether FreeSync is on: the
