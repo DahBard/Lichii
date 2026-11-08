@@ -67,6 +67,7 @@ enum class Zone : u32 {
     ListSubmitWait,
     ListGpuWait,
     AcquirePoll, ///< TEST: a suspended acquire's poll (CanResumeAcquire in ResumePending)
+    Resnapshot,  ///< TEST: command lists copied again at a resume (DmaPusher::RefreshSnapshot)
     Count,
 };
 
@@ -79,7 +80,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "storage buffers", "stage texture buffers", "push descriptors", "render targets",
     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
     "fence skipped", "method", "split drain", "split wait",
-    "writer wait", "list submit wait", "list GPU wait", "acquire poll",
+    "writer wait", "list submit wait", "list GPU wait", "acquire poll", "resnapshot",
 };
 
 // A plain flag: Enabled() runs several times per method write (no guard to check).
@@ -115,7 +116,7 @@ inline u64 Ticks() {
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 10> counters{}; ///< See Counter
+    std::array<u64, 13> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
@@ -171,6 +172,11 @@ enum class Counter : u32 {
     AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
     BankPagesChecked, ///< Native uniform bank pages compared with their snapshot
     BankPagesSkipped, ///< Bank pages no write could have changed, not compared
+    /// TEST: the split's front publishes words while its back waits for work (GpuSplit::Publish):
+    /// the back's wait since it ran out or since the first of them was sent (Ticks), and count
+    LatePublishTicks,
+    LatePublishes,
+    ResnapshotWords, ///< TEST: command list words copied again at resumes
 };
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and
@@ -295,6 +301,17 @@ inline void Report(const char* thread_name = "GPU thread") {
         line += fmt::format(" | bank pages compared {:.0f} ({:.0f} skipped as unchanged)",
                             static_cast<double>(data.counters[8]) / seconds,
                             static_cast<double>(data.counters[9]) / seconds);
+    }
+    const auto counter = [&data](Counter which) {
+        return static_cast<double>(data.counters[static_cast<size_t>(which)]);
+    };
+    if (counter(Counter::LatePublishes) != 0 || counter(Counter::ResnapshotWords) != 0) {
+        // TEST: the back idle while words it could run waited on the front.
+        line += fmt::format(" | publishes to an idle back late by {:.1f} ms ({:.0f}/s) | "
+                            "resnapshot words {:.0f}/s",
+                            counter(Counter::LatePublishTicks) * 1000.0 / window_ticks,
+                            counter(Counter::LatePublishes) * 1e9 / window,
+                            counter(Counter::ResnapshotWords) * 1e9 / window);
     }
     std::string drains;
     for (size_t i = 0; i < data.drain_count.size(); ++i) {
