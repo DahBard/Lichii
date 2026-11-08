@@ -24,10 +24,10 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    leaves undefined (#353), no green tint growing from shadow lookups through wrong texture
    handles (#354), batched texture evictions (#376), precise macro reads and cheaper semaphore
    waits on the split GPU thread (#345).
- * Shaders stay compiled: up to 4096 built pipelines are kept however long they go unused
-   (official builds destroy one unused for 9000 frames, so a few minutes on the title screen
-   threw away the shaders compiled at boot and gameplay froze while rebuilding them), and
-   every cached pipeline is compiled at boot, not just the ones the last sessions used.
+ * Shaders stay compiled: every cached pipeline is compiled at boot and kept, not just the ones
+   the last sessions used (EDEN_NX2_PRELOAD_ALL_PIPELINES=1 in nx2_switches.txt; official
+   builds destroy one unused for 9000 frames, so a few minutes on the title screen threw away
+   the shaders compiled at boot and gameplay froze while rebuilding them).
    Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
  * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
    load-acquires) and reads the game's clock without leaving the generated code.
