@@ -362,6 +362,8 @@ Own changes:
   GPU writes of 2.8-8 MiB (0x2b4ce800 +0x800000, 0x302ff200 +0x441e00, ...) about once a frame each,
   5-6.4 GB queued per 10 s, copied back from the 0x2b6x-0x2b8x and 0x304x-0x305x regions the CPU
   reads: #415's over-marked skinning bindings.
+- Run #22 (round 14) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r22-pgo`,
+  `lichii-tuned-r22-pgo-lto`); it predates the shipped `EDEN_NX2_PRELOAD_ALL_PIPELINES=1`.
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
   `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
   vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
