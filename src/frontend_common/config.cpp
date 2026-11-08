@@ -151,7 +151,7 @@ void Config::SetUpIni() {
         // lichii-tuned: the speed settings it recommends, applied once to an existing
         // configuration as well. Whatever is changed afterwards is kept.
         BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
-        constexpr s64 TunedDefaultsVersion = 2;
+        constexpr s64 TunedDefaultsVersion = 3;
         // Read without a default: with one, a key without a default flag reads as that default.
         const s64 applied = ReadIntegerSetting(std::string("lichii_tuned_defaults"));
         if (applied < 1) {
@@ -166,6 +166,12 @@ void Config::SetUpIni() {
         if (applied < 2) {
             // Round 15: Ocarina's FSR upscaling (FSR 4, else FSR 3.1) on by default.
             seed(Settings::values.ocarina_fsr, ToString(true));
+        }
+        if (applied < 3) {
+            // Round 17: offer upstream #781's shader precache at launch, the compute half of the
+            // warm-up the AMD fork (medicinauvsecretaria-lang's Lichii OoT AMD) builds in.
+            seed(Settings::values.precache_shaders,
+                 ToString(u32(Settings::PrecacheShaders::Ask)));
         }
         if (applied < TunedDefaultsVersion) {
             WriteIntegerSetting(std::string("lichii_tuned_defaults"), TunedDefaultsVersion);
