@@ -217,8 +217,12 @@ RendererVulkan::~RendererVulkan() {
 
 void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {
     const bool trace = Common::DkbFrameTrace::Enabled();
-    const auto entered = trace ? std::chrono::steady_clock::now()
-                               : std::chrono::steady_clock::time_point{};
+    const bool frame_times = VideoCommon::FrameTimeStats::Enabled();
+    const auto entered = trace || frame_times ? std::chrono::steady_clock::now()
+                                              : std::chrono::steady_clock::time_point{};
+    if (frame_times) {
+        frame_time_stats.Note(entered);
+    }
     SCOPE_EXIT {
         render_window.OnFrameDisplayed();
     };

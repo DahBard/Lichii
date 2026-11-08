@@ -11,6 +11,7 @@
 #include <variant>
 
 #include "common/dynamic_library.h"
+#include "video_core/frame_time_stats.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/renderer_base.h"
 #ifdef HAS_LSFG
@@ -73,6 +74,7 @@ public:
 private:
     Common::DkbFrameTrace::RateLimit trace_cpu_rate;
     std::chrono::steady_clock::time_point trace_last_frame{};
+    VideoCommon::FrameTimeStats frame_time_stats;
     u64 trace_frame{};
 
     void InterpolateFrames(Frame* prev_frame, Frame* curr_frame);

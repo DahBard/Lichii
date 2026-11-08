@@ -62,6 +62,7 @@ add_library(video_core STATIC
     engines/puller.h
     framebuffer_config.cpp
     framebuffer_config.h
+    frame_time_stats.h
     render_trace.h
     fsr.cpp
     fsr.h
