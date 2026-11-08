@@ -149,6 +149,10 @@ private:
 
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline();
 
+    /// FixedPipelineState::Refresh of graphics_key, keeping only the vertex attribute types the
+    /// bound programs read (VideoCommon::KeyedAttributeTypes).
+    void RefreshGraphicsKey();
+
     /// Builds a cached pipeline from its newest record that loads; remembers it in
     /// failed_disk_pipelines when none does.
     std::unique_ptr<GraphicsPipeline> CreateCachedGraphicsPipeline(
@@ -199,6 +203,7 @@ private:
     EmissionBudget emission_budget;
 
     GraphicsPipelineCacheKey graphics_key{};
+    u64 vertex_attribute_types{}; ///< graphics_key's attribute types before the programs' mask
     GraphicsPipeline* current_pipeline{};
 
     /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
