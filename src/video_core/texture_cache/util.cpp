@@ -1283,7 +1283,10 @@ void ExecuteUnswizzlePlan(Tegra::MemoryManager& gpu_memory, const UnswizzlePlan&
     // thread's time in a texture-loading hitch (Ocarina of Time, leaving Link's house; from
     // tomk134/lichii-custom e8e50e797). EDEN_NX2_UNSWIZZLE_COPY=1 always copies first.
     static const bool always_copy = std::getenv("EDEN_NX2_UNSWIZZLE_COPY") != nullptr;
-    std::vector<u8> run;
+    // Other runs are copied into a grow-only scratch buffer, not a vector zero-filled and
+    // reallocated per upload; thread_local because the texture workers upload too
+    // (notquiteog/Elysium fc0ac4b3b).
+    static thread_local Common::ScratchBuffer<u8> run;
     for (const auto& r : plan.runs) {
         std::span<const u8> input;
         const bool in_place =
@@ -1292,9 +1295,9 @@ void ExecuteUnswizzlePlan(Tegra::MemoryManager& gpu_memory, const UnswizzlePlan&
         if (direct != nullptr) {
             input = std::span<const u8>{direct, r.guest_bytes};
         } else {
-            run.resize(r.guest_bytes);
+            run.resize_destructive(r.guest_bytes);
             gpu_memory.ReadBlockUnsafe(r.src_addr, run.data(), r.guest_bytes);
-            input = run;
+            input = std::span<const u8>{run.data(), r.guest_bytes};
         }
         Tegra::Texture::UnswizzleTexture(output.subspan(r.host_offset, r.host_bytes),
                                          input, 1U << plan.bpp_log2, r.run_tiles, r.tile_rows, 1,
