@@ -27,6 +27,7 @@
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/oot_network.h"
 #include "video_core/texture_cache/util.h"
 
 namespace VideoCommon {
@@ -332,12 +333,23 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
                                            device_addr_end_aligned - device_addr_start_aligned);
     // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
-    // instead keep read traps and flush on demand, unless EDEN_NX2_PREFLUSH=1 opts them into
-    // preflushing too (Ocarina of Time: far fewer Finish stalls, but some flicker).
-    static const bool nx2_preflush = [] {
+    // instead keep read traps and flush on demand. EDEN_NX2_PREFLUSH=1 opts any title into
+    // preflushing and =0 out of it. Ocarina of Time preflushes by default: with #415's store
+    // extents it downloads 21-40 MiB/s, and its read traps stall the guest ~9 instead of ~70 ms/s.
+    static const std::optional<bool> nx2_preflush_forced = []() -> std::optional<bool> {
         const char* value = std::getenv("EDEN_NX2_PREFLUSH");
-        return value != nullptr && value[0] == '1';
+        if (value == nullptr || value[0] == '\0') {
+            return std::nullopt;
+        }
+        return value[0] == '1';
     }();
+    const bool nx2_preflush =
+        nx2_preflush_forced.value_or(Settings::GetCurrentProgramID() == OotNetwork::ProgramId);
+    if (static std::atomic<bool> logged{};
+        nx2_preflush && !logged.exchange(true, std::memory_order_relaxed)) {
+        LOG_INFO(HW_GPU,
+                 "Preflushing GPU-written pages the CPU reads (EDEN_NX2_PREFLUSH=0 turns it off)");
+    }
     const bool preflush = nx2_preflush || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
     if (!area->preemtive) {
         if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
