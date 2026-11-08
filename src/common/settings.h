@@ -777,7 +777,10 @@ struct Values {
     SwitchableSetting<bool> gpu_unswizzle_enabled{linkage, false, "gpu_unswizzle_enabled",
                                                   Category::RendererHacks};
 
-    SwitchableSetting<bool> pin_gpu_threads{linkage, true, "pin_gpu_threads",
+    // lichii-tuned: off (upstream #769 turns it on). On the owner's Core Ultra 7 255H it would put
+    // the six emulated CPU cores on the four P-cores left, where hybrid_cpu.cpp spreads them over
+    // P- and E-cores.
+    SwitchableSetting<bool> pin_gpu_threads{linkage, false, "pin_gpu_threads",
                                             Category::RendererHacks};
 
     SwitchableSetting<ExtendedDynamicState> dyna_state{linkage,
