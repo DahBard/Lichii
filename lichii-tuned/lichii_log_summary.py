@@ -51,7 +51,28 @@ def main(path):
     finish_sites = collections.defaultdict(list)
     # Round 15: each frame's time (DKB frame_ms, from 1 s windows) and the guest core profile.
     frame_ms, guest_cores = [], collections.defaultdict(lambda: collections.defaultdict(list))
+    # Round 16: the bank check and mixed macro read verify counts, and the host frame pacer.
+    bank_checks, mixed_verify, host_pacing, displays = [], [], [], []
     for t, cls, level, func, msg in parse(path):
+        m = re.match(r"Native bank check \(mode (\d+), 10 s\): (\d+) binds, .*; missed (\d+)", msg)
+        if m:
+            bank_checks.append((t, int(m.group(1)), int(m.group(2)), int(m.group(3))))
+            continue
+        m = re.match(r"Mixed MME DMA reads \(verify\): (\d+) checked, (\d+) differed", msg)
+        if m:
+            mixed_verify.append((t, int(m.group(1)), int(m.group(2))))
+            continue
+        m = re.match(r"Host pacing (on|off): (\d+) frames at ([\d.]+) Hz; shown for 1/2/3/4/5\+ "
+                     r"refreshes: (\d+)/(\d+)/(\d+)/(\d+)/(\d+) \(same refresh (\d+)\); interval "
+                     r"mean ([\d.]+) ms, max ([\d.]+);", msg)
+        if m:
+            host_pacing.append((t, m.group(1), int(m.group(2)), float(m.group(3)),
+                                [int(m.group(i)) for i in range(4, 10)], float(m.group(10)),
+                                float(m.group(11))))
+            continue
+        if msg.startswith("Host pacing: display refresh") or msg.startswith("Host pacing ("):
+            displays.append(f"{t:9.2f}  {msg[:160]}")
+            continue
         m = re.match(r"DKB frame_ms n=\d+((?: [\d.]+)*)$", msg)
         if m:
             frame_ms.append((t, [float(v) for v in m.group(1).split()]))
@@ -218,6 +239,27 @@ def main(path):
             print(f"  ms p50 {pct(values, 0.5):.1f}, p90 {pct(values, 0.9):.1f}, p99 {pct(values, 0.99):.1f}, "
                   f"max {values[-1]:.1f}; 1% low {low(0.01):.1f} fps, 0.1% low {low(0.001):.1f} fps; "
                   f"over 33.4 ms {over(33.4):.1f}%, over 50 ms {over(50):.1f}%, over 100 ms {over(100):.2f}%")
+    if bank_checks or mixed_verify:
+        print("\n== Round 16 checks (verify-r16.bat: missed and differed should be 0)")
+        for t, mode, binds, missed in bank_checks:
+            if mode == 2 or missed:
+                print(f"  {t:8.1f} s: bank check mode {mode}, {binds} binds, missed {missed}")
+        if bank_checks:
+            print(f"  bank check: {len(bank_checks)} reports, missed in total "
+                  f"{sum(b[3] for b in bank_checks)}")
+        if mixed_verify:
+            last = mixed_verify[-1]
+            print(f"  mixed macro reads: {last[1]} checked, {last[2]} differed (last report, "
+                  f"{last[0]:.1f} s)")
+    if host_pacing or displays:
+        print("\n== Host frame pacer (LICHII_HOST_PACE; refreshes each frame stayed on screen)")
+        for line in displays[:6]:
+            print(f"  {line}")
+        for t, state, frames, hz, shown, mean, worst in host_pacing:
+            total = sum(shown[:5]) or 1
+            spread = " ".join(f"{100.0 * n / total:.0f}%" for n in shown[:5])
+            print(f"  {t:8.1f} s: {state:3} {frames:4} frames at {hz:7.3f} Hz, 1/2/3/4/5+ {spread}, "
+                  f"same refresh {shown[5]}, interval mean {mean:.2f} ms, max {worst:.1f}")
     if guest_cores:
         print("\n== Guest cores (ms per second, every 10 s)")
         for core, values in sorted(guest_cores.items()):

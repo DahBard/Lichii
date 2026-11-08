@@ -228,3 +228,31 @@ Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d54
 - Inputs FSR 4 doesn't need (it makes its own reactivity) may still be given; this build passes
   #644's effects bias as both masks, as FSR 3.1 does. No jitter yet (#253 has a Halton camera
   jitter for DLSS): without it the upscaler can't recover sub-pixel detail.
+
+## 11. Round 16 (2026-11-08): Fritchii v4 and v4.1
+
+- Frizti/Lichii renamed its builds Fritchii; tags `fritchii-v4` and `fritchii-v4.1` (hotfix
+  6664b8726), 131 commits over `frizti-v3`, many with Ocarina measurements in the message (the
+  pacer's on an RTX 4080 at 120 Hz). The owner reports v4.1 is considered the best-performing
+  fork. Fetched as `refs/forks/frizti-tags/*` in the session clone.
+- Switches on by default in v4.1 (`nx2_debug_control.h`, `LoadExperiments`): EXP8 = 15 (texture
+  upload hitches; Hyrule Field 1% low 30.3 -> 35.1), EXP9 = 1 (bank pages compared only when
+  they may have changed; idle 54.5 -> 57.7 fps, walking 56.6 -> 58.9, verified 0 missed in 120 s),
+  EXP10 = 1 (macro DMA read drains only for compute, uploads, copies and releases), EXP14 = 1
+  (unchanged macro register writes dropped first), EXP21 = 1 (storage-pointer texture handles
+  bind nothing), the DMA snapshot (`EDEN_NX2_DMA_SNAPSHOT=9`, EvilOOT's; Lake Hylia 46.5 ->
+  52.3 there) and the host frame pacer (`EDEN_NX2_HOST_PACE=1`, with Mailbox enforced).
+  Everything else (EXP2, 3, 5, 6, 7, 12, 13, 16-19) is off by default there.
+- Ported: EXP8, EXP9, EXP21, 9b8fef282 + record grouping, 55bba8812 (#408's attribute keys) and,
+  opt-in, the host pacer with genlock. EXP10's cause differs here: our remaining macro read
+  waits are constant buffer overlaps (94%, `EDEN_NX2_MME_DMA_STATS`), so round 16 reads those
+  words from the front's shadow instead (our own fix). EXP14 matches our FrontWrite. Its
+  settings revision 3 (resolution 1x, FXAA, CPU Auto, both shader caches) matches the owner's
+  config already; f6d42b871 stopped enforcing reactive flushing.
+- Its upstream imports (f319e1076, 2c6c844f4, af2bbd3ce, aff77e7fb, 34ae8336e, the compute
+  pipeline fixes) were already in tuned4 through our merges; the updater, branding and
+  installer commits don't apply; 5aefec443 merges zortos's v53/v54 caches into Fritchii's own
+  `vulkan-frizti.fork-v52.bin`, while tuned4 uses zortos's v54 file directly.
+- The host pacer's gains are on the display, not in frame rate: at 60 fps on 120 Hz, frames
+  shown for exactly two refreshes 97-99% (91-96% without), longest interval 22-34 ms (70-200).
+  On a FreeSync display below 60 fps VRR does more; the owner's monitor is unknown.

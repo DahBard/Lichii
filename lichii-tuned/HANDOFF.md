@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-08 (round 15), for the next Claude session.
+State of the work on 2026-11-08 (round 16), for the next Claude session.
 
 ## Goal
 
@@ -24,6 +24,11 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `nx2_switches.txt` (the owner's request, round 14: each new download's copy lacked it, and r22
   booted with 6,313 of the ~19,400 cached pipelines).
 - The log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
+- Since round 16 every run also builds a CachyOS (Linux) package from the same source: the
+  owner asked for one and to "update the CachyOS version alongside the Windows version" from
+  now on, and that it work on any modern-generation Intel CPU (x86-64-v3: every Intel Core since
+  Haswell, every Intel CPU since 12th gen). The workflow builds both on every push; keep
+  `lichii-tuned/README-cachyos.md` current with the Windows README.
 
 ## How builds are made
 
@@ -37,11 +42,29 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (165 commits over upstream nx2
+- Job `cachyos` (same workflow and run number; artifacts `lichii-tuned-r<run>-cachyos-<variant>`,
+  each a tar.gz inside the zip so the executable bits survive): variants `pgo` and `pgo-lto` in
+  the `cachyos/cachyos-v3` container (x86-64-v3 repos; the v4 one needs AVX-512) on
+  ubuntu-24.04, with the runner's SDK folders deleted through volume mounts for disk space.
+  pacman installs the docs/Deps.md Arch list plus clang/lld/llvm, qt6-svg, qt6-wayland,
+  libpulse, alsa-lib. Clang: CachyOS's if its `llvm-profdata` reads `eglantine.profdata` (index
+  format 14 = LLVM 23+), else LLVM 23.1.5's release tarball (SHA-256 pinned, only clang, lld and
+  the llvm tools extracted, cached as `.llvm`; its binaries need only libc, libm, zlib, libstdc++
+  and libgcc_s). Flags: the repo's "v3" preset `-march=x86-64-v3 -mtune=generic -ffp-contract=off`
+  plus the PGO profile; system Qt, SDL3 and FFmpeg, bundled Vulkan headers, `Boost_USE_STATIC_LIBS`
+  and `fmt_FORCE_BUNDLED` (CachyOS moves both sonames often). The package has the stripped
+  `lichii`, `nx2_switches.txt` (checked for the preload switch), the Windows README,
+  `README-cachyos.md`, `cachyos-packages.txt` (pacman owners of what `ldd` shows, plus the Qt
+  Wayland and SVG plugins) and a `.sh` twin of every `.bat` launcher, written by
+  `lichii-tuned/make_linux_launchers.py` (fails on any .bat line it doesn't understand). Not yet
+  built (round 16 is its first run); the cloud session can't test it: its proxy blocks the
+  CachyOS and Arch mirrors. `workflow_dispatch` takes `only: windows|cachyos` to rebuild one
+  platform.
+- Source of the patch: branch `tuned4` of DahBard/Lichii (174 commits over upstream nx2
   `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `bf4c42e22`). The patch is `git diff --binary bf4c42e22 tuned4` (161 files, 708 KB); check it
+  `bf4c42e22`). The patch is `git diff --binary bf4c42e22 tuned4` (181 files, 804 KB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -62,6 +85,54 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 16 (2026-11-08): Fritchii v4 and v4.1 (Frizti/Lichii, tags `fritchii-v4`, `fritchii-v4.1`;
+the owner says people consider v4.1 the best-performing fork) ported, and our own fixes for what
+r23 showed. Fritchii's numbered switches are read too (`EDEN_NX2_EXP<n>`).
+- EXP9 (`5acb2d398`, Fritchii 9e8cb73ed, 1a64fe500, 4c4948805): native 64 KiB bank pages are
+  compared only when they may have changed: CPU writes the memory tracker only collected (its
+  `last_address` never resets, so later writes went unnoticed), buffer cache writes, recheck
+  marks, CPU-dirty pages, pages that changed within 120 frames, and once a frame
+  (`DevicePageFlags g_collected_write_pages, g_buffer_write_pages`). r23: ~650,000 compares a
+  second, 99.7% unchanged, bank check 164 ms/s of the back. `LICHII_BANK_CHECK` 1 (default), 2
+  compare all and log what 1 missed, 3 no frame check, 0 as before. Replaces round 15's
+  `LICHII_BANK_DEDUPE`.
+- EXP8 (`54dd4bf3c`, Fritchii 7d75f9133, 7cdbcc3fa; Hyrule Field 1% low 30.3 -> 35.1 there):
+  idle staging buffers kept, no guest upload for a new 2D image GPU copies overwrite whole,
+  banded untiles on the transcode workers, no HintCold. `LICHII_TEXTURE_UPLOADS` bits (15).
+- EXP21 (`2b72dc569`, Fritchii d603d98bb): a texture handle word that is a storage buffer
+  address binds no texture (waterfall flicker). `LICHII_NULL_POINTER_HANDLES=0` as before.
+- Our own: macro DMA reads take still-queued constant buffer words from the front's shadow and
+  the rest from memory when nothing queued may change them (`b4c9e78b7`; r23: 94% of those
+  waits, 208 ms/s of the front). `LICHII_DMA_MIXED_READS` 1, 2 verify, 0 off.
+- Pipeline cache (`4afd7df1b`, Fritchii 9b8fef282 and its record grouping): records of one key
+  are tried newest first, a key whose records all fail is stored again at run time, compute
+  translations newest first. `fc68cbdd3` (Fritchii 55bba8812 = zortos293/Lichii#408): graphics
+  keys hold only the vertex attribute types the native vertex program reads (none for task and
+  mesh), stored records are masked at load; `LICHII_KEY_ALL_ATTRIBUTES=1` as before.
+- Fritchii's host frame pacer and genlock (`fe9a0f3f4`; v3's 53ba1b2c7 to 72e5ad6c2 with v4's
+  82a514211, 817edaee3, 7d5ddd36b), opt-in: `LICHII_HOST_PACE=1` holds frames for their refresh
+  (VK_KHR_present_id/present_wait, a wait thread, the window's monitor rate) and locks the
+  game's frame period to whole measured refreshes; `=2` only logs "Host pacing off:" lines; unset
+  leaves presentation untouched (no extensions, no thread). Fritchii has it on by default with
+  Mailbox. Its measured gain is even display at 60 fps on 120 Hz (two refreshes per frame 97-99%
+  vs 91-96%), not frame rate; the owner's monitor rate and FreeSync state are unknown.
+- The list writer wait experiment is reverted (`ec4ac2957`): r23 hit a GPU-written list entry
+  126 s after boot.
+- Not ported, with reasons: EXP10 (macro read drains narrowed to compute/copies; built on
+  Frizti's DMA snapshot, and our waits are constant buffer overlaps, fixed above); EXP14 (same
+  as our FrontWrite's unchanged-register drop); EXP2, EXP3, EXP12, EXP17, EXP18, EXP19 (off by
+  default in v4.1); EXP4 (superseded by EXP9); EXP5, EXP7, EXP13, EXP16 (diagnostics or
+  measured no gain); updater, branding, dist, debug tools; #215's wait (not needed with fake
+  occlusion); 86726f688 (we keep every pipeline); e9a04cc5a thread pinning (our own placement);
+  5aefec443 cache merge (we already share zortos's version 54 file); settings revision 3 and
+  f6d42b871 (the owner's settings already match: 1x, FXAA, CPU Auto, disk and driver caches,
+  docked; Mailbox only matters with the pacer; 8 GB layout changes nothing with 32 GB of RAM).
+  Fritchii's upstream imports were in already (f319e1076 = 68caa6c75, 2c6c844f4 = 79c151694,
+  af2bbd3ce = 8cb1ec8a3, aff77e7fb = d4bc14e41, 34ae8336e = 2e69168aa, the compute fixes by the
+  6645721f2 merge).
+- Launchers: verify-r16 (`LICHII_BANK_CHECK=2`, `LICHII_DMA_MIXED_READS=2`), ab-12 (all of round
+  16's switches back to round 15), trace-host-pace, trace-display; trace-no-list-wait went.
 
 Round 15 (2026-11-08, the 60 fps plan's first round; upstream nx2 had nothing new):
 - AMD FSR 4 upscales Ocarina by default (`vk_fsr4_upscaler.cpp`): the AMD FSR API's loader and
@@ -86,12 +157,8 @@ Round 15 (2026-11-08, the 60 fps plan's first round; upstream nx2 had nothing ne
 - A native 64 KiB bank page compared for a draw is not compared again for the draw's next stage
   (`LICHII_BANK_DEDUPE=0` compares every bind): up to 16 page compares per bank bind, the
   likely bulk of bind stage buffers' 8.7 ms a frame.
-- Experiment `LICHII_LIST_WRITER_WAIT=0` (trace-no-list-wait.bat): the front reads GP entries
-  without waiting for queued compute and copy work until a GPU-written entry shows up (the
-  front's biggest wait, ~350 ms/s, ~5,800/s). Nothing logged GPU-written entries before, so
-  whether Ocarina has any is unknown; with the experiment on, the first one logs a warning and
-  the waits return (that first entry may be read before its writer ran). The comment in
-  dma_pusher.cpp and commit 79de9bd2a claim r22 showed none: wrong, fix the comment next round.
+- Experiment `LICHII_LIST_WRITER_WAIT=0` (reverted in round 16: Ocarina has GPU-written list
+  entries).
 - #161's upload-word counter turned out to be in already (#184's per-word clean_words and
   ForEachDirtyUploadRange, and the index-buffer rebind skip).
 - Launchers: trace-fsr31, trace-no-fsr, trace-no-preflush, trace-no-list-wait, frame-times;
@@ -417,6 +484,22 @@ Own changes:
   saw "extreme hitching" once: a 1.35 s guest stall (vsync callback 1 s late, no pipeline build,
   no GPU wait), likely a game-side load. Each of guest cores 4 and 5 and the back thread still use
   27-29 ms a frame; the front 13; the GPU works 8-10 ms of each ~36 ms frame.
+- Run #23 (round 15) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r23-pgo`,
+  `lichii-tuned-r23-pgo-lto`), with AMD's FSR 4 libraries checked by hash in the package.
+- r23 (pgo-lto; logs perm = perf-trace, frame-times, fsr31 with the owner AFK for minutes,
+  trace-no-list-wait): FSR 4 works ("the API offers 4.1.2, 3.1.6, 2.3.4; using 4.1.2", "upscaler
+  4.1.2 ready for 2560x1440 -> 3840x2160 in 687 ms (302 MiB of GPU memory)"), ~2-3 ms more GPU
+  a frame than FSR 3.1; preflush on. Title and menus 60 fps; gameplay 26-34 fps per 10 s window
+  (perf-trace median 27.7, p10 20.5; frame-times 30-33), 1% lows mostly 10-20 fps (FSR 3.1 while
+  AFK: 20-26, a still scene). Still CPU-bound: per frame the back 27.6 ms, guest cores 4 and 5
+  27.1 and 26.2 ms (guest code 758 and 730 ms/s, spinning 45, waiting 150-175: real game code),
+  cores 3, 1, 0, 2 21-16, the front 13.3; GPU submissions ~12.4 ms of a 35.6 ms frame. Back:
+  busy 756 ms/s plus split wait 226, bank check 164, method 105, uniform buffers 60. Front waits
+  on the back: list writers 310 ms/s, macro dma read 208 (94% constant buffer overlaps), acquire
+  180. Guest cores make ~110,000-130,000 slow (callback) memory accesses a second each. The list
+  wait experiment met a GPU-written entry at 149.7 s (126 s after boot), as gameplay began, and
+  turned itself off: it never ran in gameplay (the menus before ran 60 fps either way). Round 16 targets the bank check, the dma read waits and the
+  upload and pipeline hitches behind the 1% lows.
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
   `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
   vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
@@ -473,19 +556,18 @@ Own changes:
 
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
-   must each fall from 27-29 to under ~15 ms, the GPU has room (8-10 ms of 16.7, FSR 4 adds ~2).
-   Round 15 (built as run #23): see "What the tuned build contains"; the owner checks P-core
-   clocks under load (laptop power limit). The macro DMA read waits turned out to come from
-   queued compute/copy work (`MemoryBarrierPosition` covers every queued writer), not report
-   pages, so no report shadow: the stats line says which. Next, from r23's logs: the guest cores'
-   split (guest code vs spinning vs calls), the bind stage buffers split and bank pages, whether
-   the list wait experiment gains and stays clean, FSR 4's GPU cost and look, the 1% lows.
-   Rounds 16-17: the biggest back-thread
-   and guest costs the profiles show (parallel command recording if per-draw work dominates;
-   JIT/HLE fixes), area-load stalls (ASTC decode and uploads off the back thread's path, the NUP
-   decompression cache from #166). Then FSR 4: AMD FidelityFX SDK 2.x Vulkan ML upscaler (RDNA4,
-   signed DLLs beside the exe) in place of the shader FSR 3.1, same inputs (#695 masks, #606
-   motion), with #253's camera jitter; FSR 3.1 stays the fallback.
+   must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 16
+   (run #24, Windows and the first CachyOS build): from its logs, the back thread's bank check
+   and split wait (EXP9), the front's macro dma read waits (mixed reads) and the 1% lows
+   (EXP8, pipeline keys); verify-r16 must log 0 missed and 0 differed, ab-12 tells a regression
+   from one of them. Ask the owner for the monitor's refresh rate and whether FreeSync is on: the
+   host pacer (trace-host-pace vs trace-display) only helps a fixed-refresh display at 60 fps,
+   and FreeSync is the better answer below 60. Then: the guest cores' ~120,000 slow memory
+   accesses a second each (which pages miss fastmem, and why), the list writer wait (310 ms/s:
+   wait only for writers that overlap the entry, as EXP10 narrows macro reads), parallel command
+   recording if per-draw work still dominates the back, area-load stalls (ASTC decode and
+   uploads off the back thread, #166's NUP cache), #253's camera jitter for FSR 4. Compare the
+   CachyOS log (RADV, FSR 3.1) with Windows on the same scene.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
