@@ -20,7 +20,9 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   1x. Docked the game renders 2560x1440; handheld it renders 1920x1080 inside the 2560x1440
   layout. The "1X (720p/1080p)" scale label is Switch 1 wording.
 - The owner wants the recommended speed settings as defaults, and asked for shaders to be
-  compiled before playing.
+  compiled before playing. Every build ships `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` in its
+  `nx2_switches.txt` (the owner's request, round 14: each new download's copy lacked it, and r22
+  booted with 6,313 of the ~19,400 cached pipelines).
 - The log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
 
 ## How builds are made
