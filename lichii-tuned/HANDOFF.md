@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-07 (end of the second session), for the next Claude session.
+State of the work on 2026-11-08 (round 15), for the next Claude session.
 
 ## Goal
 
@@ -37,11 +37,11 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (120 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (165 commits over upstream nx2
   `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `bf4c42e22`). The patch is `git diff --binary bf4c42e22 tuned4` (108 files, 384 KB); check it
+  `bf4c42e22`). The patch is `git diff --binary bf4c42e22 tuned4` (161 files, 708 KB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -53,11 +53,46 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   -Wconversion off for the rest of every file that includes it. Qt, Windows-only and test files need
   a look by hand. Locally `vk_frame_dump.cpp` (needs stb) and `nvhost_ctrl_gpu.cpp` (the cloud's
   clang crashes on it at any commit) fail; ignore them.
+- The workflow's "AMD FSR 4 libraries" step downloads AMD's signed `amd_fidelityfx_loader_vk.dll`
+  and `amd_fidelityfx_upscaler_vk.dll` and the SDK license from GPUOpen-LibrariesAndSDKs/
+  FidelityFX-SDK `7539ae8` (v2.4.0) into the package and checks their SHA-256 (binary
+  redistribution with the license; nothing of AMD's is in the repository).
 - The cloud session's network blocks GitHub archive downloads (so a full CMake configure fails)
   and the Actions log host; git clones work. Read job logs with the GitHub MCP `get_job_logs`
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 15 (2026-11-08, the 60 fps plan's first round; upstream nx2 had nothing new):
+- AMD FSR 4 upscales Ocarina by default (`vk_fsr4_upscaler.cpp`): the AMD FSR API's loader and
+  AMD's signed FSR 4 upscaler, loaded at run time from the exe folder, newest 4.x version the
+  API offers for the GPU, the same inputs as #695's FSR 3.1 (#606 colour, D32 depth, camera
+  motion in render pixels, #644 effects masks, unit exposure, no jitter, non-linear sRGB-like
+  colour, near 0.1, far 25000), recorded into the scheduler's command buffer; the API's dispatch
+  checks log through `AMD FSR API:` lines. Any failure (DLL, version, context, dispatch) logs an
+  `AMD FSR 4:` line and FSR 3.1 runs. `ocarina_fsr` defaults on and is seeded once into
+  existing configs (`lichii_tuned_defaults` 2). Devices with VK_EXT_shader_float8 and
+  VK_KHR_compute_shader_derivatives enable them (FSR 4's FP8 and INT8 networks). Switches:
+  `LICHII_FSR4=0` (FSR 3.1), `LICHII_FSR4_VERSION=<name>`, `LICHII_FSR4_DEBUG=0`,
+  `EDEN_NX2_DLSS_REPLACEMENT=native` (no FSR).
+- Preflush is on by default for Ocarina (`EDEN_NX2_PREFLUSH=0` off).
+- Measurement: each frame's time and the 1% lows (`frame_time_stats.h`: `DKB frame_ms` every
+  second, `Frame times:` every 10 s; `LICHII_FRAME_TIMES=1`, implied by the perf variables);
+  each guest core's time by activity (`guest_core_profile.cpp`: guest code, supervisor calls
+  by name, kernel, idle spin, idle wait, JIT memory accesses through callbacks); bind stage
+  buffers split into uniform buffers, bank check, storage buffers and stage texture buffers,
+  with bank pages compared per second. `EDEN_NX2_MME_DMA_STATS=1` in perf-trace.bat says why
+  macro reads and acquires still wait.
+- A native 64 KiB bank page compared for a draw is not compared again for the draw's next stage
+  (`LICHII_BANK_DEDUPE=0` compares every bind): up to 16 page compares per bank bind, the
+  likely bulk of bind stage buffers' 8.7 ms a frame.
+- Experiment `LICHII_LIST_WRITER_WAIT=0` (trace-no-list-wait.bat): the front reads GP entries
+  without waiting for queued compute and copy work until a GPU-written entry shows up (the
+  front's biggest wait, ~350 ms/s, ~5,800/s; no GPU-written entry in the r22 logs).
+- #161's upload-word counter turned out to be in already (#184's per-word clean_words and
+  ForEachDirtyUploadRange, and the index-buffer rebind skip).
+- Launchers: trace-fsr31, trace-no-fsr, trace-no-preflush, trace-no-list-wait, frame-times;
+  trace-fsr, trace-preflush and ab-7 went (now defaults).
 
 Round 14 (2026-11-08): upstream nx2 merged up to `bf4c42e22` (build 117 #657, #659, #664 GPU Clocks
 shrink Switch 2 GPU durations again: Ocarina sizes its dynamic resolution from them, #679 AMD fixes:
@@ -68,8 +103,7 @@ ranges behind the read-trap stalls and preflush downloads; setting "Native compu
 the render pass), #700 (invalidation blocks, query walks stop early), #621 (Windows one-tick polls),
 #687 (fence release while acquires wait; ported onto our acquire polls), #695 (opt-in AMD FSR 3.1 in
 place of Ocarina's output pass; `trace-fsr.bat`), #296 (ASTC uploads), #609, #610, #611, #589, #645.
-Not taken: #161's upload-word counter (5a0cdcbee: conflicts with the 64-SSBO and RangeSet code;
-worth a careful port, bind stage buffers is the back's top zone), #640 (cache record repair), #408,
+Not taken: #640 (cache record repair), #408,
 #652, #579, #559 (fake occlusion leaves no pending reports), #698 (our placement doesn't use #232's).
 
 Round 13 (2026-11-07 night): upstream nx2 merged up to `92f021240` (102 commits since
@@ -364,6 +398,13 @@ Own changes:
   reads: #415's over-marked skinning bindings.
 - Run #22 (round 14) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r22-pgo`,
   `lichii-tuned-r22-pgo-lto`); it predates the shipped `EDEN_NX2_PRELOAD_ALL_PIPELINES=1`.
+- r22's per-core CPU per frame in gameplay (median): guest cores 4 and 5 28.9 and 28.2 ms, the
+  back 27.9, guest cores 3, 1, 0 and 2 22.9, 19.7, 17.1 and 17.0, the front 13.1, the Vulkan
+  worker 5.6: all six guest cores are busy, which a 6 P-core laptop CPU shares with the three GPU
+  threads. Round 15's guest core profile says how much of that is spinning or waiting. The
+  front's waits on the back by site: list writers 318-352 ms/s (5,300-5,800/s), acquire 213-219
+  (1,100-1,200/s), macro dma read 196-257 (400-500/s, macro 0xe2c reads ~20,000/s); the back's
+  split wait 175 ms/s.
 - r22 (19,467 pipelines at boot; owner: no white leaves since round 1, no flicker, nothing
   missing): perf 27.2 fps median (p10 17.7), GPU Clocks Normal 27.3 (GPU busy 8.5 ms against 8.3:
   #664 changed nothing visible), preflush 28.0 (p10 20.8, no hang over 1.5 s), FSR 27.3. #415:
@@ -430,11 +471,13 @@ Own changes:
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
    must each fall from 27-29 to under ~15 ms, the GPU has room (8-10 ms of 16.7, FSR 4 adds ~2).
-   Round 15: per-frame frame-time percentiles (1% lows) in perf-trace; preflush on by default for
-   Ocarina (cheap since #415); a sampler of what guest cores 4 and 5 run (JIT code, SVCs/HLE, read
-   traps, spins) and finer back-thread zones; #161's upload-word counter for bind stage buffers
-   (235 ms/s); a front shadow of answered report values (macro DMA read waits 225 ms/s); the owner
-   checks P-core clocks under load (laptop power limit). Rounds 16-17: the biggest back-thread
+   Round 15 (built as run #23): see "What the tuned build contains"; the owner checks P-core
+   clocks under load (laptop power limit). The macro DMA read waits turned out to come from
+   queued compute/copy work (`MemoryBarrierPosition` covers every queued writer), not report
+   pages, so no report shadow: the stats line says which. Next, from r23's logs: the guest cores'
+   split (guest code vs spinning vs calls), the bind stage buffers split and bank pages, whether
+   the list wait experiment gains and stays clean, FSR 4's GPU cost and look, the 1% lows.
+   Rounds 16-17: the biggest back-thread
    and guest costs the profiles show (parallel command recording if per-draw work dominates;
    JIT/HLE fixes), area-load stalls (ASTC decode and uploads off the back thread's path, the NUP
    decompression cache from #166). Then FSR 4: AMD FidelityFX SDK 2.x Vulkan ML upscaler (RDNA4,

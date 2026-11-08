@@ -1,9 +1,9 @@
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 000000000..87ef3d1b1
+index 000000000..ec162467e
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,133 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -59,10 +59,21 @@ index 000000000..87ef3d1b1
 + * "GPU Clocks" (Boost by default) again shortens how long the game thinks its GPU work takes
 +   (Lichii #664). Ocarina sizes its render resolution from that, so it can render sharper and
 +   ask more of the GPU; Normal keeps the old behaviour.
++ * AMD FSR 4 upscales Ocarina to 4K by default (docked: the game's 2560x1440 to 3840x2160),
++   with AMD's FSR 4 libraries from the AMD FSR SDK 2.4 next to lichii.exe
++   (amd_fidelityfx_loader_vk.dll, amd_fidelityfx_upscaler_vk.dll; AMD's license is in
++   amd_fidelityfx_license.md). Where FSR 4 can't run (another GPU, missing libraries, an
++   error), FSR 3.1 takes over and the log says why ("AMD FSR 4:" lines). The setting is
++   "Use AMD FSR upscaling in Ocarina of Time" (Graphics); trace-fsr31.bat compares FSR 3.1.
++ * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
++   GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
++ * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
++   perf-trace.bat or frame-times.bat) and, with perf-trace.bat, what each emulated CPU core
++   spends its time on ("Guest core N per second:").
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
-+   settings; "Game" brings the game's network back).
++   settings; "Game" brings the game's network back). Round 15 adds Ocarina's FSR upscaling on.
 +
 +The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
 +CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
@@ -76,9 +87,6 @@ index 000000000..87ef3d1b1
 +                              (LICHII_CPU_POLICY=strict)
 + ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
 + ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
-+ ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
-+                              over OCuLink; a page stays preflushed for 120 frames, longer if the
-+                              game reads it again (LICHII_PREFLUSH_FRAMES=0 keeps it for good)
 + ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
 +                              (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
 +                              can be missing for a few frames; logs like perf-trace.bat
@@ -89,26 +97,34 @@ index 000000000..87ef3d1b1
 +                              GPU does not idle between frames; logs like perf-trace.bat
 + ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
 +                              pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
-+ trace-preflush.bat           ab-7 with the logging of perf-trace.bat
 + trace-fp16.bat               ab-9 with the logging of perf-trace.bat
 + trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
 +                              (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
 + trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
 +                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
 +                              like perf-trace.bat
-+ trace-fsr.bat                AMD FSR 3.1 in place of Ocarina's own anti-aliasing pass
-+                              (EDEN_NX2_DLSS_REPLACEMENT=fsr), logged like perf-trace.bat
-+ trace-downloads.bat          trace-preflush.bat plus a list of what the GPU copies back and
-+                              which GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
++ trace-fsr31.bat              AMD FSR 3.1 instead of FSR 4 (LICHII_FSR4=0), logged like
++                              perf-trace.bat
++ trace-no-fsr.bat             Ocarina's own upscale pass, no 4K output
++                              (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
++ trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
++                              perf-trace.bat
++ trace-no-list-wait.bat       experiment: the GPU thread reads the next commands without waiting
++                              for queued compute work (LICHII_LIST_WRITER_WAIT=0), logged like
++                              perf-trace.bat; look for flicker, broken objects or crashes
++ trace-downloads.bat          perf-trace.bat plus a list of what the GPU copies back and which
++                              GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
 + trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
 +                              (LICHII_ACQUIRE_POLL=0, LICHII_REPORT_DRAIN=all), logged like
 +                              perf-trace.bat: for comparison, or if the new waits misbehave
 + trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
 +                              logged like perf-trace.bat: slower, for comparison
-+ perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
-+                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
-+                              EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
-+                              (LICHII_TRACE_DRAWS_EVERY=4), since timing them slows that frame
++ perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores and
++                              frame times in the log (EDEN_NX2_GPU_PROFILE=1,
++                              EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1). Draws are timed
++                              one sampled frame in four (LICHII_TRACE_DRAWS_EVERY=4)
++ frame-times.bat              default settings with only each frame's time logged
++                              (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 +
 +Each start replaces the log, so copy it after every run you want to compare.
 +The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
@@ -205,16 +221,6 @@ index 000000000..2fe932a4b
 +rem Texture cache collects from 5 GiB as in official Lichii (this build: 60% of the VRAM budget).
 +set EDEN_NX2_TC_CRITICAL_MIB=5120&& set EDEN_NX2_TC_EXPECTED_MIB=4352
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-7-preflush.bat b/dist/lichii-tuned/ab-7-preflush.bat
-new file mode 100644
-index 000000000..218b5e57d
---- /dev/null
-+++ b/dist/lichii-tuned/ab-7-preflush.bat
-@@ -0,0 +1,4 @@
-+@echo off
-+rem Preflush GPU readbacks (fewer readback stalls); a page stays preflushed for 120 frames.
-+set EDEN_NX2_PREFLUSH=1
-+start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
 new file mode 100644
 index 000000000..450bb1271
@@ -238,28 +244,41 @@ index 000000000..eb0e7344c
 +rem builds turn it off because of a driver bug in another game: look for wrong colors.
 +set EDEN_AMD_FP16=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
+diff --git a/dist/lichii-tuned/frame-times.bat b/dist/lichii-tuned/frame-times.bat
 new file mode 100644
-index 000000000..7f0dcdb20
+index 000000000..c17fbe2c2
 --- /dev/null
-+++ b/dist/lichii-tuned/perf-trace.bat
++++ b/dist/lichii-tuned/frame-times.bat
 @@ -0,0 +1,5 @@
 +@echo off
-+rem Logs GPU thread zones every 10 s and frame timing every second (EDEN_NX2_GPU_PROFILE=1,
-+rem EDEN_DKB_FRAME_TRACE=1); the log is %APPDATA%\eden\log\eden_log.txt.
-+set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++rem The default settings with only each frame's time logged (LICHII_FRAME_TIMES=1): the 1% lows
++rem without the other logging slowing the frames down. Every 10 s a "Frame times:" line.
++set LICHII_FRAME_TIMES=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/perf-trace.bat b/dist/lichii-tuned/perf-trace.bat
+new file mode 100644
+index 000000000..31c5f6b5f
+--- /dev/null
++++ b/dist/lichii-tuned/perf-trace.bat
+@@ -0,0 +1,7 @@
++@echo off
++rem The default settings plus logging; the log is %APPDATA%\eden\log\eden_log.txt. Every second:
++rem frame timing and each frame's time (for the 1% lows). Every 10 s: GPU thread zones, what each
++rem emulated CPU core spent its time on, and why macro reads and semaphore waits waited
++rem (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1).
++set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-downloads.bat b/dist/lichii-tuned/trace-downloads.bat
 new file mode 100644
-index 000000000..a4ed730c5
+index 000000000..edac716ea
 --- /dev/null
 +++ b/dist/lichii-tuned/trace-downloads.bat
 @@ -0,0 +1,6 @@
 +@echo off
-+rem trace-preflush.bat plus a trace of the GPU readbacks (EDEN_NX2_DOWNLOAD_TRACE=1): every
-+rem 10 s the log lists the GPU writes that are copied back the most and the first CPU reads
-+rem of GPU-written memory, to see what the game reads.
-+set EDEN_NX2_PREFLUSH=1&& set EDEN_NX2_DOWNLOAD_TRACE=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++rem perf-trace.bat plus a trace of the GPU readbacks (EDEN_NX2_DOWNLOAD_TRACE=1): every 10 s the
++rem log lists the GPU writes that are copied back the most and the first CPU reads of
++rem GPU-written memory, to see what the game reads.
++set EDEN_NX2_DOWNLOAD_TRACE=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-flush4096.bat b/dist/lichii-tuned/trace-flush4096.bat
 new file mode 100644
@@ -283,17 +302,51 @@ index 000000000..a9068a7da
 +rem AMD driver (EDEN_AMD_FP16=1). Look for wrong colors.
 +set EDEN_AMD_FP16=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-fsr.bat b/dist/lichii-tuned/trace-fsr.bat
+diff --git a/dist/lichii-tuned/trace-fsr31.bat b/dist/lichii-tuned/trace-fsr31.bat
 new file mode 100644
-index 000000000..8630cb80e
+index 000000000..2d308fdf3
 --- /dev/null
-+++ b/dist/lichii-tuned/trace-fsr.bat
-@@ -0,0 +1,6 @@
++++ b/dist/lichii-tuned/trace-fsr31.bat
+@@ -0,0 +1,5 @@
 +@echo off
-+rem AMD FSR 3.1 in place of Ocarina of Time's own anti-aliasing pass, logged like perf-trace.bat
-+rem (EDEN_NX2_DLSS_REPLACEMENT=fsr, the same as the "Use AMD FSR 3.1 upscaling in Ocarina of Time"
-+rem setting). While FSR runs, "No sharpening" is off. The log says whether FSR replaced the pass.
-+set EDEN_NX2_DLSS_REPLACEMENT=fsr&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
++rem AMD FSR 3.1 instead of FSR 4 for Ocarina's upscaling to 4K (LICHII_FSR4=0), logged like
++rem perf-trace.bat: to compare picture and speed with FSR 4.
++set LICHII_FSR4=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-no-fsr.bat b/dist/lichii-tuned/trace-no-fsr.bat
+new file mode 100644
+index 000000000..15c1cefaa
+--- /dev/null
++++ b/dist/lichii-tuned/trace-no-fsr.bat
+@@ -0,0 +1,5 @@
++@echo off
++rem Ocarina's own upscale pass instead of AMD FSR (EDEN_NX2_DLSS_REPLACEMENT=native): no 4K
++rem output, logged like perf-trace.bat, to see what FSR costs.
++set EDEN_NX2_DLSS_REPLACEMENT=native&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-no-list-wait.bat b/dist/lichii-tuned/trace-no-list-wait.bat
+new file mode 100644
+index 000000000..76019cc40
+--- /dev/null
++++ b/dist/lichii-tuned/trace-no-list-wait.bat
+@@ -0,0 +1,7 @@
++@echo off
++rem Experiment: the GPU thread reads the next commands without waiting for queued compute work
++rem that could write them (LICHII_LIST_WRITER_WAIT=0), logged like perf-trace.bat. Look for
++rem flicker, missing or broken objects and crashes; the log says if the game ever writes
++rem commands on the GPU (then the waits come back).
++set LICHII_LIST_WRITER_WAIT=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/trace-no-preflush.bat b/dist/lichii-tuned/trace-no-preflush.bat
+new file mode 100644
+index 000000000..8db196608
+--- /dev/null
++++ b/dist/lichii-tuned/trace-no-preflush.bat
+@@ -0,0 +1,5 @@
++@echo off
++rem Without preflushing GPU readbacks (EDEN_NX2_PREFLUSH=0; on by default for Ocarina since
++rem round 15), logged like perf-trace.bat: more readback stalls, for comparison.
++set EDEN_NX2_PREFLUSH=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-old-drains.bat b/dist/lichii-tuned/trace-old-drains.bat
 new file mode 100644
@@ -318,18 +371,6 @@ index 000000000..3432164a0
 +rem through a host call (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), with the logging of
 +rem perf-trace.bat. Compare with perf-trace.bat.
 +set LICHII_JIT_TSO=0&& set LICHII_JIT_INLINE_CNTPCT=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-preflush.bat b/dist/lichii-tuned/trace-preflush.bat
-new file mode 100644
-index 000000000..0ab7b12b3
---- /dev/null
-+++ b/dist/lichii-tuned/trace-preflush.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem ab-7-preflush.bat with the logging of perf-trace.bat: GPU readbacks are preflushed
-+rem (EDEN_NX2_PREFLUSH=1), fewer readback stalls. A page stays preflushed for 120 frames
-+rem (longer if the game reads it again; LICHII_PREFLUSH_FRAMES=0 keeps it for good, as in r18).
-+set EDEN_NX2_PREFLUSH=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-real-occlusion.bat b/dist/lichii-tuned/trace-real-occlusion.bat
 new file mode 100644
@@ -529,6 +570,1062 @@ index b364ef22d..35ef3d9fc 100644
 -endif()
 \ No newline at end of file
 +endif()
+diff --git a/externals/ffx-api/README.md b/externals/ffx-api/README.md
+new file mode 100644
+index 000000000..6361b969d
+--- /dev/null
++++ b/externals/ffx-api/README.md
+@@ -0,0 +1,14 @@
++# AMD FSR API headers
++
++`include/` holds the AMD FSR API headers that Lichii's FSR 4 path compiles against, from the
++[AMD FSR SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) v2.4.0 (commit
++`7539ae8`, MIT, see each file's header): `Kits/FidelityFX/api/include/ffx_api.h`,
++`ffx_api_types.h`, `vk/ffx_api_vk.h` and `Kits/FidelityFX/upscalers/include/ffx_upscale.h`.
++
++Changes: `ffx_upscale.h` includes its neighbours by name, and `ffx_api.h` declares its entry
++points without `__declspec(dllexport)` outside Windows.
++
++Nothing of AMD's binaries is in this repository. The signed `amd_fidelityfx_loader_vk.dll` and
++`amd_fidelityfx_upscaler_vk.dll` are loaded at run time from the executable's folder; the
++lichii-tuned build copies them there from the SDK's `Kits/FidelityFX/signedbin/`, with the SDK's
++license (`Kits/FidelityFX/docs/license.md`, binary redistribution only).
+diff --git a/externals/ffx-api/include/ffx_api.h b/externals/ffx-api/include/ffx_api.h
+new file mode 100644
+index 000000000..0f4c50723
+--- /dev/null
++++ b/externals/ffx-api/include/ffx_api.h
+@@ -0,0 +1,217 @@
++// This file is part of the FidelityFX SDK.
++//
++// Copyright (C) 2026 Advanced Micro Devices, Inc.
++// 
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files(the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions :
++//
++// The above copyright notice and this permission notice shall be included in
++// all copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++// THE SOFTWARE.
++
++#pragma once
++
++#if defined(__cplusplus)
++extern "C" {
++#endif  // #if defined(__cplusplus)
++
++#if defined(_WIN32)
++#define FFX_API_ENTRY __declspec(dllexport)
++#else
++#define FFX_API_ENTRY
++#endif
++
++#include <stdint.h>
++
++enum FfxApiReturnCodes
++{
++    FFX_API_RETURN_OK                     = 0, ///< The oparation was successful.
++    FFX_API_RETURN_ERROR                  = 1, ///< An error occurred that is not further specified.
++    FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE = 2, ///< The structure type given was not recognized for the function or context with which it was used. This is likely a programming error.
++    FFX_API_RETURN_ERROR_RUNTIME_ERROR    = 3, ///< The underlying runtime (e.g. D3D12, Vulkan) or effect returned an error code.
++    FFX_API_RETURN_NO_PROVIDER            = 4, ///< No provider was found for the given structure type. This is likely a programming error.
++    FFX_API_RETURN_ERROR_MEMORY           = 5, ///< A memory allocation failed.
++    FFX_API_RETURN_ERROR_PARAMETER        = 6, ///< A parameter was invalid, e.g. a null pointer, empty resource or out-of-bounds enum value.
++    FFX_API_RETURN_PROVIDER_NO_SUPPORT_NEW_DESCTYPE = 7, ///< The structure type given is new and not supported in the old provider. This is likely fixed with driver upgrade or effect DLL upgrade.
++};
++
++typedef void* ffxContext;
++typedef uint32_t ffxReturnCode_t;
++
++#define FFX_API_EFFECT_MASK         0x00ff0000u
++#define FFX_API_BACKEND_MASK        0xff000000u
++#define FFX_API_EFFECT_ID_GENERAL   0x00000000u
++
++// Base Descriptor types
++typedef uint64_t ffxStructType_t;
++typedef struct ffxApiHeader
++{
++    ffxStructType_t      type;  ///< The structure type. Must always be set to the corresponding value for any structure (found nearby with a similar name).
++    struct ffxApiHeader* pNext; ///< Pointer to next structure, used for optional parameters and extensions. Can be null.
++} ffxApiHeader;
++
++typedef ffxApiHeader ffxCreateContextDescHeader;
++typedef ffxApiHeader ffxConfigureDescHeader;
++typedef ffxApiHeader ffxQueryDescHeader;
++typedef ffxApiHeader ffxDispatchDescHeader;
++
++// Extensions for global debug
++#define FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_SILENCE  0x0000000u
++#define FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_ERRORS   0x0000001u
++#define FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_WARNINGS 0x0000002u
++#define FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE  0xfffffffu
++
++enum FfxApiMsgType
++{
++    FFX_API_MESSAGE_TYPE_ERROR   = 0,
++    FFX_API_MESSAGE_TYPE_WARNING = 1,
++    FFX_API_MESSAGE_TYPE_COUNT
++};
++
++typedef void (*ffxApiMessage)(uint32_t type, const wchar_t* message);
++
++#define FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG 7u
++struct ffxConfigureDescGlobalDebug
++{
++    ffxConfigureDescHeader header;
++    uint64_t               effectId;
++    ffxApiMessage          fpMessage;  ///< A pointer to a function that can receive messages from the runtime. May be null.
++    uint32_t               debugLevel;
++};
++
++#define FFX_API_QUERY_DESC_TYPE_GET_VERSIONS 4u
++struct ffxQueryDescGetVersions
++{
++    ffxQueryDescHeader header;
++    uint64_t createDescType;    ///< Create description for the effect whose versions should be enumerated.
++    void* device;               ///< For DX12: pointer to ID3D12Device. For VK, pointer to VkDeviceContext.
++    uint64_t *outputCount;      ///< Input capacity of id and name arrays. Output number of returned versions. If initially zero, output is number of available versions.
++    uint64_t *versionIds;       ///< Output array of version ids to be used as version overrides. If null, only names and count are returned.
++    const char** versionNames;  ///< Output array of version names for display. If null, only ids and count are returned. If both this and versionIds are null, only count is returned.
++};
++
++#define FFX_API_DESC_TYPE_OVERRIDE_VERSION 5u
++struct ffxOverrideVersion
++{
++    ffxApiHeader header;
++    uint64_t versionId;  ///< Id of version to use. Must be a value returned from a query in ffxQueryDescGetVersions.versionIds array.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION 6u
++struct ffxQueryGetProviderVersion
++{
++    ffxQueryDescHeader header;
++    uint64_t versionId;      ///< Id of provider being used for queried context. 0 if invalid.
++    const char* versionName; ///< Version name for display. If nullptr, the query was invalid.
++};
++
++// Memory allocation function. Must return a valid pointer to at least size bytes of memory aligned to hold any type.
++// May return null to indicate failure. Standard library malloc fulfills this requirement.
++typedef void* (*ffxAlloc)(void* pUserData, uint64_t size);
++
++// Memory deallocation function. May be called with null pointer as second argument.
++typedef void (*ffxDealloc)(void* pUserData, void* pMem);
++
++typedef struct ffxAllocationCallbacks
++{
++    void* pUserData;
++    ffxAlloc alloc;
++    ffxDealloc dealloc;
++} ffxAllocationCallbacks;
++
++// Creates a FFX object context.
++// Depending on the desc structures provided to this function, the context will be created with the desired version and attributes.
++// Non-zero return indicates error code.
++// Pointers passed in desc must remain live until ffxDestroyContext is called on the context.
++// MemCb may be null; the system allocator (malloc/free) will be used in this case.
++FFX_API_ENTRY ffxReturnCode_t ffxCreateContext(ffxContext* context, ffxCreateContextDescHeader* desc, const ffxAllocationCallbacks* memCb);
++typedef ffxReturnCode_t (*PfnFfxCreateContext)(ffxContext* context, ffxCreateContextDescHeader* desc, const ffxAllocationCallbacks* memCb);
++
++// Destroys an FFX object context.
++// Non-zero return indicates error code.
++// MemCb must be compatible with the callbacks passed into ffxCreateContext.
++FFX_API_ENTRY ffxReturnCode_t ffxDestroyContext(ffxContext* context, const ffxAllocationCallbacks* memCb);
++typedef ffxReturnCode_t (*PfnFfxDestroyContext)(ffxContext* context, const ffxAllocationCallbacks* memCb);
++
++// Configures the provided FFX object context.
++// If context is null, configure operates on any global state.
++// Non-zero return indicates error code.
++FFX_API_ENTRY ffxReturnCode_t ffxConfigure(ffxContext* context, const ffxConfigureDescHeader* desc);
++typedef ffxReturnCode_t (*PfnFfxConfigure)(ffxContext* context, const ffxConfigureDescHeader* desc);
++
++// Queries the provided FFX object context.
++// If context is null, query operates on any global state.
++// Non-zero return indicates error code.
++FFX_API_ENTRY ffxReturnCode_t ffxQuery(ffxContext* context, ffxQueryDescHeader* desc);
++typedef ffxReturnCode_t (*PfnFfxQuery)(ffxContext* context, ffxQueryDescHeader* desc);
++
++// Dispatches work on the given FFX object context defined by the dispatch descriptor.
++// Non-zero return indicates error code.
++FFX_API_ENTRY ffxReturnCode_t ffxDispatch(ffxContext* context, const ffxDispatchDescHeader* desc);
++typedef ffxReturnCode_t (*PfnFfxDispatch)(ffxContext* context, const ffxDispatchDescHeader* desc);
++
++// FFX_API_EFFECT_IDs
++#define FFX_API_EFFECT_ID_UPSCALE                       	0x00010000u
++#define FFX_API_EFFECT_ID_FRAMEGENERATION               	0x00020000u
++#define FFX_API_EFFECT_ID_FRAMEGENERATIONSWAPCHAIN      	0x00030000u
++// Need to keep this ID around for the deprecated VK frame gen swapchain 
++#define FFX_API_EFFECT_ID_FRAMEGENERATIONSWAPCHAIN_VK       0x00040000u
++#define FFX_API_EFFECT_ID_DENOISER                      	0x00050000u
++#define FFX_API_EFFECT_ID_RADIANCECACHE                   	0x00060000u
++#define FFX_API_EFFECT_COUNT                                6u
++
++#define FFX_API_MAKE_EFFECT_SUB_ID(effectId, subversion) ((effectId & FFX_API_EFFECT_MASK) | (subversion & ~FFX_API_EFFECT_MASK))
++
++// FFX_APID_BACKEND_IDs
++#define FFX_API_BACKEND_ID_DX12               0x00000000u
++#define FFX_API_BACKEND_ID_VK                 0x01000000u  // For new effects going forward, please use this backend ID for vulkan specifics
++#define FFX_API_BACKEND_ID_XBOX               0x02000000u  
++
++#define FFX_API_MAKE_BACKEND_SUB_ID(backendId, subversion) ((backendId & FFX_API_BACKEND_MASK) | (subversion & ~FFX_API_BACKEND_MASK))
++
++// Combiner for BACKEND-specific EFFECT sub-Ids
++#define FFX_API_MAKE_BACKEND_EFFECT_SUB_ID(backendId, effectId, subversion) ((subversion & ~FFX_API_EFFECT_MASK) | (effectId & FFX_API_EFFECT_MASK) | (backendId & FFX_API_BACKEND_MASK) | (subversion & ~(FFX_API_BACKEND_MASK | FFX_API_EFFECT_MASK)))
++
++// Pragma macros for controlling warnings so that deprecations take affect externally but can be suppressed internally.
++// This is so we can maintain the API/ABI until we are ready to make the breaking change.
++// These are sadly compiler specific.
++#if defined(_MSC_VER) && !defined(__clang__) && !defined(__GNUC__) && !defined(__INTEL_COMPILER)
++#define FFX_PRAGMA_WARNING_PUSH warning( push )
++#define FFX_PRAGMA_WARNING_POP warning( pop )
++#define FFX_PRAGMA_WARNING_DISABLE_DEPRECATIONS warning( disable: 4996 )
++#define FFX_PRAGMA_WARNING_WARN_DEPRECATIONS warning( default: 4996 )
++#elif defined(__clang__) || defined(__GNUC__)
++#define FFX_PRAGMA_WARNING_PUSH GCC diagnostic push
++#define FFX_PRAGMA_WARNING_POP GCC diagnostic pop
++#define FFX_PRAGMA_WARNING_DISABLE_DEPRECATIONS GCC diagnostic ignored "-Wdeprecated"
++#define FFX_PRAGMA_WARNING_WARN_DEPRECATIONS GCC diagnostic warning "-Wdeprecated"
++#else
++#define FFX_PRAGMA_WARNING_PUSH 
++#define FFX_PRAGMA_WARNING_POP 
++#define FFX_PRAGMA_WARNING_DISABLE_DEPRECATIONS 
++#endif
++
++#define FFX_DEPRECATION(message) [[deprecated(message)]]
++
++#define FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1 0x0000001u
++struct FFX_DEPRECATION("Use ffxConfigureDescGlobalDebug instead of ffxConfigureDescGlobalDebug1.") ffxConfigureDescGlobalDebug1
++{
++    ffxConfigureDescHeader header;
++    ffxApiMessage          fpMessage;
++    uint32_t               debugLevel;
++};
++
++#if defined(__cplusplus)
++}
++#endif  // #if defined(__cplusplus)
+diff --git a/externals/ffx-api/include/ffx_api_types.h b/externals/ffx-api/include/ffx_api_types.h
+new file mode 100644
+index 000000000..380c4c0a1
+--- /dev/null
++++ b/externals/ffx-api/include/ffx_api_types.h
+@@ -0,0 +1,257 @@
++// This file is part of the FidelityFX SDK.
++//
++// Copyright (C) 2026 Advanced Micro Devices, Inc.
++// 
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files(the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions :
++//
++// The above copyright notice and this permission notice shall be included in
++// all copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++// THE SOFTWARE.
++
++#pragma once
++
++#include <stdint.h>
++#include <stdbool.h>
++
++/// An enumeration of surface formats. Needs to match enum FfxApiSurfaceFormat
++enum FfxApiSurfaceFormat
++{
++    FFX_API_SURFACE_FORMAT_UNKNOWN,                     ///< Unknown format
++    FFX_API_SURFACE_FORMAT_R32G32B32A32_TYPELESS,       ///< 32 bit per channel, 4 channel typeless format
++    FFX_API_SURFACE_FORMAT_R32G32B32A32_UINT,           ///< 32 bit per channel, 4 channel uint format
++    FFX_API_SURFACE_FORMAT_R32G32B32A32_FLOAT,          ///< 32 bit per channel, 4 channel float format
++    FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT,          ///< 16 bit per channel, 4 channel float format
++    FFX_API_SURFACE_FORMAT_R32G32B32_FLOAT,             ///< 32 bit per channel, 3 channel float format
++    FFX_API_SURFACE_FORMAT_R32G32_FLOAT,                ///< 32 bit per channel, 2 channel float format
++    FFX_API_SURFACE_FORMAT_R8_UINT,                     ///< 8 bit per channel, 1 channel float format
++    FFX_API_SURFACE_FORMAT_R32_UINT,                    ///< 32 bit per channel, 1 channel float format
++    FFX_API_SURFACE_FORMAT_R8G8B8A8_TYPELESS,           ///<  8 bit per channel, 4 channel typeless format
++    FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM,              ///<  8 bit per channel, 4 channel unsigned normalized format
++    FFX_API_SURFACE_FORMAT_R8G8B8A8_SNORM,              ///<  8 bit per channel, 4 channel signed normalized format
++    FFX_API_SURFACE_FORMAT_R8G8B8A8_SRGB,               ///<  8 bit per channel, 4 channel srgb normalized
++    FFX_API_SURFACE_FORMAT_B8G8R8A8_TYPELESS,           ///<  8 bit per channel, 4 channel typeless format
++    FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM,              ///<  8 bit per channel, 4 channel unsigned normalized format
++    FFX_API_SURFACE_FORMAT_B8G8R8A8_SRGB,               ///<  8 bit per channel, 4 channel srgb normalized
++    FFX_API_SURFACE_FORMAT_R11G11B10_FLOAT,             ///< 32 bit 3 channel float format
++    FFX_API_SURFACE_FORMAT_R10G10B10A2_UNORM,           ///< 10 bit per 3 channel, 2 bit for 1 channel normalized format
++    FFX_API_SURFACE_FORMAT_R16G16_FLOAT,                ///< 16 bit per channel, 2 channel float format
++    FFX_API_SURFACE_FORMAT_R16G16_UINT,                 ///< 16 bit per channel, 2 channel unsigned int format
++    FFX_API_SURFACE_FORMAT_R16G16_SINT,                 ///< 16 bit per channel, 2 channel signed int format
++    FFX_API_SURFACE_FORMAT_R16_FLOAT,                   ///< 16 bit per channel, 1 channel float format
++    FFX_API_SURFACE_FORMAT_R16_UINT,                    ///< 16 bit per channel, 1 channel unsigned int format
++    FFX_API_SURFACE_FORMAT_R16_UNORM,                   ///< 16 bit per channel, 1 channel unsigned normalized format
++    FFX_API_SURFACE_FORMAT_R16_SNORM,                   ///< 16 bit per channel, 1 channel signed normalized format
++    FFX_API_SURFACE_FORMAT_R8_UNORM,                    ///<  8 bit per channel, 1 channel unsigned normalized format
++    FFX_API_SURFACE_FORMAT_R8G8_UNORM,                  ///<  8 bit per channel, 2 channel unsigned normalized format
++    FFX_API_SURFACE_FORMAT_R8G8_UINT,                   ///<  8 bit per channel, 2 channel unsigned integer format
++    FFX_API_SURFACE_FORMAT_R32_FLOAT,                   ///< 32 bit per channel, 1 channel float format
++    FFX_API_SURFACE_FORMAT_R9G9B9E5_SHAREDEXP,          ///<  9 bit per channel, 5 bit exponent format
++
++    FFX_API_SURFACE_FORMAT_R16G16B16A16_TYPELESS,       ///< 16 bit per channel, 4 channel typeless format
++    FFX_API_SURFACE_FORMAT_R32G32_TYPELESS,             ///< 32 bit per channel, 2 channel typeless format
++    FFX_API_SURFACE_FORMAT_R10G10B10A2_TYPELESS,        ///< 10 bit per 3 channel, 2 bit for 1 channel typeless format
++    FFX_API_SURFACE_FORMAT_R16G16_TYPELESS,             ///< 16 bit per channel, 2 channel typless format
++    FFX_API_SURFACE_FORMAT_R16_TYPELESS,                ///< 16 bit per channel, 1 channel typeless format
++    FFX_API_SURFACE_FORMAT_R8_TYPELESS,                 ///<  8 bit per channel, 1 channel typeless format
++    FFX_API_SURFACE_FORMAT_R8G8_TYPELESS,               ///<  8 bit per channel, 2 channel typeless format
++    FFX_API_SURFACE_FORMAT_R32_TYPELESS,                ///< 32 bit per channel, 1 channel typeless format
++    FFX_API_SURFACE_FORMAT_R32G32_UINT,                 ///< 32 bit per channel, 2 channel uint format
++    
++    FFX_API_SURFACE_FORMAT_R8_SNORM,                    ///<  8 bit per channel, 1 channel signed normalized format
++};
++
++/// An enumeration of resource usage.
++enum FfxApiResourceUsage
++{
++    FFX_API_RESOURCE_USAGE_READ_ONLY = 0,                   ///< No usage flags indicate a resource is read only.
++    FFX_API_RESOURCE_USAGE_RENDERTARGET = (1<<0),           ///< Indicates a resource will be used as render target.
++    FFX_API_RESOURCE_USAGE_UAV = (1<<1),                    ///< Indicates a resource will be used as UAV.
++    FFX_API_RESOURCE_USAGE_DEPTHTARGET = (1<<2),            ///< Indicates a resource will be used as depth target.
++    FFX_API_RESOURCE_USAGE_INDIRECT = (1<<3),               ///< Indicates a resource will be used as indirect argument buffer
++    FFX_API_RESOURCE_USAGE_ARRAYVIEW = (1<<4),              ///< Indicates a resource that will generate array views. Works on 2D and cubemap textures
++    FFX_API_RESOURCE_USAGE_STENCILTARGET = (1<<5),          ///< Indicates a resource will be used as stencil target.
++
++    FFX_API_RESOURCE_USAGE_DCC_RENDERTARGET = (1<<15),      ///< Indicates a resource that should specify optimal render target memory access flags (for console use)
++};
++
++
++/// An enumeration of resource states.
++enum FfxApiResourceState
++{
++    FFX_API_RESOURCE_STATE_COMMON               = (1 << 0),
++    FFX_API_RESOURCE_STATE_UNORDERED_ACCESS     = (1 << 1), ///< Indicates a resource is in the state to be used as UAV.
++    FFX_API_RESOURCE_STATE_COMPUTE_READ         = (1 << 2), ///< Indicates a resource is in the state to be read by compute shaders.
++    FFX_API_RESOURCE_STATE_PIXEL_READ           = (1 << 3), ///< Indicates a resource is in the state to be read by pixel shaders.
++    FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ   = (FFX_API_RESOURCE_STATE_PIXEL_READ | FFX_API_RESOURCE_STATE_COMPUTE_READ), ///< Indicates a resource is in the state to be read by pixel or compute shaders.
++    FFX_API_RESOURCE_STATE_COPY_SRC             = (1 << 4), ///< Indicates a resource is in the state to be used as source in a copy command.
++    FFX_API_RESOURCE_STATE_COPY_DEST            = (1 << 5), ///< Indicates a resource is in the state to be used as destination in a copy command.
++    FFX_API_RESOURCE_STATE_GENERIC_READ         = (FFX_API_RESOURCE_STATE_COPY_SRC | FFX_API_RESOURCE_STATE_COMPUTE_READ),  ///< Indicates a resource is in generic (slow) read state.
++    FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT    = (1 << 6), ///< Indicates a resource is in the state to be used as an indirect command argument
++    FFX_API_RESOURCE_STATE_PRESENT              = (1 << 7), ///< Indicates a resource is in the state to be used to present to the swap chain
++    FFX_API_RESOURCE_STATE_RENDER_TARGET        = (1 << 8), ///< Indicates a resource is in the state to be used as render target
++    FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT     = (1 << 9), ///< Indicates a resource is in the state to be used as depth attachment
++};
++
++/// An enumeration of surface dimensions.
++enum FfxApiResourceDimension
++{
++    FFX_API_RESOURCE_DIMENSION_TEXTURE_1D,              ///< A resource with a single dimension.
++    FFX_API_RESOURCE_DIMENSION_TEXTURE_2D,              ///< A resource with two dimensions.
++};
++
++/// An enumeration of resource flags.
++enum FfxApiResourceFlags
++{
++    FFX_API_RESOURCE_FLAGS_NONE             = 0,            ///< No flags.
++    FFX_API_RESOURCE_FLAGS_ALIASABLE        = (1 << 0),     ///< A bit indicating a resource does not need to persist across frames.
++    FFX_API_RESOURCE_FLAGS_UNDEFINED        = (1 << 1),     ///< Special case flag used internally when importing resources that require additional setup
++};
++
++// An enumeration for different resource types
++enum FfxApiResourceType
++{
++    FFX_API_RESOURCE_TYPE_BUFFER,                       ///< The resource is a buffer.
++    FFX_API_RESOURCE_TYPE_TEXTURE1D,                    ///< The resource is a 1-dimensional texture.
++    FFX_API_RESOURCE_TYPE_TEXTURE2D,                    ///< The resource is a 2-dimensional texture.
++    FFX_API_RESOURCE_TYPE_TEXTURE_CUBE,                 ///< The resource is a cube map.
++    FFX_API_RESOURCE_TYPE_TEXTURE3D,                    ///< The resource is a 3-dimensional texture.
++};
++
++enum FfxApiBackbufferTransferFunction
++{
++    FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB,
++    FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ,
++    FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB
++};
++
++/// A structure encapsulating a 2-dimensional point, using 32bit unsigned integers.
++struct FfxApiDimensions2D
++{
++    uint32_t width;  ///< The width of a 2-dimensional range.
++    uint32_t height; ///< The height of a 2-dimensional range.
++};
++
++/// A structure encapsulating a 2-dimensional set of floating point coordinates.
++struct FfxApiFloatCoords2D
++{
++    float x; ///< The x coordinate of a 2-dimensional point.
++    float y; ///< The y coordinate of a 2-dimensional point.
++};
++
++/// A structure encapsulating a 3-dimensional set of floating point coordinates.
++struct FfxApiFloatCoords3D
++{
++    float x;  ///< The x coordinate of a 3-dimensional point.
++    float y;  ///< The y coordinate of a 3-dimensional point.
++    float z;  ///< The z coordinate of a 3-dimensional point.
++};
++
++/// A structure encapsulating a 2-dimensional rect.
++struct FfxApiRect2D
++{
++    int32_t left;
++    int32_t top;
++    int32_t width;
++    int32_t height;
++};
++
++/// A structure describing a resource.
++///
++/// @ingroup SDKTypes
++struct FfxApiResourceDescription
++{
++    uint32_t     type;      ///< The type of the resource.
++    uint32_t     format;    ///< The surface format.
++    union {
++        uint32_t width;     ///< The width of the texture resource.
++        uint32_t size;      ///< The size of the buffer resource.
++    };
++
++    union {
++        uint32_t height;    ///< The height of the texture resource.
++        uint32_t stride;    ///< The stride of the buffer resource.
++    };
++
++    union {
++        uint32_t depth;     ///< The depth of the texture resource.
++        uint32_t alignment; ///< The alignment of the buffer resource.
++    };
++
++    uint32_t     mipCount;  ///< Number of mips (or 0 for full mipchain).
++    uint32_t     flags;     ///< A set of resource flags.
++    uint32_t     usage;     ///< Resource usage flags.
++};
++
++#define FFX_RESOURCE_NAME_SIZE 64
++
++struct FfxApiResource
++{
++    void* resource;
++    struct FfxApiResourceDescription description;
++    uint32_t state;
++};
++
++//struct definition matches FfxApiEffectMemoryUsage
++typedef struct FfxApiEffectMemoryUsage
++{
++    uint64_t totalUsageInBytes;
++    uint64_t aliasableUsageInBytes;
++} FfxApiEffectMemoryUsage;
++
++/// A structure describing a constant buffer allocation.
++///
++/// @ingroup SDKTypes
++typedef struct FfxApiConstantBufferAllocation
++{
++    struct FfxApiResource resource;  ///< The resource representing the constant buffer resource.
++    uint64_t       handle;    ///< The binding handle for the constant buffer
++
++} FfxApiConstantBufferAllocation;
++
++/// A function definition for a constant buffer allocation callback
++/// Used to provide a constant buffer allocator to the calling backend
++///
++/// @param [in] data                       The constant buffer data.
++/// @param [in] dataSize                   The size of the constant buffer data.
++///
++/// @ingroup SDKTypes
++typedef FfxApiConstantBufferAllocation(*FfxApiConstantBufferAllocator)(void* data, const uint64_t dataSize);
++
++/// A 4-component floating point vector
++typedef struct FfxApiFloat4
++{
++    float x;
++    float y;
++    float z;
++    float w;
++} FfxApiFloat4;
++
++/// A 4x4 matrix in row-major layout with row-vector convention.
++/// This is the canonical format expected by FFX APIs.
++/// 
++/// Memory layout: rows[row_index][column_index]
++/// Mathematical convention: v * M (row vector multiplied by matrix)
++typedef struct FfxApiMatrix4x4
++{
++    FfxApiFloat4 rows[4];  ///< Four rows of the matrix. Access as rows[row].x, rows[row].y etc.
++} FfxApiMatrix4x4;
++
++/// An inclusive floating-point interval [min, max].
++/// Valid instances must satisfy min <= max.
++typedef struct FfxApiFloatBounds
++{
++    float min; ///< Lower bound of the interval.
++    float max; ///< Upper bound of the interval.
++} FfxApiFloatBounds;
+diff --git a/externals/ffx-api/include/ffx_upscale.h b/externals/ffx-api/include/ffx_upscale.h
+new file mode 100644
+index 000000000..c671a5a41
+--- /dev/null
++++ b/externals/ffx-api/include/ffx_upscale.h
+@@ -0,0 +1,230 @@
++// This file is part of the FidelityFX SDK.
++//
++// Copyright (C) 2026 Advanced Micro Devices, Inc.
++//
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files(the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions :
++//
++// The above copyright notice and this permission notice shall be included in
++// all copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++// THE SOFTWARE.
++
++#pragma once
++#include "ffx_api.h"
++#include "ffx_api_types.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define FFX_UPSCALER_VERSION_MAJOR 4
++#define FFX_UPSCALER_VERSION_MINOR 1
++#define FFX_UPSCALER_VERSION_PATCH 2
++
++#define FFX_UPSCALER_MAKE_VERSION(major, minor, patch) (((major) << 22) | ((minor) << 12) | (patch))
++#define FFX_UPSCALER_VERSION                           FFX_UPSCALER_MAKE_VERSION(FFX_UPSCALER_VERSION_MAJOR, FFX_UPSCALER_VERSION_MINOR, FFX_UPSCALER_VERSION_PATCH)
++
++enum FfxApiUpscaleQualityMode
++{
++    FFX_UPSCALE_QUALITY_MODE_NATIVEAA          = 0,  ///< Perform upscaling with a per-dimension upscaling ratio of 1.0x.
++    FFX_UPSCALE_QUALITY_MODE_QUALITY           = 1,  ///< Perform upscaling with a per-dimension upscaling ratio of 1.5x.
++    FFX_UPSCALE_QUALITY_MODE_BALANCED          = 2,  ///< Perform upscaling with a per-dimension upscaling ratio of 1.7x.
++    FFX_UPSCALE_QUALITY_MODE_PERFORMANCE       = 3,  ///< Perform upscaling with a per-dimension upscaling ratio of 2.0x.
++    FFX_UPSCALE_QUALITY_MODE_ULTRA_PERFORMANCE = 4   ///< Perform upscaling with a per-dimension upscaling ratio of 3.0x.
++};
++
++enum FfxApiCreateContextUpscaleFlags
++{
++    FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE                 = (1 << 0),  ///< A bit indicating if the input color data provided is using a high-dynamic range.
++    FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS  = (1 << 1),  ///< A bit indicating if the motion vectors are rendered at display resolution.
++    FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION = (1 << 2),  ///< A bit indicating that the motion vectors have the jittering pattern applied to them.
++    FFX_UPSCALE_ENABLE_DEPTH_INVERTED                     = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
++    FFX_UPSCALE_ENABLE_DEPTH_INFINITE                     = (1 << 4),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
++    FFX_UPSCALE_ENABLE_AUTO_EXPOSURE                      = (1 << 5),  ///< A bit indicating if automatic exposure should be applied to input color data.
++    FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION                 = (1 << 6),  ///< A bit indicating that the application uses dynamic resolution scaling.
++    FFX_UPSCALE_ENABLE_DEBUG_CHECKING                     = (1 << 7),  ///< A bit indicating that the runtime should check some API values and report issues.
++    FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE              = (1 << 8),  ///< A bit indicating that the color resource contains perceptual (gamma corrected) colors
++    FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION                = (1 << 9),  ///< A bit indicating if debug visualization is allowed. (memory consumption could increase)
++};
++
++enum FfxApiDispatchFsrUpscaleFlags
++{
++    FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW       = (1 << 0),  ///< A bit indicating that the output resource will contain debug views with relevant information.
++    FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB = (1 << 1),  ///< A bit indicating that the input color resource contains perceptual sRGB colors
++    FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_PQ   = (1 << 2),  ///< A bit indicating that the input color resource contains perceptual PQ colors
++};
++
++enum FfxApiDispatchUpscaleAutoreactiveFlags
++{
++    FFX_UPSCALE_AUTOREACTIVEFLAGS_APPLY_TONEMAP        = (1 << 0),  ///< Apply tonemapping function prior to calculating reactivity.
++    FFX_UPSCALE_AUTOREACTIVEFLAGS_APPLY_INVERSETONEMAP = (1 << 1),  ///< Apply inverse tonemapping function prior to calculating reactivity.
++    FFX_UPSCALE_AUTOREACTIVEFLAGS_APPLY_THRESHOLD      = (1 << 2),  ///< Compare to a threshold value and only record reactivity above the threshold.
++    FFX_UPSCALE_AUTOREACTIVEFLAGS_USE_COMPONENTS_MAX   = (1 << 3),  ///< When enabled use the max. component value, otherwise use the length to calculate reactivity.
++};
++
++#define FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x00)
++struct ffxCreateContextDescUpscale
++{
++    ffxCreateContextDescHeader header;          ///< Header descriptor, use type FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE.
++    uint32_t                   flags;           ///< Zero or a combination of values from FfxApiCreateContextUpscaleFlags.
++    struct FfxApiDimensions2D  maxRenderSize;   ///< The maximum size that rendering will be performed at.
++    struct FfxApiDimensions2D  maxUpscaleSize;  ///< The size of the presentation resolution targeted by the upscaling process.
++    ffxApiMessage              fpMessage;       ///< A pointer to a function that can receive messages from the runtime. May be null.
++};
++
++#define FFX_API_DISPATCH_DESC_TYPE_UPSCALE FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x01)
++struct ffxDispatchDescUpscale
++{
++    ffxDispatchDescHeader      header;                      ///< Header descriptor, use type FFX_API_DISPATCH_DESC_TYPE_UPSCALE.
++    void*                      commandList;                 ///< Command list to record upscaling rendering commands into.
++    struct FfxApiResource      color;                       ///< Color buffer for the current frame (at render resolution).
++    struct FfxApiResource      depth;                       ///< 32bit depth values for the current frame (at render resolution).
++    struct FfxApiResource      motionVectors;               ///< 2-dimensional motion vectors (at render resolution if <c><i>FFX_FSR_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS</i></c> is not set).
++    struct FfxApiResource      exposure;                    ///< Optional resource containing a 1x1 exposure value.
++    struct FfxApiResource      reactive;                    ///< Optional resource containing alpha value of reactive objects in the scene.
++    struct FfxApiResource      transparencyAndComposition;  ///< Optional resource containing alpha value of special objects in the scene.
++    struct FfxApiResource      output;                      ///< Output color buffer for the current frame (at presentation resolution).
++    struct FfxApiFloatCoords2D jitterOffset;                ///< The subpixel jitter offset applied to the camera.
++    struct FfxApiFloatCoords2D motionVectorScale;           ///< The scale factor to convert motion vectors to pixel space. Internally: pixelSpaceMV = motionVector * motionVectorScale. Set to renderSize if motion vectors are in UV space [0,1], or to (1.0, 1.0) if motion vectors are already in pixel space. When using display-resolution motion vectors, set to displaySize.
++    struct FfxApiDimensions2D  renderSize;                  ///< The resolution that was used for rendering the input resources.
++    struct FfxApiDimensions2D  upscaleSize;                 ///< The resolution that the upscaler will upscale to (optional, assumed maxUpscaleSize otherwise).
++    bool                       enableSharpening;            ///< Enable an additional sharpening pass.
++    float                      sharpness;                   ///< The sharpness value between 0 and 1, where 0 is no additional sharpness and 1 is maximum additional sharpness.
++    float                      frameTimeDelta;              ///< The time elapsed since the last frame (expressed in milliseconds).
++    float                      preExposure;                 ///< The pre exposure value (must be > 0.0f)
++    bool                       reset;                       ///< A boolean value which when set to true, indicates the camera has moved discontinuously.
++    float                      cameraNear;                  ///< The distance to the near plane of the camera.
++    float                      cameraFar;                   ///< The distance to the far plane of the camera.
++    float                      cameraFovAngleVertical;      ///< The camera angle field of view in the vertical direction (expressed in radians).
++    float                      viewSpaceToMetersFactor;     ///< The scale factor to convert view space units to meters
++    uint32_t                   flags;                       ///< Zero or a combination of values from FfxApiDispatchFsrUpscaleFlags.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GETUPSCALERATIOFROMQUALITYMODE FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x02)
++struct ffxQueryDescUpscaleGetUpscaleRatioFromQualityMode
++{
++    ffxQueryDescHeader header;            ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GETUPSCALERATIOFROMQUALITYMODE.
++    uint32_t           qualityMode;       ///< The desired quality mode for FSR upscaling.
++    float*             pOutUpscaleRatio;  ///< A pointer to a <c>float</c> which will hold the upscaling the per-dimension upscaling ratio.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x03)
++struct ffxQueryDescUpscaleGetRenderResolutionFromQualityMode
++{
++    ffxQueryDescHeader header;            ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE.
++    uint32_t           displayWidth;      ///< The target display resolution width.
++    uint32_t           displayHeight;     ///< The target display resolution height.
++    uint32_t           qualityMode;       ///< The desired quality mode for FSR upscaling.
++    uint32_t*          pOutRenderWidth;   ///< A pointer to a <c>uint32_t</c> which will hold the calculated render resolution width.
++    uint32_t*          pOutRenderHeight;  ///< A pointer to a <c>uint32_t</c> which will hold the calculated render resolution height.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x04)
++struct ffxQueryDescUpscaleGetJitterPhaseCount
++{
++    ffxQueryDescHeader header;          ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT.
++    uint32_t           renderWidth;     ///< The render resolution width.
++    uint32_t           displayWidth;    ///< The output resolution width.
++    int32_t*           pOutPhaseCount;  ///< A pointer to a <c>int32_t</c> which will hold the jitter phase count for the scaling factor between <c><i>renderWidth</i></c> and <c><i>displayWidth</i></c>.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x05)
++struct ffxQueryDescUpscaleGetJitterOffset
++{
++    ffxQueryDescHeader header;      ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET.
++    int32_t            index;       ///< The index within the jitter sequence.
++    int32_t            phaseCount;  ///< The length of jitter phase. See <c><i>ffxQueryDescFsrGetJitterPhaseCount</i></c>.
++    float*             pOutX;       ///< A pointer to a <c>float</c> which will contain the subpixel jitter offset for the x dimension.
++    float*             pOutY;       ///< A pointer to a <c>float</c> which will contain the subpixel jitter offset for the y dimension.
++};
++
++#define FFX_API_DISPATCH_DESC_TYPE_UPSCALE_GENERATEREACTIVEMASK FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x06)
++struct ffxDispatchDescUpscaleGenerateReactiveMask
++{
++    ffxDispatchDescHeader     header;           ///< Header descriptor, use type FFX_API_DISPATCH_DESC_TYPE_UPSCALE_GENERATEREACTIVEMASK.
++    void*                     commandList;      ///< The <c><i>FfxCommandList</i></c> to record FSRUPSCALE rendering commands into.
++    struct FfxApiResource     colorOpaqueOnly;  ///< A <c><i>FfxApiResource</i></c> containing the opaque only color buffer for the current frame (at render resolution).
++    struct FfxApiResource     colorPreUpscale;  ///< A <c><i>FfxApiResource</i></c> containing the opaque+translucent color buffer for the current frame (at render resolution).
++    struct FfxApiResource     outReactive;      ///< A <c><i>FfxApiResource</i></c> containing the surface to generate the reactive mask into.
++    struct FfxApiDimensions2D renderSize;       ///< The resolution that was used for rendering the input resources.
++    float                     scale;            ///< A value to scale the output
++    float                     cutoffThreshold;  ///< A threshold value to generate a binary reactive mask
++    float                     binaryValue;      ///< A value to set for the binary reactive mask
++    uint32_t                  flags;            ///< Flags to determine how to generate the reactive mask
++};
++
++#define FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x07)
++struct ffxConfigureDescUpscaleKeyValue
++{
++    ffxConfigureDescHeader header;  ///< Header descriptor, use type FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE.
++    uint64_t               key;     ///< Configuration key, member of the FfxApiConfigureUpscaleKey enumeration.
++    uint64_t               u64;     ///< Integer value or enum value to set.
++    void*                  ptr;     ///< Pointer to set or pointer to value to set.
++};
++
++enum FfxApiConfigureUpscaleKey
++{
++    FFX_API_CONFIGURE_UPSCALE_KEY_FVELOCITYFACTOR              = 0,  ///< Override constant buffer fVelocityFactor. The float value is casted from void * ptr. Value of 0.0f can improve temporal stability of bright pixels. Default value is 1.0f. Value is clamped to [0.0f, 1.0f].
++    FFX_API_CONFIGURE_UPSCALE_KEY_FREACTIVENESSSCALE           = 1,  ///< Override constant buffer fReactivenessScale. The float value is casted from void * ptr. Meant for development purpose to test if writing a larger value to reactive mask, reduces ghosting. Default value is 1.0f. Value is clamped to [0.0f, +infinity].
++    FFX_API_CONFIGURE_UPSCALE_KEY_FSHADINGCHANGESCALE          = 2,  ///< Override fShadingChangeScale. Increasing this scales fsr3.1 computed shading change value at read to have higher reactiveness. Default value is 1.0f. Value is clamped to [0.0f, +infinity].
++    FFX_API_CONFIGURE_UPSCALE_KEY_FACCUMULATIONADDEDPERFRAME   = 3,  ///< Override constant buffer fAccumulationAddedPerFrame. Corresponds to amount of accumulation added per frame at pixel coordinate where disocclusion occured or when reactive mask value is > 0.0f. Decreasing this and drawing the ghosting object (IE no mv) to reactive mask with value close to 1.0f can decrease temporal ghosting. Decreasing this value could result in more thin feature pixels flickering. Default value is 0.333. Value is clamped to [0.0f, 1.0f].
++    FFX_API_CONFIGURE_UPSCALE_KEY_FMINDISOCCLUSIONACCUMULATION = 4,  ///< Override constant buffer fMinDisocclusionAccumulation. Increasing this value may reduce white pixel temporal flickering around swaying thin objects that are disoccluding one another often. Too high value may increase ghosting. A sufficiently negative value means for pixel coordinate at frame N that is disoccluded, add fAccumulationAddedPerFrame starting at frame N+2. Default value is -0.333. Value is clamped to [-1.0f, 1.0f].
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GPU_MEMORY_USAGE FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x08)
++struct ffxQueryDescUpscaleGetGPUMemoryUsage
++{
++    ffxQueryDescHeader              header;                 ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GPU_MEMORY_USAGE.
++    struct FfxApiEffectMemoryUsage* gpuMemoryUsageUpscaler; ///< Output values by Query() call.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GPU_MEMORY_USAGE_V2 FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x09)
++struct ffxQueryDescUpscaleGetGPUMemoryUsageV2
++{
++    ffxQueryDescHeader              header;                  ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GPU_MEMORY_USAGE_V2.
++    void*                           device;                  ///< For DX12: pointer to ID3D12Device. For VK, pointer to VkDeviceContext. App needs to fill out before Query() call.
++    struct FfxApiDimensions2D       maxRenderSize;           ///< App needs to fill out before Query() call.
++    struct FfxApiDimensions2D       maxUpscaleSize;          ///< App needs to fill out before Query() call.
++    uint32_t                        flags;                   ///< Zero or a combination of values from FfxApiCreateContextUpscaleFlags. App needs to fill out before Query() call.
++    struct FfxApiEffectMemoryUsage* gpuMemoryUsageUpscaler;  ///< Output values by Query() call.
++};
++
++enum FfxApiQueryResourceIdentifiers
++{
++    FFX_API_QUERY_RESOURCE_INPUT_COLOR                   = (1 << 0),  ///< Color buffer for the current frame (at render resolution).
++    FFX_API_QUERY_RESOURCE_INPUT_DEPTH                   = (1 << 1),  ///< 32bit depth values for the current frame (at render resolution).
++    FFX_API_QUERY_RESOURCE_INPUT_MV                      = (1 << 2),  ///< 2-dimensional motion vectors (at render resolution if FFX_FSR_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS is not set).
++    FFX_API_QUERY_RESOURCE_INPUT_EXPOSURE                = (1 << 3),  ///< A 1x1 texture containing exposure value or the FFX_UPSCALE_ENABLE_AUTO_EXPOSURE set at context creation.
++    FFX_API_QUERY_RESOURCE_INPUT_REACTIVEMASK            = (1 << 4),  ///< An R8 UNORM texture at render resolution that controls the influence of pixel history on upscaling result.
++    FFX_API_QUERY_RESOURCE_INPUT_TRANSPARENCYCOMPOSITION = (1 << 5),  ///< An R8 UNORM texture at render resolution that controls the blending of color in the upscaling result.
++};
++
++#define FFX_API_QUERY_DESC_TYPE_UPSCALE_GET_RESOURCE_REQUIREMENTS FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x0a)
++struct ffxQueryDescUpscaleGetResourceRequirements
++{
++    ffxQueryDescHeader header;              ///< Header descriptor, use type FFX_API_QUERY_DESC_TYPE_UPSCALE_GET_RESOURCE_REQUIREMENTS.
++    uint64_t           required_resources;  ///< resources 64b bitfield, that given current context state, are required for effect correctness.
++    uint64_t           optional_resources;  ///< resources 64b bitfield, that given current context state, will be consumed if provided, but are optional.
++};
++
++#define FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION FFX_API_MAKE_EFFECT_SUB_ID(FFX_API_EFFECT_ID_UPSCALE, 0x0b)
++struct ffxCreateContextDescUpscaleVersion
++{
++    ffxCreateContextDescHeader header;   ///< Header descriptor, use type FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION.
++    uint32_t                   version;  ///< The version of the API the application was built against. This must be set to FFX_UPSCALER_VERSION.
++};
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/externals/ffx-api/include/vk/ffx_api_vk.h b/externals/ffx-api/include/vk/ffx_api_vk.h
+new file mode 100644
+index 000000000..1bbe1d9e4
+--- /dev/null
++++ b/externals/ffx-api/include/vk/ffx_api_vk.h
+@@ -0,0 +1,308 @@
++// This file is part of the FidelityFX SDK.
++//
++// Copyright (C) 2026 Advanced Micro Devices, Inc.
++// 
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files(the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions :
++//
++// The above copyright notice and this permission notice shall be included in
++// all copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++// THE SOFTWARE.
++
++#pragma once
++#include "../ffx_api.h"
++#include "../ffx_api_types.h"
++#include <vulkan/vulkan.h>
++
++/// FFX specific callback type when submitting a command buffer to a queue.
++typedef VkResult(*PFN_vkQueueSubmitFFXAPI)(uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence);
++
++/// Helper stucture
++struct VkQueueInfoFFXAPI
++{
++    VkQueue                 queue;        ///< the vulkan queue
++    uint32_t                familyIndex;  ///< the queue family index, that will be used to perform queue family ownership transfer
++    PFN_vkQueueSubmitFFXAPI submitFunc;   ///< an optional submit function in case there might be some concurrent submissions
++};
++
++// We need to keep this one alive because of VK verison of FSR3.1.4
++// Deprecated version of the VK backend create context descriptor, please use the non-deprecated version below.
++#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK_DEPRECATED 0x0000003u
++struct ffxCreateBackendVKDesc_DEPRECATED
++{
++    ffxCreateContextDescHeader header;
++    VkDevice                   vkDevice;          ///< the logical device used by the program.
++    VkPhysicalDevice           vkPhysicalDevice;  ///< the physical device used by the program.
++    PFN_vkGetDeviceProcAddr    vkDeviceProcAddr;  ///< function pointer to get device procedure addresses
++};
++
++/// Convenience structure to hold all VK-related device information.
++typedef struct VkDeviceContext {
++    VkDevice                vkDevice;           ///< The Vulkan device
++    VkPhysicalDevice        vkPhysicalDevice;   ///< The Vulkan physical device
++    PFN_vkGetDeviceProcAddr vkDeviceProcAddr;   ///< The device's function address table
++} VkDeviceContext;
++
++#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK FFX_API_MAKE_BACKEND_SUB_ID(FFX_API_BACKEND_ID_VK, 0x03)
++struct ffxCreateBackendVKDesc
++{
++    ffxCreateContextDescHeader header;
++    VkDeviceContext            deviceContext;     ///< the VK device information used by the program.
++};
++
++/// Resource allocation callback function. (TODO)
++typedef ffxReturnCode_t(*PfnFfxResourceAllocatorFunc)(uint32_t effectId/*,
++    D3D12_RESOURCE_STATES            initialState,
++    const D3D12_HEAP_PROPERTIES* pHeapProps,
++    const D3D12_RESOURCE_DESC* pD3DDesc,
++    const FfxApiResourceDescription* pFfxDesc,
++    const D3D12_CLEAR_VALUE* pOptimizedClear,
++    ID3D12Resource** ppD3DResource*/);
++
++/// Resource destruction callback function. (TODO)
++typedef ffxReturnCode_t(*PfnFfxResourceDeallocatorFunc)(uint32_t effectId/*, ID3D12Resource* pResource*/);
++
++#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK_ALLOCATION_CALLBACKS FFX_API_MAKE_BACKEND_SUB_ID(FFX_API_BACKEND_ID_VK, 0x04)
++struct ffxCreateBackendVKAllocationCallbacksDesc
++{
++	ffxCreateContextDescHeader    header;
++    PfnFfxResourceAllocatorFunc   pfnFfxResourceAllocator;        ///< Resource allocation function (can be null)      <------- NOT IMPL YET, SEE DX12/XBOX IMPL
++    PfnFfxResourceDeallocatorFunc pfnFfxResourceDeallocator;      ///< Resource deallocation function (can be null)     <------- NOT IMPL YET, SEE DX12/XBOX IMPL
++    FfxApiConstantBufferAllocator pfnFfxConstantBufferAllocator;  ///< Constant buffer allocation function (can be null)
++};
++
++#if defined(__cplusplus)
++
++static inline uint32_t ffxApiGetSurfaceFormatVK(VkFormat fmt)
++{
++    switch (fmt)
++    {
++    case VK_FORMAT_R32G32B32A32_SFLOAT:
++        return FFX_API_SURFACE_FORMAT_R32G32B32A32_FLOAT;
++    case VK_FORMAT_R32G32B32_SFLOAT:
++        return FFX_API_SURFACE_FORMAT_R32G32B32_FLOAT;
++    case VK_FORMAT_R32G32B32A32_UINT:
++        return FFX_API_SURFACE_FORMAT_R32G32B32A32_UINT;
++    case VK_FORMAT_R16G16B16A16_SFLOAT:
++        return FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
++    case VK_FORMAT_R32G32_SFLOAT:
++        return FFX_API_SURFACE_FORMAT_R32G32_FLOAT;
++    case VK_FORMAT_R32_UINT:
++    case VK_FORMAT_D24_UNORM_S8_UINT:
++    case VK_FORMAT_X8_D24_UNORM_PACK32:
++        return FFX_API_SURFACE_FORMAT_R32_UINT;
++    case VK_FORMAT_R8G8B8A8_UNORM:
++        return FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
++    case VK_FORMAT_R8G8B8A8_SNORM:
++        return FFX_API_SURFACE_FORMAT_R8G8B8A8_SNORM;
++    case VK_FORMAT_R8G8B8A8_SRGB:
++        return FFX_API_SURFACE_FORMAT_R8G8B8A8_SRGB;
++    case VK_FORMAT_B8G8R8A8_UNORM:
++        return FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM;
++    case VK_FORMAT_B8G8R8A8_SRGB:
++        return FFX_API_SURFACE_FORMAT_B8G8R8A8_SRGB;
++    case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
++        return FFX_API_SURFACE_FORMAT_R11G11B10_FLOAT;
++    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
++        return FFX_API_SURFACE_FORMAT_R10G10B10A2_UNORM;
++    case VK_FORMAT_R16G16_SFLOAT:
++        return FFX_API_SURFACE_FORMAT_R16G16_FLOAT;
++    case VK_FORMAT_R16G16_UINT:
++        return FFX_API_SURFACE_FORMAT_R16G16_UINT;
++    case VK_FORMAT_R16G16_SINT:
++        return FFX_API_SURFACE_FORMAT_R16G16_SINT;
++    case VK_FORMAT_R16_SFLOAT:
++        return FFX_API_SURFACE_FORMAT_R16_FLOAT;
++    case VK_FORMAT_R16_UINT:
++        return FFX_API_SURFACE_FORMAT_R16_UINT;
++    case VK_FORMAT_R16_UNORM:
++    case VK_FORMAT_D16_UNORM:
++    case VK_FORMAT_D16_UNORM_S8_UINT:
++        return FFX_API_SURFACE_FORMAT_R16_UNORM;
++    case VK_FORMAT_R16_SNORM:
++        return FFX_API_SURFACE_FORMAT_R16_SNORM;
++    case VK_FORMAT_R8_UNORM:
++        return FFX_API_SURFACE_FORMAT_R8_UNORM;
++    case VK_FORMAT_R8_SNORM:
++        return FFX_API_SURFACE_FORMAT_R8_SNORM;
++    case VK_FORMAT_R8_UINT:
++    case VK_FORMAT_S8_UINT:
++        return FFX_API_SURFACE_FORMAT_R8_UINT;
++    case VK_FORMAT_R8G8_UNORM:
++        return FFX_API_SURFACE_FORMAT_R8G8_UNORM;
++    case VK_FORMAT_R8G8_UINT:
++        return FFX_API_SURFACE_FORMAT_R8G8_UINT;
++    case VK_FORMAT_R32_SFLOAT:
++    case VK_FORMAT_D32_SFLOAT:
++    case VK_FORMAT_D32_SFLOAT_S8_UINT:
++        return FFX_API_SURFACE_FORMAT_R32_FLOAT;
++    case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
++        return FFX_API_SURFACE_FORMAT_R9G9B9E5_SHAREDEXP;
++    case VK_FORMAT_UNDEFINED:
++        return FFX_API_SURFACE_FORMAT_UNKNOWN;
++
++    default:
++        // NOTE: we do not support typeless formats here
++        //FFX_ASSERT_MESSAGE(false, "Format not yet supported");
++        return FFX_API_SURFACE_FORMAT_UNKNOWN;
++    }
++}
++
++static inline uint32_t ffxApiGetSurfaceFormatToGamma(uint32_t fmt)
++{
++    switch (fmt)
++    {
++    case (FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM):
++        return FFX_API_SURFACE_FORMAT_R8G8B8A8_SRGB;
++    case (FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM):
++        return FFX_API_SURFACE_FORMAT_B8G8R8A8_SRGB;
++    default:
++        return fmt;
++    }
++}
++
++static inline bool ffxApiIsDepthFormat(VkFormat fmt)
++{
++    switch (fmt)
++    {
++    case VK_FORMAT_D16_UNORM:
++    case VK_FORMAT_X8_D24_UNORM_PACK32:
++    case VK_FORMAT_D32_SFLOAT:
++    case VK_FORMAT_D16_UNORM_S8_UINT:
++    case VK_FORMAT_D24_UNORM_S8_UINT:
++    case VK_FORMAT_D32_SFLOAT_S8_UINT:
++        return true;
++
++    default:
++        return false;
++    }
++}
++
++static inline bool ffxApiIsStencilFormat(VkFormat fmt)
++{
++    switch (fmt)
++    {
++    case VK_FORMAT_S8_UINT:
++    case VK_FORMAT_D16_UNORM_S8_UINT:
++    case VK_FORMAT_D24_UNORM_S8_UINT:
++    case VK_FORMAT_D32_SFLOAT_S8_UINT:
++        return true;
++
++    default:
++        return false;
++    }
++}
++
++static inline FfxApiResourceDescription ffxApiGetBufferResourceDescriptionVK(const VkBuffer           buffer,
++    const VkBufferCreateInfo createInfo,
++    uint32_t                 additionalUsages)
++{
++    FfxApiResourceDescription resourceDescription = {};
++
++    // This is valid
++    if (buffer == VK_NULL_HANDLE)
++        return resourceDescription;
++
++    resourceDescription.flags = FFX_API_RESOURCE_FLAGS_NONE;
++    resourceDescription.usage = additionalUsages;
++    resourceDescription.size = (uint32_t)createInfo.size;
++    resourceDescription.stride = 0;
++    resourceDescription.format = FFX_API_SURFACE_FORMAT_UNKNOWN;
++
++    if ((createInfo.usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0)
++        resourceDescription.usage |= FFX_API_RESOURCE_USAGE_UAV;
++    if ((createInfo.usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) != 0)
++        resourceDescription.usage |= FFX_API_RESOURCE_USAGE_INDIRECT;
++
++    // What should we initialize this to?? No case for this yet
++    resourceDescription.depth = 0;
++    resourceDescription.mipCount = 0;
++
++    // Set the type
++    resourceDescription.type = FFX_API_RESOURCE_TYPE_BUFFER;
++
++    return resourceDescription;
++}
++
++static inline FfxApiResourceDescription ffxApiGetImageResourceDescriptionVK(const VkImage image, const VkImageCreateInfo createInfo, uint32_t additionalUsages)
++{
++    FfxApiResourceDescription resourceDescription = {};
++
++    // This is valid
++    if (image == VK_NULL_HANDLE)
++        return resourceDescription;
++
++    // Set flags properly for resource registration
++    resourceDescription.flags = FFX_API_RESOURCE_FLAGS_NONE;
++    resourceDescription.usage = FFX_API_RESOURCE_USAGE_READ_ONLY;
++
++    // Check for depth stencil use
++    if (ffxApiIsDepthFormat(createInfo.format))
++        resourceDescription.usage |= FFX_API_RESOURCE_USAGE_DEPTHTARGET;
++    if (ffxApiIsStencilFormat(createInfo.format))
++        resourceDescription.usage |= FFX_API_RESOURCE_USAGE_STENCILTARGET;
++
++    // Unordered access use
++    if ((createInfo.usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0)
++        resourceDescription.usage |= FFX_API_RESOURCE_USAGE_UAV;
++
++    // Resource-specific supplemental use flags
++    resourceDescription.usage |= additionalUsages;
++
++    resourceDescription.width = createInfo.extent.width;
++    resourceDescription.height = createInfo.extent.height;
++    resourceDescription.mipCount = createInfo.mipLevels;
++    resourceDescription.format = ffxApiGetSurfaceFormatVK(createInfo.format);
++
++    // if the mutable flag is present, assume that the real format is sRGB
++    if ((createInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0)
++        resourceDescription.format = ffxApiGetSurfaceFormatToGamma(resourceDescription.format);
++
++    switch (createInfo.imageType)
++    {
++    case VK_IMAGE_TYPE_1D:
++        resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE1D;
++        break;
++    case VK_IMAGE_TYPE_2D:
++        resourceDescription.depth = createInfo.arrayLayers;
++        if ((additionalUsages & FFX_API_RESOURCE_USAGE_ARRAYVIEW) != 0)
++            resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
++        else if ((createInfo.flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) != 0)
++            resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE_CUBE;
++        else
++            resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
++        break;
++    case VK_IMAGE_TYPE_3D:
++        resourceDescription.depth = createInfo.extent.depth;
++        resourceDescription.type = FFX_API_RESOURCE_TYPE_TEXTURE3D;
++        break;
++    default:
++        //FFX_ASSERT_MESSAGE(false, "FFXInterface: VK: Unsupported texture dimension requested. Please implement.");
++        break;
++    }
++
++    return resourceDescription;
++}
++
++static inline FfxApiResource ffxApiGetResourceVK(void* vkResource, FfxApiResourceDescription ffxResDescription, uint32_t state)
++{
++    FfxApiResource resource = {};
++    resource.resource = vkResource;
++    resource.state = state;
++    resource.description = ffxResDescription;
++
++    return resource;
++}
++
++#endif
 diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
 index 02b054645..01b18f485 100644
 --- a/src/common/CMakeLists.txt
@@ -708,14 +1805,14 @@ index 000000000..cfe86ce09
 +
 +} // namespace Common::PgoTraining
 diff --git a/src/common/settings.h b/src/common/settings.h
-index d672eab8c..730edb7d4 100644
+index d672eab8c..f41ef7a26 100644
 --- a/src/common/settings.h
 +++ b/src/common/settings.h
 @@ -400,6 +400,7 @@ struct Values {
                                                         true};
      // NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS.
      SwitchableSetting<bool> nvidia_dlss{linkage, false, "nvidia_dlss", Category::Renderer};
-+    SwitchableSetting<bool> ocarina_fsr{linkage, false, "ocarina_fsr", Category::Renderer};
++    SwitchableSetting<bool> ocarina_fsr{linkage, true, "ocarina_fsr", Category::Renderer};
      SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
                                                        AspectRatio::R16_9,
                                                        "aspect_ratio",
@@ -1367,11 +2464,92 @@ index 000000000..6ba3b63a1
 +void SetCurrentThreadCoreRole(CoreRole role, const char* thread_name);
 +
 +} // namespace Common::Windows
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index baa1152d1..ab58b97b2 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -352,6 +352,8 @@ add_library(core STATIC
+     hle/kernel/kernel.h
+     hle/kernel/memory_types.h
+     hle/kernel/message_buffer.h
++    hle/kernel/guest_core_profile.cpp
++    hle/kernel/guest_core_profile.h
+     hle/kernel/physical_core.cpp
+     hle/kernel/physical_core.h
+     hle/kernel/slab_helpers.h
 diff --git a/src/core/arm/dynarmic/arm_dynarmic_64.cpp b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
-index b489e7956..825ff417a 100644
+index b489e7956..c7a5ed81b 100644
 --- a/src/core/arm/dynarmic/arm_dynarmic_64.cpp
 +++ b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
-@@ -354,6 +354,34 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
+@@ -15,6 +15,7 @@
+ #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
+ #include "core/arm/dynarmic/window_trace.h"
+ #include "core/core_timing.h"
++#include "core/hle/kernel/guest_core_profile.h"
+ #include "core/hle/kernel/k_process.h"
+ #include "dynarmic/interface/A64/config.h"
+ 
+@@ -29,6 +30,7 @@ DynarmicCallbacks64::DynarmicCallbacks64(ArmDynarmic64& parent, Kernel::KProcess
+ {}
+ 
+ u64 DynarmicCallbacks64::MemoryRead(u64 vaddr, size_t size) {
++    Kernel::GuestCoreProfile::NoteSlowAccess();
+     CheckMemoryAccess(vaddr, size, Kernel::DebugWatchpointType::Read);
+     u64 value{};
+     switch (size) {
+@@ -50,6 +52,7 @@ u64 DynarmicCallbacks64::MemoryRead(u64 vaddr, size_t size) {
+     return value;
+ }
+ Dynarmic::A64::Vector DynarmicCallbacks64::MemoryRead128(u64 vaddr) {
++    Kernel::GuestCoreProfile::NoteSlowAccess();
+     CheckMemoryAccess(vaddr, 16, Kernel::DebugWatchpointType::Read);
+     return {m_memory.Read64(vaddr), m_memory.Read64(vaddr + 8)};
+ }
+@@ -75,6 +78,7 @@ std::optional<u32> DynarmicCallbacks64::MemoryReadCode(u64 vaddr) {
+ }
+ 
+ void DynarmicCallbacks64::MemoryWrite(Dynarmic::A64::VAddr vaddr, u64 value, std::size_t size) {
++    Kernel::GuestCoreProfile::NoteSlowAccess();
+     if (CheckMemoryAccess(vaddr, size, Kernel::DebugWatchpointType::Write)) {
+         switch (size) {
+         case sizeof(u64): return m_memory.Write64(vaddr, u64(value));
+@@ -86,6 +90,7 @@ void DynarmicCallbacks64::MemoryWrite(Dynarmic::A64::VAddr vaddr, u64 value, std
+     }
+ }
+ void DynarmicCallbacks64::MemoryWrite128(u64 vaddr, Dynarmic::A64::Vector value) {
++    Kernel::GuestCoreProfile::NoteSlowAccess();
+     if (CheckMemoryAccess(vaddr, 16, Kernel::DebugWatchpointType::Write)) {
+         m_memory.Write64(vaddr, value[0]);
+         m_memory.Write64(vaddr + 8, value[1]);
+@@ -93,22 +98,27 @@ void DynarmicCallbacks64::MemoryWrite128(u64 vaddr, Dynarmic::A64::Vector value)
+ }
+ 
+ bool DynarmicCallbacks64::MemoryWriteExclusive8(u64 vaddr, std::uint8_t value, std::uint8_t expected) {
++    Kernel::GuestCoreProfile::NoteSlowExclusive();
+     return CheckMemoryAccess(vaddr, 1, Kernel::DebugWatchpointType::Write) &&
+             m_memory.WriteExclusive8(vaddr, value, expected);
+ }
+ bool DynarmicCallbacks64::MemoryWriteExclusive16(u64 vaddr, std::uint16_t value, std::uint16_t expected) {
++    Kernel::GuestCoreProfile::NoteSlowExclusive();
+     return CheckMemoryAccess(vaddr, 2, Kernel::DebugWatchpointType::Write) &&
+             m_memory.WriteExclusive16(vaddr, value, expected);
+ }
+ bool DynarmicCallbacks64::MemoryWriteExclusive32(u64 vaddr, std::uint32_t value, std::uint32_t expected) {
++    Kernel::GuestCoreProfile::NoteSlowExclusive();
+     return CheckMemoryAccess(vaddr, 4, Kernel::DebugWatchpointType::Write) &&
+             m_memory.WriteExclusive32(vaddr, value, expected);
+ }
+ bool DynarmicCallbacks64::MemoryWriteExclusive64(u64 vaddr, std::uint64_t value, std::uint64_t expected) {
++    Kernel::GuestCoreProfile::NoteSlowExclusive();
+     return CheckMemoryAccess(vaddr, 8, Kernel::DebugWatchpointType::Write) &&
+             m_memory.WriteExclusive64(vaddr, value, expected);
+ }
+ bool DynarmicCallbacks64::MemoryWriteExclusive128(u64 vaddr, Dynarmic::A64::Vector value, Dynarmic::A64::Vector expected) {
++    Kernel::GuestCoreProfile::NoteSlowExclusive();
+     return CheckMemoryAccess(vaddr, 16, Kernel::DebugWatchpointType::Write) &&
+             m_memory.WriteExclusive128(vaddr, value, expected);
+ }
+@@ -354,6 +364,34 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
      config.wall_clock_cntpct = m_uses_wall_clock;
      config.enable_cycle_counting = !m_uses_wall_clock;
  
@@ -1501,8 +2679,267 @@ index 2b16e101d..953b1f0cb 100644
      }
  
      if (out.size() < sizeof(Loader::NSOHeader)) {
+diff --git a/src/core/hle/kernel/guest_core_profile.cpp b/src/core/hle/kernel/guest_core_profile.cpp
+new file mode 100644
+index 000000000..f78eaeb3d
+--- /dev/null
++++ b/src/core/hle/kernel/guest_core_profile.cpp
+@@ -0,0 +1,178 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <algorithm>
++#include <cstdlib>
++#include <iterator>
++#include <numeric>
++#include <string>
++#include <string_view>
++
++#include <fmt/format.h>
++
++#include "common/logging.h"
++#include "common/spin_wait.h"
++#include "core/hle/kernel/guest_core_profile.h"
++
++namespace Kernel {
++namespace {
++
++bool ProfileEnabled() {
++    for (const char* name :
++         {"LICHII_GUEST_PROFILE", "EDEN_DKB_FRAME_TRACE", "EDEN_NX2_GPU_PROFILE"}) {
++        const char* value = std::getenv(name);
++        if (value != nullptr && value[0] == '1') {
++            return true;
++        }
++    }
++    return false;
++}
++
++/// The calls a game makes often; the others print as numbers.
++std::string SvcName(u32 id) {
++    switch (id) {
++    case 0x01:
++        return "SetHeapSize";
++    case 0x06:
++        return "QueryMemory";
++    case 0x08:
++        return "CreateThread";
++    case 0x0b:
++        return "SleepThread";
++    case 0x0c:
++        return "GetThreadPriority";
++    case 0x0d:
++        return "SetThreadPriority";
++    case 0x0f:
++        return "SetThreadCoreMask";
++    case 0x10:
++        return "GetCurrentProcessorNumber";
++    case 0x11:
++        return "SignalEvent";
++    case 0x12:
++        return "ClearEvent";
++    case 0x16:
++        return "CloseHandle";
++    case 0x17:
++        return "ResetSignal";
++    case 0x18:
++        return "WaitSynchronization";
++    case 0x19:
++        return "CancelSynchronization";
++    case 0x1a:
++        return "ArbitrateLock";
++    case 0x1b:
++        return "ArbitrateUnlock";
++    case 0x1c:
++        return "WaitProcessWideKeyAtomic";
++    case 0x1d:
++        return "SignalProcessWideKey";
++    case 0x1e:
++        return "GetSystemTick";
++    case 0x21:
++        return "SendSyncRequest";
++    case 0x22:
++        return "SendSyncRequestWithUserBuffer";
++    case 0x25:
++        return "GetThreadId";
++    case 0x27:
++        return "OutputDebugString";
++    case 0x29:
++        return "GetInfo";
++    case 0x2c:
++        return "MapPhysicalMemory";
++    case 0x34:
++        return "WaitForAddress";
++    case 0x35:
++        return "SignalToAddress";
++    case 0x36:
++        return "SynchronizePreemptionState";
++    case 0x43:
++        return "ReplyAndReceive";
++    default:
++        return fmt::format("{:#04x}", id);
++    }
++}
++
++} // Anonymous namespace
++
++const bool GuestCoreProfile::enabled = ProfileEnabled();
++thread_local u64 GuestCoreProfile::slow_accesses = 0;
++thread_local u64 GuestCoreProfile::slow_exclusives = 0;
++
++void GuestCoreProfile::SwitchSlow(Activity activity, u32 svc) {
++    const u64 now = Common::SpinWait::Now();
++    if (window_start == 0) {
++        window_start = now;
++        window_wall = std::chrono::steady_clock::now();
++        last = now;
++        slow_accesses = 0;
++        slow_exclusives = 0;
++    }
++    const u64 elapsed = now - last;
++    ticks[static_cast<size_t>(current)] += elapsed;
++    if (current == Activity::Svc && current_svc < SvcCount) {
++        svc_ticks[current_svc] += elapsed;
++    }
++    last = now;
++    current = activity;
++    current_svc = svc;
++    if (activity == Activity::Svc && svc < SvcCount) {
++        ++svc_calls[svc];
++    } else if (activity == Activity::Guest) {
++        ++guest_entries;
++    }
++    // The wall clock is read now and then; it also calibrates the ticks.
++    if ((++switches & 1023) == 0) {
++        const auto wall = std::chrono::steady_clock::now();
++        if (wall - window_wall >= std::chrono::seconds{10}) {
++            Log(now, wall);
++        }
++    }
++}
++
++void GuestCoreProfile::Log(u64 now, std::chrono::steady_clock::time_point wall) {
++    const double seconds = std::chrono::duration<double>(wall - window_wall).count();
++    const double ticks_per_ms = static_cast<double>(now - window_start) / (seconds * 1000.0);
++    const auto ms_per_second = [&](u64 value) {
++        return static_cast<double>(value) / ticks_per_ms / seconds;
++    };
++    const auto per_second = [&](u64 value) { return static_cast<double>(value) / seconds; };
++    const auto at = [&](Activity activity) {
++        return ms_per_second(ticks[static_cast<size_t>(activity)]);
++    };
++
++    std::array<u32, SvcCount> order{};
++    std::iota(order.begin(), order.end(), 0U);
++    std::ranges::sort(order, [&](u32 a, u32 b) { return svc_ticks[a] > svc_ticks[b]; });
++    std::string calls;
++    u64 total_calls = 0;
++    for (const u32 count : svc_calls) {
++        total_calls += count;
++    }
++    for (size_t i = 0; i < 8 && svc_ticks[order[i]] != 0; ++i) {
++        const u32 id = order[i];
++        fmt::format_to(std::back_inserter(calls), "{}{} {:.1f} ms ({:.0f}/s)",
++                       calls.empty() ? "" : ", ", SvcName(id), ms_per_second(svc_ticks[id]),
++                       per_second(svc_calls[id]));
++    }
++    LOG_INFO(Kernel,
++             "Guest core {} per second: guest code {:.1f} ms ({:.0f} entries, {:.0f} slow memory "
++             "accesses, {:.0f} slow exclusive stores), supervisor calls {:.1f} ms ({:.0f}), "
++             "kernel {:.1f} ms, idle spin {:.1f} ms, idle wait {:.1f} ms | calls: {}",
++             core_index, at(Activity::Guest), per_second(guest_entries),
++             per_second(slow_accesses), per_second(slow_exclusives), at(Activity::Svc),
++             per_second(total_calls), at(Activity::Kernel), at(Activity::IdleSpin),
++             at(Activity::IdleWait), calls.empty() ? "none" : calls);
++
++    window_start = now;
++    window_wall = wall;
++    guest_entries = 0;
++    slow_accesses = 0;
++    slow_exclusives = 0;
++    ticks.fill(0);
++    svc_ticks.fill(0);
++    svc_calls.fill(0);
++}
++
++} // namespace Kernel
+diff --git a/src/core/hle/kernel/guest_core_profile.h b/src/core/hle/kernel/guest_core_profile.h
+new file mode 100644
+index 000000000..16a3d7130
+--- /dev/null
++++ b/src/core/hle/kernel/guest_core_profile.h
+@@ -0,0 +1,69 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <array>
++#include <chrono>
++#include <cstddef>
++
++#include "common/common_types.h"
++
++namespace Kernel {
++
++/// Where a guest core's host thread spends its time: running guest code (the JIT, with the slow
++/// memory accesses and read traps it makes), each supervisor call by number, the kernel's own
++/// work around them, spinning idle and waiting idle. On with LICHII_GUEST_PROFILE=1,
++/// EDEN_DKB_FRAME_TRACE=1 or EDEN_NX2_GPU_PROFILE=1; each core logs a line every 10 s. Only the
++/// core's own host thread touches its profile.
++class GuestCoreProfile {
++public:
++    enum class Activity : u32 { Kernel, Guest, Svc, IdleSpin, IdleWait, Count };
++
++    static const bool enabled;
++
++    explicit GuestCoreProfile(size_t core_index_) : core_index{core_index_} {}
++
++    /// Ends the current activity and starts `activity` (with its supervisor call number).
++    void Switch(Activity activity, u32 svc = 0) {
++        if (enabled) {
++            SwitchSlow(activity, svc);
++        }
++    }
++
++    /// Memory accesses the JIT made through callbacks instead of fastmem, on this thread.
++    static void NoteSlowAccess() {
++        if (enabled) {
++            ++slow_accesses;
++        }
++    }
++
++    /// Exclusive stores the JIT made through callbacks, on this thread.
++    static void NoteSlowExclusive() {
++        if (enabled) {
++            ++slow_exclusives;
++        }
++    }
++
++private:
++    static constexpr size_t SvcCount = 256;
++    static thread_local u64 slow_accesses;
++    static thread_local u64 slow_exclusives;
++
++    void SwitchSlow(Activity activity, u32 svc);
++    void Log(u64 now, std::chrono::steady_clock::time_point wall);
++
++    const size_t core_index;
++    u64 window_start{};
++    std::chrono::steady_clock::time_point window_wall{};
++    u64 last{};
++    u64 switches{};
++    Activity current{Activity::Kernel};
++    u32 current_svc{};
++    u64 guest_entries{};
++    std::array<u64, static_cast<size_t>(Activity::Count)> ticks{};
++    std::array<u64, SvcCount> svc_ticks{};
++    std::array<u32, SvcCount> svc_calls{};
++};
++
++} // namespace Kernel
 diff --git a/src/core/hle/kernel/physical_core.cpp b/src/core/hle/kernel/physical_core.cpp
-index 4fb59fb62..2fd5856b4 100644
+index 4fb59fb62..70057c785 100644
 --- a/src/core/hle/kernel/physical_core.cpp
 +++ b/src/core/hle/kernel/physical_core.cpp
 @@ -9,6 +9,7 @@
@@ -1513,11 +2950,49 @@ index 4fb59fb62..2fd5856b4 100644
  #include "core/core.h"
  #include "core/debugger/debugger.h"
  #include "core/hle/kernel/k_process.h"
-@@ -243,7 +244,12 @@ void PhysicalCore::Idle(KernelCore& kernel) {
+@@ -20,7 +21,7 @@
+ namespace Kernel {
+ 
+ PhysicalCore::PhysicalCore(KernelCore& kernel, std::size_t core_index)
+-    : m_core_index{core_index}
++    : m_core_index{core_index}, m_profile{core_index}
+ {
+     m_is_single_core = !kernel.IsMulticore();
+ }
+@@ -95,6 +96,7 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
+                 return;
+             }
+ 
++            m_profile.Switch(GuestCoreProfile::Activity::Guest);
+             if (thread->GetStepState() == StepState::StepPending) {
+                 hr = interface->StepThread(thread);
+ 
+@@ -104,6 +106,7 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
+             } else {
+                 hr = interface->RunThread(thread);
+             }
++            m_profile.Switch(GuestCoreProfile::Activity::Kernel);
+ 
+             ExitContext();
+         }
+@@ -155,7 +158,10 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
+         // Handle system calls.
+         if (supervisor_call) {
+             // Perform call.
+-            Svc::Call(system, interface->GetSvcNumber());
++            const u32 svc = interface->GetSvcNumber();
++            m_profile.Switch(GuestCoreProfile::Activity::Svc, svc);
++            Svc::Call(system, svc);
++            m_profile.Switch(GuestCoreProfile::Activity::Kernel);
+             return;
+         }
+ 
+@@ -243,15 +249,25 @@ void PhysicalCore::Idle(KernelCore& kernel) {
  #endif
      }
      const auto spin = std::chrono::microseconds{spin_us};
 -    if (spin.count() > 0) {
++    m_profile.Switch(GuestCoreProfile::Activity::IdleSpin);
 +    if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
 +        // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
 +        Common::SpinUntilFor(&m_is_interrupted, spin, [this] {
@@ -1527,6 +3002,40 @@ index 4fb59fb62..2fd5856b4 100644
          const auto deadline = std::chrono::steady_clock::now() + spin;
          while (!m_is_interrupted.load(std::memory_order_acquire) &&
                 std::chrono::steady_clock::now() < deadline) {
+             std::this_thread::yield();
+         }
+     }
+-    std::unique_lock lk{m_guard};
+-    m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
++    m_profile.Switch(GuestCoreProfile::Activity::IdleWait);
++    {
++        std::unique_lock lk{m_guard};
++        m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
++    }
++    m_profile.Switch(GuestCoreProfile::Activity::Kernel);
+ }
+ 
+ bool PhysicalCore::IsInterrupted() const {
+diff --git a/src/core/hle/kernel/physical_core.h b/src/core/hle/kernel/physical_core.h
+index 58e258249..8bd924eff 100644
+--- a/src/core/hle/kernel/physical_core.h
++++ b/src/core/hle/kernel/physical_core.h
+@@ -13,6 +13,7 @@
+ #include <mutex>
+ 
+ #include "core/arm/arm_interface.h"
++#include "core/hle/kernel/guest_core_profile.h"
+ 
+ namespace Kernel {
+ class KernelCore;
+@@ -68,6 +69,7 @@ public:
+ 
+ private:
+     const std::size_t m_core_index;
++    GuestCoreProfile m_profile;
+     std::mutex m_guard;
+     std::condition_variable m_on_interrupt;
+     Core::ArmInterface* m_arm_interface{};
 diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
 index 9f656e8df..3e7f97a7b 100644
 --- a/src/core/hle/service/nx2_gsv.h
@@ -1847,7 +3356,7 @@ index 859aeba70..8dade0c71 100644
      /// for exit after every data memory access by the emulated program.
      bool check_halt_on_memory_access = false;
 diff --git a/src/frontend_common/config.cpp b/src/frontend_common/config.cpp
-index 7374d6c54..d130d6886 100644
+index 7374d6c54..90319e53a 100644
 --- a/src/frontend_common/config.cpp
 +++ b/src/frontend_common/config.cpp
 @@ -134,12 +134,12 @@ void Config::SetUpIni() {
@@ -1867,7 +3376,7 @@ index 7374d6c54..d130d6886 100644
          seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
          seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
          seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
-@@ -147,6 +147,25 @@ void Config::SetUpIni() {
+@@ -147,6 +147,33 @@ void Config::SetUpIni() {
          seed(Settings::values.use_asynchronous_shaders, ToString(true));
          EndGroup();
      }
@@ -1875,9 +3384,10 @@ index 7374d6c54..d130d6886 100644
 +        // lichii-tuned: the speed settings it recommends, applied once to an existing
 +        // configuration as well. Whatever is changed afterwards is kept.
 +        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
-+        constexpr s64 TunedDefaultsVersion = 1;
++        constexpr s64 TunedDefaultsVersion = 2;
 +        // Read without a default: with one, a key without a default flag reads as that default.
-+        if (ReadIntegerSetting(std::string("lichii_tuned_defaults")) < TunedDefaultsVersion) {
++        const s64 applied = ReadIntegerSetting(std::string("lichii_tuned_defaults"));
++        if (applied < 1) {
 +            seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
 +            seed(Settings::values.use_asynchronous_shaders, ToString(true));
 +            seed(Settings::values.use_reactive_flushing, ToString(false));
@@ -1885,8 +3395,15 @@ index 7374d6c54..d130d6886 100644
 +            seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
 +            seed(Settings::values.oot_anti_aliasing,
 +                 ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
++        }
++        if (applied < 2) {
++            // Round 15: Ocarina's FSR upscaling (FSR 4, else FSR 3.1) on by default.
++            seed(Settings::values.ocarina_fsr, ToString(true));
++        }
++        if (applied < TunedDefaultsVersion) {
 +            WriteIntegerSetting(std::string("lichii_tuned_defaults"), TunedDefaultsVersion);
-+            LOG_INFO(Config, "lichii-tuned: applied the recommended speed settings");
++            LOG_INFO(Config, "lichii-tuned: applied the recommended settings (version {})",
++                     TunedDefaultsVersion);
 +        }
 +        EndGroup();
 +    }
@@ -1894,21 +3411,24 @@ index 7374d6c54..d130d6886 100644
  }
  
 diff --git a/src/qt_common/config/shared_translation.cpp b/src/qt_common/config/shared_translation.cpp
-index 2f76f716c..2fb8e19a6 100644
+index 2f76f716c..2fb99788e 100644
 --- a/src/qt_common/config/shared_translation.cpp
 +++ b/src/qt_common/config/shared_translation.cpp
-@@ -161,6 +161,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+@@ -161,6 +161,13 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
             tr("Strength of RCAS (AMD's contrast-adaptive sharpening) on the upscaler used in place "
                "of a game's DLSS (AMD FSR 3.1); 0% turns it off.\nAlso sets the sharpening "
                "of the AMD FSR 1 and SGSR window adapting filters."));
-+    INSERT(Settings, ocarina_fsr, tr("Use AMD FSR 3.1 upscaling in Ocarina of Time"),
-+           tr("Replaces Ocarina of Time's native upscaler using scene depth and camera motion. "
-+              "Works on any supported Vulkan GPU. NVIDIA DLSS takes precedence when enabled and "
-+              "available. RCAS Sharpness controls sharpening. Takes effect when a game starts."));
++    INSERT(Settings, ocarina_fsr, tr("Use AMD FSR upscaling in Ocarina of Time"),
++           tr("Replaces Ocarina of Time's native upscaler using scene depth and camera motion; "
++              "docked, the 1440p scene is upscaled to 4K. Uses AMD FSR 4 where AMD's FSR 4 "
++              "libraries beside Lichii support the GPU (Windows, Radeon RX 7000 and newer), "
++              "otherwise AMD FSR 3.1, which works on any supported Vulkan GPU. NVIDIA DLSS takes "
++              "precedence when enabled and available. RCAS Sharpness controls sharpening. Takes "
++              "effect when a game starts."));
      INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
             tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
                "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
-@@ -266,6 +270,13 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+@@ -266,6 +273,13 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
             tr("Controls the DMA read mode.\nUnsafe is faster, while Safe is more stable and can fix issues in some games.\nDefault follows the GPU Accuracy setting."));
      INSERT(Settings, gpu_fence_behavior, tr("GPU Fence Behavior:"),
             tr("Controls the GPU fence synchronization behavior.\nImmediate is the fastest option, but can introduce some issues.\nBalanced offers better compatibility and may fix issues in some games.\nAccurate further improves compatibility at the cost of some performance.\nDefault follows the GPU Mode setting."));
@@ -1922,7 +3442,7 @@ index 2f76f716c..2fb8e19a6 100644
      INSERT(Settings, use_asynchronous_shaders, tr("Enable asynchronous shader compilation"),
             tr("May reduce shader stutter."));
      INSERT(Settings, gpu_clock, tr("GPU Clocks"),
-@@ -489,6 +500,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
+@@ -489,6 +503,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                                PAIR(DmaAccuracy, Unsafe, tr("Unsafe (fast)")),
                                PAIR(DmaAccuracy, Safe, tr("Safe (stable)")),
                            }});
@@ -4808,10 +6328,18 @@ index 6059b70ee..bcfee7e35 100644
  
  struct Runtime {
 diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
-index ed0fd673f..0d74894f3 100644
+index ed0fd673f..90188388d 100644
 --- a/src/video_core/CMakeLists.txt
 +++ b/src/video_core/CMakeLists.txt
-@@ -124,6 +124,7 @@ add_library(video_core STATIC
+@@ -62,6 +62,7 @@ add_library(video_core STATIC
+     engines/puller.h
+     framebuffer_config.cpp
+     framebuffer_config.h
++    frame_time_stats.h
+     render_trace.h
+     fsr.cpp
+     fsr.h
+@@ -124,6 +125,7 @@ add_library(video_core STATIC
      present.h
      pte_kind.h
      query_cache/bank_base.h
@@ -4819,11 +6347,37 @@ index ed0fd673f..0d74894f3 100644
      query_cache/query_base.h
      query_cache/query_cache_base.h
      query_cache/query_cache.h
+@@ -190,6 +192,8 @@ add_library(video_core STATIC
+     renderer_vulkan/vk_compute_pass.h
+     renderer_vulkan/vk_fsr3_upscaler.cpp
+     renderer_vulkan/vk_fsr3_upscaler.h
++    renderer_vulkan/vk_fsr4_upscaler.cpp
++    renderer_vulkan/vk_fsr4_upscaler.h
+     renderer_vulkan/vk_dlss_network_probe.cpp
+     renderer_vulkan/vk_dlss_network_probe.h
+     renderer_vulkan/vk_ocarina_camera_motion.cpp
+@@ -476,6 +480,8 @@ target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
+ 
+ add_dependencies(video_core host_shaders)
+ target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
++# AMD FSR API headers (MIT) for FSR 4; AMD's signed DLLs are loaded at run time.
++target_include_directories(video_core PRIVATE ${CMAKE_SOURCE_DIR}/externals/ffx-api/include)
+ 
+ target_link_libraries(video_core PRIVATE sirit::sirit)
+ 
 diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
-index bf5aaabbb..aad6fc4e8 100644
+index bf5aaabbb..7562480d6 100644
 --- a/src/video_core/buffer_cache/buffer_cache.h
 +++ b/src/video_core/buffer_cache/buffer_cache.h
-@@ -112,7 +112,6 @@ void BufferCache<P>::TickFrame() {
+@@ -27,6 +27,7 @@
+ #include "video_core/nx2_cmdpage_diag.h"
+ #include "video_core/nx2_perf.h"
+ #include "video_core/nx2_profile.h"
++#include "video_core/oot_network.h"
+ #include "video_core/texture_cache/util.h"
+ 
+ namespace VideoCommon {
+@@ -112,7 +113,6 @@ void BufferCache<P>::TickFrame() {
          return;
      }
      runtime.TickFrame(slot_buffers);
@@ -4831,7 +6385,7 @@ index bf5aaabbb..aad6fc4e8 100644
      if (frame_tick % 600 == 0 && !uploaded_buffer_ranges.empty()) {
          for (const auto& [address, size] : uploaded_buffer_ranges) {
              device_memory.HintCold(address, size);
-@@ -162,6 +161,9 @@ void BufferCache<P>::TickFrame() {
+@@ -162,6 +162,9 @@ void BufferCache<P>::TickFrame() {
      } else if (total_used_memory >= minimum_memory) {
          RunGarbageCollector(total_used_memory >= critical_memory);
      }
@@ -4841,7 +6395,7 @@ index bf5aaabbb..aad6fc4e8 100644
      ++frame_tick;
      delayed_destruction_ring.Tick();
  
-@@ -171,6 +173,54 @@ void BufferCache<P>::TickFrame() {
+@@ -171,6 +174,54 @@ void BufferCache<P>::TickFrame() {
      async_buffers_death_ring.clear();
  }
  
@@ -4896,23 +6450,34 @@ index bf5aaabbb..aad6fc4e8 100644
  template <class P>
  void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size) {
      if constexpr (requires { runtime.BindMultiRangeStorageBuffer(u64{}, bool{}); }) {
-@@ -282,8 +332,13 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+@@ -282,8 +333,24 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
      area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
                                             device_addr_end_aligned - device_addr_start_aligned);
      // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
 -    // instead keep read traps and flush on demand.
 -    const bool preflush = !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
-+    // instead keep read traps and flush on demand, unless EDEN_NX2_PREFLUSH=1 opts them into
-+    // preflushing too (Ocarina of Time: far fewer Finish stalls, but some flicker).
-+    static const bool nx2_preflush = [] {
++    // instead keep read traps and flush on demand. EDEN_NX2_PREFLUSH=1 opts any title into
++    // preflushing and =0 out of it. Ocarina of Time preflushes by default: with #415's store
++    // extents it downloads 21-40 MiB/s, and its read traps stall the guest ~9 instead of ~70 ms/s.
++    static const std::optional<bool> nx2_preflush_forced = []() -> std::optional<bool> {
 +        const char* value = std::getenv("EDEN_NX2_PREFLUSH");
-+        return value != nullptr && value[0] == '1';
++        if (value == nullptr || value[0] == '\0') {
++            return std::nullopt;
++        }
++        return value[0] == '1';
 +    }();
++    const bool nx2_preflush =
++        nx2_preflush_forced.value_or(Settings::GetCurrentProgramID() == OotNetwork::ProgramId);
++    if (static std::atomic<bool> logged{};
++        nx2_preflush && !logged.exchange(true, std::memory_order_relaxed)) {
++        LOG_INFO(HW_GPU,
++                 "Preflushing GPU-written pages the CPU reads (EDEN_NX2_PREFLUSH=0 turns it off)");
++    }
 +    const bool preflush = nx2_preflush || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
      if (!area->preemtive) {
          if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
              Nx2DownloadTrace::Marked(device_addr_start_aligned,
-@@ -292,6 +347,10 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+@@ -292,6 +359,10 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
          if (preflush) {
              memory_tracker.MarkRegionAsPreflushable(
                  device_addr_start_aligned, device_addr_end_aligned - device_addr_start_aligned);
@@ -4923,7 +6488,33 @@ index bf5aaabbb..aad6fc4e8 100644
          } else {
              if constexpr (USE_MEMORY_MAPS) {
                  cpu_read_ranges.Add(area->start_address, area->end_address - area->start_address);
-@@ -785,12 +844,14 @@ void BufferCache<P>::UnbindComputeStorageBuffers() {
+@@ -599,6 +670,7 @@ void BufferCache<P>::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
+ 
+ template <class P>
+ void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
++    ++bank_check_draw;
+     do {
+         channel_state->has_deleted_buffers = false;
+         DoUpdateGraphicsBuffers(is_indexed);
+@@ -634,11 +706,16 @@ void BufferCache<P>::BindHostGeometryBuffers(bool is_indexed) {
+ 
+ template <class P>
+ void BufferCache<P>::BindHostStageBuffers(size_t stage) {
+-    BindHostGraphicsUniformBuffers(stage);
++    {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::UniformBuffers};
++        BindHostGraphicsUniformBuffers(stage);
++    }
+     if (channel_state->enabled_storage_buffers[stage] != 0) {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::StorageBuffers};
+         BindHostGraphicsStorageBuffers(stage);
+     }
+     if (channel_state->enabled_texture_buffers[stage] != 0) {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::StageTextureBuffers};
+         BindHostGraphicsTextureBuffers(stage);
+     }
+ }
+@@ -785,12 +862,14 @@ void BufferCache<P>::UnbindComputeStorageBuffers() {
      }
      channel_state->enabled_compute_storage_buffers = 0;
      channel_state->written_compute_storage_buffers = 0;
@@ -4939,7 +6530,7 @@ index bf5aaabbb..aad6fc4e8 100644
      if (ssbo_index >= channel_state->compute_storage_buffers.size()) [[unlikely]] {
          LOG_ERROR(HW_GPU, "Storage buffer index {} exceeds maximum storage buffer count",
                    ssbo_index);
-@@ -827,20 +888,57 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
+@@ -827,20 +906,57 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
      const auto& cbufs = launch_desc.const_buffer_config;
      GPUVAddr ssbo_addr = cbufs[cbuf_index].Address() + cbuf_offset;
      GPUVAddr holder{};
@@ -5006,7 +6597,7 @@ index bf5aaabbb..aad6fc4e8 100644
  }
  
  template <class P>
-@@ -1397,26 +1495,62 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32
+@@ -1397,26 +1513,77 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32
      }();
      // Native programs keep tables next to their code in a 64 KiB bank read with indirect offsets
      // (Splatoon Raiders: the dialogue box corners in c1). Writes to that memory can go unnoticed by
@@ -5035,14 +6626,29 @@ index bf5aaabbb..aad6fc4e8 100644
 -            }};
 -            UploadMemory(buffer, upload_size, upload_size, copies);
 +        const u64 check_size = (std::min<u64>)(mapped_size, size);
++        Nx2Profile::Scope scope{Nx2Profile::Zone::BankCheck};
 +        // Banks slide through larger buffers, a new address per draw: compare each page with
 +        // its last contents and mark only the pages that changed.
 +        if (native_indirect_page_snapshots.size() >= 16384) {
 +            native_indirect_page_snapshots.clear();
 +        }
++        // A draw's stages often bind the same bank: nothing on this thread writes guest memory
++        // between them, so a page compared for this draw is not compared again.
++        // LICHII_BANK_DEDUPE=0 compares on every bind as before.
++        static const bool dedupe = [] {
++            const char* const value = std::getenv("LICHII_BANK_DEDUPE");
++            return value == nullptr || value[0] != '0';
++        }();
 +        const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
 +        const DAddr end = device_addr + check_size;
 +        for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
++            auto& memo = bank_check_memo[(page / Core::DEVICE_PAGESIZE) % bank_check_memo.size()];
++            if (dedupe && memo.page == page && memo.draw == bank_check_draw) {
++                Nx2Profile::Add(Nx2Profile::Counter::BankPagesSkipped, 1);
++                continue;
++            }
++            memo = {page, bank_check_draw};
++            Nx2Profile::Add(Nx2Profile::Counter::BankPagesChecked, 1);
 +            const u8* const guest = device_memory.template GetPointer<u8>(page);
 +            if (guest == nullptr) {
 +                continue;
@@ -5081,7 +6687,7 @@ index bf5aaabbb..aad6fc4e8 100644
          }
      }
      const bool use_fast_buffer = needs_alignment_stream
-@@ -1540,7 +1674,8 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
+@@ -1540,7 +1707,8 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
  
  template <class P>
  bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_written,
@@ -5091,7 +6697,7 @@ index bf5aaabbb..aad6fc4e8 100644
      if constexpr (requires { runtime.BindMultiRangeStorageBuffer(u64{}, bool{}); }) {
          if (binding.segment_count < 2) {
              return false;
-@@ -1563,8 +1698,14 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
+@@ -1563,8 +1731,14 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
              SynchronizeBuffer(buffer, segment.device_addr, segment.size);
              const u32 offset = buffer.Offset(segment.device_addr);
              buffer.MarkUsage(offset, segment.size);
@@ -5108,7 +6714,7 @@ index bf5aaabbb..aad6fc4e8 100644
              }
              runtime.PushMultiRangeSource(buffer, offset, segment.size);
          }
-@@ -1727,7 +1868,15 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
+@@ -1727,7 +1901,15 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
          const Binding& binding = channel_state->compute_storage_buffers[index];
          const bool is_written =
              ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
@@ -5125,7 +6731,7 @@ index bf5aaabbb..aad6fc4e8 100644
              return;
          }
          Buffer& buffer = slot_buffers[binding.buffer_id];
-@@ -1738,8 +1887,10 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
+@@ -1738,8 +1920,10 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
          const u32 offset = buffer.Offset(binding.device_addr);
          buffer.MarkUsage(offset, size);
  
@@ -5138,7 +6744,7 @@ index bf5aaabbb..aad6fc4e8 100644
          }
  
          if constexpr (NEEDS_BIND_STORAGE_INDEX) {
-@@ -2937,7 +3088,8 @@ void BufferCache<P>::TraceTablePointer(bool compute, size_t stage, size_t ssbo_i
+@@ -2937,7 +3121,8 @@ void BufferCache<P>::TraceTablePointer(bool compute, size_t stage, size_t ssbo_i
  
  template <class P>
  Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
@@ -5148,7 +6754,7 @@ index bf5aaabbb..aad6fc4e8 100644
      const GPUVAddr gpu_addr = gpu_memory->Read<u64>(ssbo_addr);
  
      if (gpu_addr == 0) {
-@@ -2958,8 +3110,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
+@@ -2958,8 +3143,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
      };
      constexpr size_t ways = 4;
      thread_local std::array<std::array<CachedBinding, ways>, 512> binding_cache{};
@@ -5160,7 +6766,7 @@ index bf5aaabbb..aad6fc4e8 100644
      const u64 serial = gpu_memory->MapSerial();
      auto& set = binding_cache[((gpu_addr ^ next_qword ^ flags) * 0x9E3779B97F4A7C15ULL) >> 55];
 diff --git a/src/video_core/buffer_cache/buffer_cache_base.h b/src/video_core/buffer_cache/buffer_cache_base.h
-index 2afb361c4..bb0b9adcc 100644
+index 2afb361c4..4e806d237 100644
 --- a/src/video_core/buffer_cache/buffer_cache_base.h
 +++ b/src/video_core/buffer_cache/buffer_cache_base.h
 @@ -156,6 +156,10 @@ public:
@@ -5196,7 +6802,7 @@ index 2afb361c4..bb0b9adcc 100644
  
      void UnbindComputeTextureBuffers();
  
-@@ -463,8 +470,10 @@ public:
+@@ -463,8 +470,17 @@ public:
      Common::SpinRecursiveMutex mutex;
      Runtime& runtime;
      bool any_buffer_uploaded = false;
@@ -5206,10 +6812,17 @@ index 2afb361c4..bb0b9adcc 100644
 +    /// unchanged pages keep their tracking (marking them CPU-modified costs two mprotect calls
 +    /// per page).
 +    std::unordered_map<DAddr, std::array<u8, Core::DEVICE_PAGESIZE>> native_indirect_page_snapshots;
++    /// Native bank pages compared during the current draw (UpdateGraphicsBuffers counts draws).
++    struct BankCheckMemo {
++        DAddr page{~DAddr{0}};
++        u64 draw{};
++    };
++    std::array<BankCheckMemo, 64> bank_check_memo{};
++    u64 bank_check_draw{};
  
  private:
      template <typename Mask, typename Func>
-@@ -602,7 +611,8 @@ private:
+@@ -602,7 +618,8 @@ private:
  
      [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
                                                 bool native_pointer = false,
@@ -5219,7 +6832,7 @@ index 2afb361c4..bb0b9adcc 100644
  
      void TraceTablePointer(bool compute, size_t stage, size_t ssbo_index, u32 cbuf_index,
                             u32 cbuf_offset, u32 indirect_offset, GPUVAddr holder,
-@@ -732,6 +742,22 @@ private:
+@@ -732,6 +749,22 @@ private:
      }
  
      ReadTrapTracker read_trapped_ranges;
@@ -5343,7 +6956,7 @@ index b1aaf46b6..6b2f24c1d 100644
          return !pending_channels.empty();
      }
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
-index af8fca936..9e353f158 100644
+index af8fca936..c44d892da 100644
 --- a/src/video_core/dma_pusher.cpp
 +++ b/src/video_core/dma_pusher.cpp
 @@ -44,6 +44,35 @@ bool DmaPusher::IsMemoryWriter(const Engines::EngineInterface& engine, Engines::
@@ -5391,20 +7004,40 @@ index af8fca936..9e353f158 100644
          signal_sync = false;
          synced = false;
      }
-@@ -198,8 +227,10 @@ bool DmaPusher::Step() {
+@@ -198,10 +227,31 @@ bool DmaPusher::Step() {
          // (the split only starts with unsafe reads; the settings can change mid-game).
          const bool use_safe = !VideoCommon::GpuSplit::Get().Active() &&
                                (Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe());
--        if (!gpu_written && VideoCommon::GpuSplit::Get().Active() &&
--            VideoCommon::GpuSplit::Get().WaitForWriters()) {
 +        // Recheck even when the wait returns at once: a writer may have finished (and marked the
 +        // pages) since the check above.
-+        if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
++        // LICHII_LIST_WRITER_WAIT=0 (experiment): until a GPU-written entry has been seen, don't
++        // wait for queued compute and copy work that might still write this entry. Ocarina waits
++        // here ~5,800 times a second (~350 ms/s) and showed no GPU-written entry in r22; the
++        // first one it would read before its writer ran, then the waits return.
++        static const bool skip_list_wait = [] {
++            const char* const value = std::getenv("LICHII_LIST_WRITER_WAIT");
++            return value != nullptr && value[0] == '0';
++        }();
++        static std::atomic<bool> seen_gpu_written{};
++        if (gpu_written && skip_list_wait &&
++            !seen_gpu_written.exchange(true, std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "GPU-written command list entry at {:#x}: waiting for its writers "
++                                "again (LICHII_LIST_WRITER_WAIT=0)",
++                        u64{dma_state.dma_get});
++        }
+         if (!gpu_written && VideoCommon::GpuSplit::Get().Active() &&
+-            VideoCommon::GpuSplit::Get().WaitForWriters()) {
++            (!skip_list_wait || seen_gpu_written.load(std::memory_order_relaxed))) {
 +            VideoCommon::GpuSplit::Get().WaitForWriters();
              gpu_written =
                  IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
++            if (gpu_written && skip_list_wait) {
++                seen_gpu_written.store(true, std::memory_order_relaxed);
++            }
          }
-@@ -463,6 +494,9 @@ void DmaPusher::CallMethod(u32 argument) {
+         // Resume and GPU-written entries need live words, even after a flush cleared dirty state.
+         const bool submitted = (command_list.snapshot_suspensions & 1) == 0 &&
+@@ -463,6 +513,9 @@ void DmaPusher::CallMethod(u32 argument) {
              dma_state.subchannel,
              dma_state.method_count,
          });
@@ -5414,7 +7047,7 @@ index af8fca936..9e353f158 100644
      } else {
          auto subchannel = subchannels[dma_state.subchannel];
          if (subchannel == nullptr) {
-@@ -472,9 +506,16 @@ void DmaPusher::CallMethod(u32 argument) {
+@@ -472,9 +525,16 @@ void DmaPusher::CallMethod(u32 argument) {
          const auto engine_type = subchannel_type[dma_state.subchannel];
          const bool writer = split.Active() &&
                              IsMemoryWriter(*subchannel, engine_type, dma_state.method);
@@ -5431,7 +7064,7 @@ index af8fca936..9e353f158 100644
              }
          };
          if (split.Active()) {
-@@ -521,6 +562,12 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+@@ -521,6 +581,12 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
      auto& split = VideoCommon::GpuSplit::Get();
      if (dma_state.method < non_puller_methods) {
          puller.CallMultiMethod(*this, dma_state.method, dma_state.subchannel, base_start, num_methods, dma_state.method_count);
@@ -5444,7 +7077,7 @@ index af8fca936..9e353f158 100644
      } else {
          auto subchannel = subchannels[dma_state.subchannel];
          if (subchannel == nullptr) {
-@@ -530,9 +577,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+@@ -530,9 +596,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
          const auto engine_type = subchannel_type[dma_state.subchannel];
          const bool writer = split.Active() &&
                              IsMemoryWriter(*subchannel, engine_type, dma_state.method);
@@ -6393,6 +8026,115 @@ index 6bb1c29d1..0aa7254f1 100644
          if constexpr (!can_async_check) {
              TryReleasePendingFences<false>();
          }
+diff --git a/src/video_core/frame_time_stats.h b/src/video_core/frame_time_stats.h
+new file mode 100644
+index 000000000..4be194f16
+--- /dev/null
++++ b/src/video_core/frame_time_stats.h
+@@ -0,0 +1,103 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <algorithm>
++#include <chrono>
++#include <cstdlib>
++#include <iterator>
++#include <numeric>
++#include <string>
++#include <vector>
++
++#include <fmt/format.h>
++
++#include "common/logging.h"
++
++namespace VideoCommon {
++
++/// Present-to-present frame times, for the frame rate's lows. LICHII_FRAME_TIMES=1 (also on with
++/// EDEN_DKB_FRAME_TRACE=1 or EDEN_NX2_GPU_PROFILE=1) logs each second's frame times
++/// ("DKB frame_ms") and, every 10 s, their percentiles and lows. A 1% low is the frame rate of the
++/// slowest 1% of frames: 1000 / their mean time in ms.
++class FrameTimeStats {
++public:
++    static bool Enabled() {
++        static const bool enabled = [] {
++            for (const char* name :
++                 {"LICHII_FRAME_TIMES", "EDEN_DKB_FRAME_TRACE", "EDEN_NX2_GPU_PROFILE"}) {
++                const char* value = std::getenv(name);
++                if (value != nullptr && value[0] == '1') {
++                    return true;
++                }
++            }
++            return false;
++        }();
++        return enabled;
++    }
++
++    void Note(std::chrono::steady_clock::time_point now) {
++        if (last == std::chrono::steady_clock::time_point{}) {
++            last = now;
++            second_end = now + std::chrono::seconds{1};
++            window_end = now + std::chrono::seconds{10};
++            return;
++        }
++        const float ms = std::chrono::duration<float, std::milli>(now - last).count();
++        last = now;
++        second.push_back(ms);
++        window.push_back(ms);
++        if (now >= second_end) {
++            std::string list;
++            for (const float value : second) {
++                fmt::format_to(std::back_inserter(list), " {:.1f}", value);
++            }
++            LOG_INFO(Render_Vulkan, "DKB frame_ms n={}{}", second.size(), list);
++            second.clear();
++            second_end = now + std::chrono::seconds{1};
++        }
++        if (now >= window_end) {
++            LogWindow();
++            window.clear();
++            window_end = now + std::chrono::seconds{10};
++        }
++    }
++
++private:
++    void LogWindow() {
++        std::vector<float> sorted = window;
++        std::sort(sorted.begin(), sorted.end());
++        const size_t count = sorted.size();
++        const double total = std::accumulate(sorted.begin(), sorted.end(), 0.0);
++        const auto at = [&](double quantile) {
++            return sorted[std::min(count - 1,
++                                  static_cast<size_t>(quantile * static_cast<double>(count)))];
++        };
++        const auto low = [&](double fraction) {
++            const size_t slowest =
++                std::max<size_t>(1, static_cast<size_t>(fraction * static_cast<double>(count)));
++            const double sum = std::accumulate(sorted.end() - slowest, sorted.end(), 0.0);
++            return 1000.0 * static_cast<double>(slowest) / sum;
++        };
++        const auto over = [&](float ms) {
++            const auto first = std::upper_bound(sorted.begin(), sorted.end(), ms);
++            return 100.0 * static_cast<double>(sorted.end() - first) / static_cast<double>(count);
++        };
++        LOG_INFO(Render_Vulkan,
++                 "Frame times: {} frames in {:.1f} s, {:.1f} fps | ms p50 {:.1f} p90 {:.1f} p99 "
++                 "{:.1f} max {:.1f} | 1% low {:.1f} fps, 0.1% low {:.1f} fps | over 33.4 ms "
++                 "{:.1f}%, over 50 ms {:.1f}%, over 100 ms {:.1f}%",
++                 count, total / 1000.0, 1000.0 * static_cast<double>(count) / total, at(0.5),
++                 at(0.9), at(0.99), sorted.back(), low(0.01), low(0.001), over(33.4f),
++                 over(50.0f), over(100.0f));
++    }
++
++    std::chrono::steady_clock::time_point last{};
++    std::chrono::steady_clock::time_point second_end{};
++    std::chrono::steady_clock::time_point window_end{};
++    std::vector<float> second;
++    std::vector<float> window;
++};
++
++} // namespace VideoCommon
 diff --git a/src/video_core/fsr.h b/src/video_core/fsr.h
 index bf0588b41..7c58e0df5 100644
 --- a/src/video_core/fsr.h
@@ -7435,6 +9177,62 @@ index 0fe16cfb8..ba085958b 100644
  }
  
  } // namespace VideoCommon::Nx2Perf
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index 8e567f4ad..a5df247bd 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -48,6 +48,10 @@ enum class Zone : u32 {
+     UpdateBuffers,
+     DescriptorAcquire,
+     BindStageBuffers,
++    UniformBuffers,      ///< Of a stage's buffers: its uniform buffers
++    BankCheck,           ///< Of those: native 64 KiB banks compared with their last contents
++    StorageBuffers,      ///< Of a stage's buffers: its storage buffers
++    StageTextureBuffers, ///< Of a stage's buffers: its texture buffers
+     PushDescriptors,
+     RenderTargets,
+     ConfigureDraw,
+@@ -70,7 +74,8 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "tick",          "run",           "flush/inval",    "macro",          "draw",
+     "clear",         "compute",       "flush work",     "pipeline lookup", "configure",
+     "sync descriptors", "read handles", "fill image views", "texture buffers", "update buffers",
+-    "descriptor acquire", "bind stage buffers", "push descriptors", "render targets",
++    "descriptor acquire", "bind stage buffers", "uniform buffers", "bank check",
++    "storage buffers", "stage texture buffers", "push descriptors", "render targets",
+     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
+     "fence skipped", "method", "split drain", "split wait",
+     "writer wait", "list submit wait", "list GPU wait",
+@@ -103,7 +108,7 @@ inline u64 Ticks() {
+ struct ThreadData {
+     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
+     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
+-    std::array<u64, 8> counters{}; ///< See Counter
++    std::array<u64, 10> counters{}; ///< See Counter
+     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
+     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
+     u64 child_ns{};    ///< Time of the zones nested in the current one
+@@ -157,6 +162,8 @@ enum class Counter : u32 {
+     SameValueWrites, ///< Of MethodWrites: the register already held the value
+     AcquireChecks,  ///< Semaphore acquires evaluated
+     AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
++    BankPagesChecked, ///< Native uniform bank pages compared with their snapshot
++    BankPagesSkipped, ///< Bank pages not compared again within one draw
+ };
+ 
+ /// Method calls on this thread by method (3D registers on the back, macros on the front), and
+@@ -276,6 +283,12 @@ inline void Report(const char* thread_name = "GPU thread") {
+     line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
+                         static_cast<double>(data.counters[6]) * 1e9 / window,
+                         static_cast<double>(data.counters[7]) * 1e9 / window);
++    if (data.counters[8] != 0 || data.counters[9] != 0) {
++        const double seconds = static_cast<double>(window) / 1e9;
++        line += fmt::format(" | bank pages compared {:.0f} ({:.0f} skipped as compared this draw)",
++                            static_cast<double>(data.counters[8]) / seconds,
++                            static_cast<double>(data.counters[9]) / seconds);
++    }
+     std::string drains;
+     for (size_t i = 0; i < data.drain_count.size(); ++i) {
+         if (data.drain_count[i] != 0) {
 diff --git a/src/video_core/ocarina_upscale.h b/src/video_core/ocarina_upscale.h
 new file mode 100644
 index 000000000..aad828b09
@@ -7963,10 +9761,25 @@ index 33a2fdd79..8d88ef329 100644
      return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY &&
             std::ranges::find(amd_proprietary, shader_hash) != amd_proprietary.end();
 diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
-index 4dbd14cc4..212e35a88 100644
+index 4dbd14cc4..65ebc30e4 100644
 --- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 +++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
-@@ -310,6 +310,33 @@ void RendererVulkan::Report() const {
+@@ -217,8 +217,12 @@ RendererVulkan::~RendererVulkan() {
+ 
+ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {
+     const bool trace = Common::DkbFrameTrace::Enabled();
+-    const auto entered = trace ? std::chrono::steady_clock::now()
+-                               : std::chrono::steady_clock::time_point{};
++    const bool frame_times = VideoCommon::FrameTimeStats::Enabled();
++    const auto entered = trace || frame_times ? std::chrono::steady_clock::now()
++                                              : std::chrono::steady_clock::time_point{};
++    if (frame_times) {
++        frame_time_stats.Note(entered);
++    }
+     SCOPE_EXIT {
+         render_window.OnFrameDisplayed();
+     };
+@@ -310,6 +314,33 @@ void RendererVulkan::Report() const {
      LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
      LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
      LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
@@ -8000,6 +9813,26 @@ index 4dbd14cc4..212e35a88 100644
      if (VideoCommon::RenderTrace::Enabled()) {
          LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
                   Settings::values.log_filter.GetValue());
+diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.h b/src/video_core/renderer_vulkan/renderer_vulkan.h
+index 5ba748a4e..8cbcf6656 100644
+--- a/src/video_core/renderer_vulkan/renderer_vulkan.h
++++ b/src/video_core/renderer_vulkan/renderer_vulkan.h
+@@ -11,6 +11,7 @@
+ #include <variant>
+ 
+ #include "common/dynamic_library.h"
++#include "video_core/frame_time_stats.h"
+ #include "video_core/host1x/gpu_device_memory_manager.h"
+ #include "video_core/renderer_base.h"
+ #ifdef HAS_LSFG
+@@ -73,6 +74,7 @@ public:
+ private:
+     Common::DkbFrameTrace::RateLimit trace_cpu_rate;
+     std::chrono::steady_clock::time_point trace_last_frame{};
++    VideoCommon::FrameTimeStats frame_time_stats;
+     u64 trace_frame{};
+ 
+     void InterpolateFrames(Frame* prev_frame, Frame* curr_frame);
 diff --git a/src/video_core/renderer_vulkan/submission_policy.h b/src/video_core/renderer_vulkan/submission_policy.h
 index a109edc71..dc8566cb8 100644
 --- a/src/video_core/renderer_vulkan/submission_policy.h
@@ -8484,6 +10317,644 @@ index e62b5fdef..771280fbb 100644
      Texture output;
  
      VkExtent2D render_extent{};
+diff --git a/src/video_core/renderer_vulkan/vk_fsr4_upscaler.cpp b/src/video_core/renderer_vulkan/vk_fsr4_upscaler.cpp
+new file mode 100644
+index 000000000..6690a1e44
+--- /dev/null
++++ b/src/video_core/renderer_vulkan/vk_fsr4_upscaler.cpp
+@@ -0,0 +1,515 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#endif
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdlib>
++#include <cstring>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <type_traits>
++#include <vector>
++
++#include <fmt/format.h>
++
++#include "common/fs/path_util.h"
++#include "common/logging.h"
++#include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
++#include "video_core/renderer_vulkan/vk_scheduler.h"
++#include "video_core/vulkan_common/vulkan_device.h"
++#include "video_core/vulkan_common/vulkan_memory_allocator.h"
++
++#include <ffx_api.h>
++#include <ffx_upscale.h>
++#include <vk/ffx_api_vk.h>
++
++namespace Vulkan {
++
++struct Fsr4Upscaler::Api {
++    PfnFfxCreateContext create{};
++    PfnFfxDestroyContext destroy{};
++    PfnFfxQuery query{};
++    PfnFfxDispatch dispatch{};
++};
++
++namespace {
++
++constexpr VkImageSubresourceRange COLOR_RANGE{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++
++std::string_view ReturnCodeName(ffxReturnCode_t code) {
++    switch (code) {
++    case FFX_API_RETURN_OK:
++        return "ok";
++    case FFX_API_RETURN_ERROR:
++        return "error";
++    case FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE:
++        return "unknown description type";
++    case FFX_API_RETURN_ERROR_RUNTIME_ERROR:
++        return "runtime error";
++    case FFX_API_RETURN_NO_PROVIDER:
++        return "no provider";
++    case FFX_API_RETURN_ERROR_MEMORY:
++        return "out of memory";
++    case FFX_API_RETURN_ERROR_PARAMETER:
++        return "invalid parameter";
++    case FFX_API_RETURN_PROVIDER_NO_SUPPORT_NEW_DESCTYPE:
++        return "description type too new for the provider";
++    default:
++        return "unknown error";
++    }
++}
++
++/// The API's messages, at most 50 and then every 500th, with their wide characters narrowed.
++void LogMessage(uint32_t type, const wchar_t* message) {
++    static std::atomic<u32> count{};
++    const u32 index = count.fetch_add(1, std::memory_order_relaxed);
++    if (message == nullptr || (index >= 50 && index % 500 != 0)) {
++        return;
++    }
++    std::string text;
++    for (const wchar_t* c = message; *c != 0 && text.size() < 1024; ++c) {
++        text.push_back(*c >= 0x20 && *c < 0x7f ? static_cast<char>(*c) : '?');
++    }
++    if (type == FFX_API_MESSAGE_TYPE_ERROR) {
++        LOG_ERROR(Render_Vulkan, "AMD FSR API: {}", text);
++    } else {
++        LOG_WARNING(Render_Vulkan, "AMD FSR API: {}", text);
++    }
++}
++
++const char* EnvValue(const char* name) {
++    const char* value = std::getenv(name);
++    return value != nullptr && value[0] != '\0' ? value : nullptr;
++}
++
++/// The API's loader from the executable's folder, loaded once; null when it is missing.
++const Fsr4Upscaler::Api* LoadApi() {
++#ifdef _WIN32
++    static const std::optional<Fsr4Upscaler::Api> api = []() -> std::optional<Fsr4Upscaler::Api> {
++        const auto path = Common::FS::GetExeDirectory() / "amd_fidelityfx_loader_vk.dll";
++        // The loader then loads amd_fidelityfx_upscaler_vk.dll from the same folder.
++        HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
++        if (module == nullptr) {
++            LOG_WARNING(Render_Vulkan,
++                        "AMD FSR 4: could not load {} (error {}); using FSR 3.1",
++                        Common::FS::PathToUTF8String(path), GetLastError());
++            return std::nullopt;
++        }
++        Fsr4Upscaler::Api result{};
++        const auto resolve = [module](const char* name, auto& function) {
++            function = reinterpret_cast<std::remove_reference_t<decltype(function)>>(
++                reinterpret_cast<void*>(GetProcAddress(module, name)));
++            return function != nullptr;
++        };
++        if (!resolve("ffxCreateContext", result.create) ||
++            !resolve("ffxDestroyContext", result.destroy) || !resolve("ffxQuery", result.query) ||
++            !resolve("ffxDispatch", result.dispatch)) {
++            LOG_WARNING(Render_Vulkan, "AMD FSR 4: {} lacks the API's functions; using FSR 3.1",
++                        Common::FS::PathToUTF8String(path));
++            FreeLibrary(module);
++            return std::nullopt;
++        }
++        // Kept loaded for the rest of the run.
++        return result;
++    }();
++    return api ? &*api : nullptr;
++#else
++    return nullptr;
++#endif
++}
++
++/// "4.1.2" -> {4, 1, 2}; missing parts read as 0.
++std::array<u32, 3> ParseVersion(std::string_view name) {
++    std::array<u32, 3> parts{};
++    size_t part = 0;
++    for (const char c : name) {
++        if (c == '.') {
++            if (++part == parts.size()) {
++                break;
++            }
++        } else if (c >= '0' && c <= '9') {
++            parts[part] = parts[part] * 10 + static_cast<u32>(c - '0');
++        } else {
++            break;
++        }
++    }
++    return parts;
++}
++
++FfxApiResource Resource(VkImage image, VkFormat format, VkExtent2D extent, uint32_t usage) {
++    FfxApiResource resource{};
++    if (image == VK_NULL_HANDLE) {
++        return resource;
++    }
++    resource.resource = reinterpret_cast<void*>(image);
++    resource.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
++    resource.description.format = ffxApiGetSurfaceFormatVK(format);
++    resource.description.width = extent.width;
++    resource.description.height = extent.height;
++    resource.description.depth = 1;
++    resource.description.mipCount = 1;
++    resource.description.flags = FFX_API_RESOURCE_FLAGS_NONE;
++    resource.description.usage = usage;
++    // Every image here stays in the GENERAL layout; the API returns them to it after a dispatch.
++    resource.state = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS;
++    return resource;
++}
++
++} // Anonymous namespace
++
++bool Fsr4Upscaler::Wanted() {
++#ifdef _WIN32
++    const char* value = EnvValue("LICHII_FSR4");
++    return value == nullptr || value[0] != '0';
++#else
++    return false;
++#endif
++}
++
++std::unique_ptr<Fsr4Upscaler> Fsr4Upscaler::Create(const Device& device, Scheduler& scheduler,
++                                                    MemoryAllocator& allocator,
++                                                    VkExtent2D render_size,
++                                                    VkExtent2D upscale_size) {
++    const Api* api = LoadApi();
++    if (api == nullptr) {
++        return nullptr;
++    }
++    VkDeviceContext device_context{};
++    device_context.vkDevice = *device.GetLogical();
++    device_context.vkPhysicalDevice = device.GetPhysical();
++    device_context.vkDeviceProcAddr = device.GetDispatchLoader().vkGetDeviceProcAddr;
++
++    // The upscaler versions the API offers for this device, e.g. "4.1.2" and "3.1.5".
++    ffxQueryDescGetVersions versions{};
++    versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
++    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
++    versions.device = &device_context;
++    uint64_t count = 0;
++    versions.outputCount = &count;
++    ffxReturnCode_t result = api->query(nullptr, &versions.header);
++    if (result != FFX_API_RETURN_OK || count == 0) {
++        LOG_WARNING(Render_Vulkan, "AMD FSR 4: the API offers no upscaler here ({}); using FSR 3.1",
++                    ReturnCodeName(result));
++        return nullptr;
++    }
++    std::vector<uint64_t> ids(count);
++    std::vector<const char*> names(count);
++    versions.versionIds = ids.data();
++    versions.versionNames = names.data();
++    result = api->query(nullptr, &versions.header);
++    if (result != FFX_API_RETURN_OK) {
++        LOG_WARNING(Render_Vulkan, "AMD FSR 4: listing the upscaler versions failed ({}); using "
++                                   "FSR 3.1",
++                    ReturnCodeName(result));
++        return nullptr;
++    }
++    ids.resize(count);
++    names.resize(count);
++    const char* const wanted = EnvValue("LICHII_FSR4_VERSION");
++    std::optional<size_t> chosen;
++    std::string offered;
++    for (size_t i = 0; i < ids.size(); ++i) {
++        const std::string_view name = names[i] != nullptr ? names[i] : "";
++        offered += fmt::format("{}{}", offered.empty() ? "" : ", ", name);
++        if (wanted != nullptr) {
++            if (name == wanted) {
++                chosen = i;
++            }
++        } else if (!name.empty() && name[0] == '4' &&
++                   (!chosen || ParseVersion(name) > ParseVersion(names[*chosen]))) {
++            chosen = i;
++        }
++    }
++    if (!chosen) {
++        LOG_WARNING(Render_Vulkan, "AMD FSR 4: no {} among the offered upscalers ({}); using "
++                                   "FSR 3.1",
++                    wanted != nullptr ? wanted : "FSR 4", offered);
++        return nullptr;
++    }
++    LOG_INFO(Render_Vulkan, "AMD FSR 4: the API offers {}; using {}", offered, names[*chosen]);
++
++    std::unique_ptr<Fsr4Upscaler> upscaler{
++        new Fsr4Upscaler(device, scheduler, allocator, *api, ids[*chosen])};
++    if (!upscaler->CreateContext(render_size, upscale_size)) {
++        return nullptr;
++    }
++    return upscaler;
++}
++
++Fsr4Upscaler::Fsr4Upscaler(const Device& device_, Scheduler& scheduler_,
++                           MemoryAllocator& allocator_, const Api& api_, u64 version_id_)
++    : device{device_}, scheduler{scheduler_}, allocator{allocator_}, api{api_},
++      version_id{version_id_} {
++    point_sampler = device.GetLogical().CreateSampler(VkSamplerCreateInfo{
++        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
++        .pNext = nullptr,
++        .flags = 0,
++        .magFilter = VK_FILTER_NEAREST,
++        .minFilter = VK_FILTER_NEAREST,
++        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
++        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++        .mipLodBias = 0.0f,
++        .anisotropyEnable = VK_FALSE,
++        .maxAnisotropy = 1.0f,
++        .compareEnable = VK_FALSE,
++        .compareOp = VK_COMPARE_OP_NEVER,
++        .minLod = 0.0f,
++        .maxLod = 0.0f,
++        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
++        .unnormalizedCoordinates = VK_FALSE,
++    });
++}
++
++Fsr4Upscaler::~Fsr4Upscaler() {
++    DestroyContext();
++}
++
++bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D new_upscale_size) {
++    const auto start = std::chrono::steady_clock::now();
++    VkDeviceContext device_context{};
++    device_context.vkDevice = *device.GetLogical();
++    device_context.vkPhysicalDevice = device.GetPhysical();
++    device_context.vkDeviceProcAddr = device.GetDispatchLoader().vkGetDeviceProcAddr;
++
++    ffxCreateBackendVKDesc backend{};
++    backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
++    backend.deviceContext = device_context;
++
++    ffxOverrideVersion version_override{};
++    version_override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
++    version_override.versionId = version_id;
++
++    ffxCreateContextDescUpscaleVersion api_version{};
++    api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
++    api_version.version = FFX_UPSCALER_VERSION;
++
++    const char* const debug = EnvValue("LICHII_FSR4_DEBUG");
++    ffxCreateContextDescUpscale create{};
++    create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
++    // Ocarina's colour is tonemapped LDR with a square-root encoding, its depth finite and not
++    // inverted; motion is in render pixels without jitter.
++    create.flags = FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
++    if (debug == nullptr || debug[0] != '0') {
++        create.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
++    }
++    create.maxRenderSize = {render_size.width, render_size.height};
++    create.maxUpscaleSize = {new_upscale_size.width, new_upscale_size.height};
++    create.fpMessage = &LogMessage;
++    create.header.pNext = &api_version.header;
++    api_version.header.pNext = &backend.header;
++    backend.header.pNext = &version_override.header;
++
++    ffxContext new_context = nullptr;
++    const ffxReturnCode_t result = api.create(&new_context, &create.header, nullptr);
++    if (result != FFX_API_RETURN_OK || new_context == nullptr) {
++        LOG_WARNING(Render_Vulkan, "AMD FSR 4: creating the upscaler failed ({}); using FSR 3.1",
++                    ReturnCodeName(result));
++        return false;
++    }
++    context = new_context;
++    max_render_size = render_size;
++    upscale_size = new_upscale_size;
++
++    output = allocator.CreateImage(VkImageCreateInfo{
++        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++        .imageType = VK_IMAGE_TYPE_2D,
++        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
++        .extent = {upscale_size.width, upscale_size.height, 1},
++        .mipLevels = 1,
++        .arrayLayers = 1,
++        .samples = VK_SAMPLE_COUNT_1_BIT,
++        .tiling = VK_IMAGE_TILING_OPTIMAL,
++        .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
++        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++    });
++    output_view = device.GetLogical().CreateImageView(VkImageViewCreateInfo{
++        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
++        .image = *output,
++        .viewType = VK_IMAGE_VIEW_TYPE_2D,
++        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
++        .subresourceRange = COLOR_RANGE,
++    });
++    // Unit exposure, as FSR 3.1 takes Ocarina's LDR colour.
++    exposure = allocator.CreateImage(VkImageCreateInfo{
++        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++        .imageType = VK_IMAGE_TYPE_2D,
++        .format = VK_FORMAT_R32_SFLOAT,
++        .extent = {1, 1, 1},
++        .mipLevels = 1,
++        .arrayLayers = 1,
++        .samples = VK_SAMPLE_COUNT_1_BIT,
++        .tiling = VK_IMAGE_TILING_OPTIMAL,
++        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
++                 VK_IMAGE_USAGE_TRANSFER_DST_BIT,
++        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++    });
++    images_initialized = false;
++
++    std::string provider = "?";
++    ffxQueryGetProviderVersion provider_query{};
++    provider_query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
++    if (api.query(&context, &provider_query.header) == FFX_API_RETURN_OK &&
++        provider_query.versionName != nullptr) {
++        provider = provider_query.versionName;
++    }
++    FfxApiEffectMemoryUsage memory{};
++    ffxQueryDescUpscaleGetGPUMemoryUsage memory_query{};
++    memory_query.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GPU_MEMORY_USAGE;
++    memory_query.gpuMemoryUsageUpscaler = &memory;
++    const bool has_memory = api.query(&context, &memory_query.header) == FFX_API_RETURN_OK;
++    LOG_INFO(Render_Vulkan,
++             "AMD FSR 4: upscaler {} ready for {}x{} -> {}x{} in {} ms ({} MiB of GPU memory)",
++             provider, render_size.width, render_size.height, upscale_size.width,
++             upscale_size.height,
++             std::chrono::duration_cast<std::chrono::milliseconds>(
++                 std::chrono::steady_clock::now() - start)
++                 .count(),
++             has_memory ? fmt::format("{}", memory.totalUsageInBytes >> 20) : std::string{"?"});
++    return true;
++}
++
++void Fsr4Upscaler::DestroyContext() {
++    if (context == nullptr) {
++        return;
++    }
++    // The context's images and pipelines may still be in use by submitted work.
++    void(device.GetLogical().WaitIdle());
++    api.destroy(&context, nullptr);
++    context = nullptr;
++}
++
++bool Fsr4Upscaler::Upscale(const Inputs& in) {
++    if (Failed()) {
++        return false;
++    }
++    if (in.render_size.width > max_render_size.width ||
++        in.render_size.height > max_render_size.height ||
++        in.upscale_size.width != upscale_size.width ||
++        in.upscale_size.height != upscale_size.height) {
++        // Docked and handheld render and present at other sizes.
++        scheduler.Finish();
++        DestroyContext();
++        if (!CreateContext(in.render_size, in.upscale_size)) {
++            failed.store(true, std::memory_order_relaxed);
++            return false;
++        }
++    }
++    const bool initialize = !images_initialized;
++    images_initialized = true;
++    scheduler.Record([this, in, initialize, out = *output,
++                      exposure_image = *exposure](vk::CommandBuffer cmdbuf) {
++        if (initialize) {
++            const std::array barriers{
++                VkImageMemoryBarrier{
++                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++                    .pNext = nullptr,
++                    .srcAccessMask = 0,
++                    .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
++                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
++                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                    .image = out,
++                    .subresourceRange = COLOR_RANGE,
++                },
++                VkImageMemoryBarrier{
++                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++                    .pNext = nullptr,
++                    .srcAccessMask = 0,
++                    .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
++                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++                    .image = exposure_image,
++                    .subresourceRange = COLOR_RANGE,
++                },
++            };
++            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++                                   VK_PIPELINE_STAGE_TRANSFER_BIT |
++                                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                   0, {}, {}, barriers);
++            cmdbuf.ClearColorImage(exposure_image, VK_IMAGE_LAYOUT_GENERAL,
++                                   VkClearColorValue{.float32 = {1.0f, 1.0f, 1.0f, 1.0f}},
++                                   COLOR_RANGE);
++        }
++        // The inputs come from the game's draws and our compute passes.
++        cmdbuf.PipelineBarrier(
++            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
++            VkMemoryBarrier{
++                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
++                .pNext = nullptr,
++                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
++                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
++                                 VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
++                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
++                                 VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
++            });
++
++        const VkExtent2D render = in.render_size;
++        ffxDispatchDescUpscale dispatch{};
++        dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
++        dispatch.commandList = reinterpret_cast<void*>(*cmdbuf);
++        dispatch.color = Resource(in.color.image, in.color.format, render,
++                                  FFX_API_RESOURCE_USAGE_READ_ONLY);
++        dispatch.depth = Resource(in.depth.image, in.depth.format, render,
++                                  FFX_API_RESOURCE_USAGE_READ_ONLY |
++                                      FFX_API_RESOURCE_USAGE_DEPTHTARGET);
++        dispatch.motionVectors = Resource(in.motion_vectors.image, in.motion_vectors.format,
++                                          render, FFX_API_RESOURCE_USAGE_READ_ONLY);
++        dispatch.exposure = Resource(exposure_image, VK_FORMAT_R32_SFLOAT, VkExtent2D{1, 1},
++                                     FFX_API_RESOURCE_USAGE_READ_ONLY);
++        dispatch.reactive = Resource(in.reactive.image, in.reactive.format, render,
++                                     FFX_API_RESOURCE_USAGE_READ_ONLY);
++        dispatch.transparencyAndComposition =
++            Resource(in.transparency.image, in.transparency.format, render,
++                     FFX_API_RESOURCE_USAGE_READ_ONLY);
++        dispatch.output = Resource(out, VK_FORMAT_R16G16B16A16_SFLOAT, in.upscale_size,
++                                   FFX_API_RESOURCE_USAGE_UAV);
++        dispatch.jitterOffset = {in.jitter[0], in.jitter[1]};
++        dispatch.motionVectorScale = {in.motion_vector_scale[0], in.motion_vector_scale[1]};
++        dispatch.renderSize = {render.width, render.height};
++        dispatch.upscaleSize = {in.upscale_size.width, in.upscale_size.height};
++        dispatch.enableSharpening = in.sharpen;
++        dispatch.sharpness = in.sharpness;
++        dispatch.frameTimeDelta = in.frame_time_ms;
++        dispatch.preExposure = 1.0f;
++        dispatch.reset = in.reset;
++        dispatch.cameraNear = in.camera_near;
++        dispatch.cameraFar = in.camera_far;
++        dispatch.cameraFovAngleVertical = in.vertical_fov;
++        dispatch.viewSpaceToMetersFactor = 1.0f;
++        dispatch.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
++        const ffxReturnCode_t result = api.dispatch(&context, &dispatch.header);
++        if (result != FFX_API_RETURN_OK && !failed.exchange(true, std::memory_order_relaxed)) {
++            LOG_ERROR(Render_Vulkan, "AMD FSR 4: the upscale dispatch failed ({}); moving to FSR "
++                                     "3.1",
++                      ReturnCodeName(result));
++        }
++        // The output pass samples the result.
++        cmdbuf.PipelineBarrier(
++            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
++            VkMemoryBarrier{
++                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
++                .pNext = nullptr,
++                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
++                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
++            });
++    });
++    return true;
++}
++
++} // namespace Vulkan
+diff --git a/src/video_core/renderer_vulkan/vk_fsr4_upscaler.h b/src/video_core/renderer_vulkan/vk_fsr4_upscaler.h
+new file mode 100644
+index 000000000..da7162cee
+--- /dev/null
++++ b/src/video_core/renderer_vulkan/vk_fsr4_upscaler.h
+@@ -0,0 +1,111 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <array>
++#include <atomic>
++#include <memory>
++
++#include "common/common_types.h"
++#include "video_core/vulkan_common/vulkan_wrapper.h"
++
++namespace Vulkan {
++
++class Device;
++class MemoryAllocator;
++class Scheduler;
++
++/// AMD FSR 4, the machine-learning upscaler of AMD FSR SDK 2.4, through the AMD FSR API. Windows
++/// only: the API's loader (amd_fidelityfx_loader_vk.dll) and AMD's signed upscaler
++/// (amd_fidelityfx_upscaler_vk.dll) are loaded from the executable's folder, and the upscaler
++/// records its own passes into the scheduler's command buffer. LICHII_FSR4=0 keeps FSR 3.1;
++/// LICHII_FSR4_VERSION=<name> picks another upscaler version the API offers ("3.1.5", ...);
++/// LICHII_FSR4_DEBUG=0 turns off the API's checks of each dispatch.
++class Fsr4Upscaler {
++public:
++    struct Image {
++        VkImage image{};
++        VkFormat format{};
++    };
++    struct Inputs {
++        Image color;          ///< Render size.
++        Image depth;          ///< D32 device depth, 0 at the near plane and 1 at the far one.
++        Image motion_vectors; ///< Render size, motion to the previous frame.
++        Image reactive;       ///< Optional render-size mask.
++        Image transparency;   ///< Optional render-size mask.
++        VkExtent2D render_size;
++        VkExtent2D upscale_size;
++        std::array<f32, 2> jitter;
++        /// Turns a motion vector into render pixels.
++        std::array<f32, 2> motion_vector_scale;
++        f32 frame_time_ms;
++        bool reset;
++        bool sharpen;
++        f32 sharpness;
++        f32 camera_near;
++        f32 camera_far;
++        f32 vertical_fov; ///< Radians.
++    };
++
++    /// Whether FSR 4 is tried before FSR 3.1: on Windows unless LICHII_FSR4=0.
++    [[nodiscard]] static bool Wanted();
++
++    /// Loads the API and creates an upscale context with its newest FSR 4. Null, with the reason
++    /// logged, when any step fails.
++    [[nodiscard]] static std::unique_ptr<Fsr4Upscaler> Create(const Device& device,
++                                                              Scheduler& scheduler,
++                                                              MemoryAllocator& allocator,
++                                                              VkExtent2D render_size,
++                                                              VkExtent2D upscale_size);
++
++    ~Fsr4Upscaler();
++
++    Fsr4Upscaler(const Fsr4Upscaler&) = delete;
++    Fsr4Upscaler& operator=(const Fsr4Upscaler&) = delete;
++
++    /// Records one evaluation into the output image: RGBA16F at the upscale size, GENERAL layout,
++    /// ready to be sampled. False when new sizes needed a context that could not be made.
++    bool Upscale(const Inputs& inputs);
++
++    /// True once the API refused a dispatch or a new context; the caller moves to FSR 3.1.
++    [[nodiscard]] bool Failed() const noexcept {
++        return failed.load(std::memory_order_relaxed);
++    }
++
++    [[nodiscard]] VkImageView OutputView() const noexcept {
++        return *output_view;
++    }
++
++    /// Nearest-neighbour clamp sampler (normalized coordinates), for reading the output.
++    [[nodiscard]] VkSampler PointSampler() const noexcept {
++        return *point_sampler;
++    }
++
++    /// The API's entry points, from its loader.
++    struct Api;
++
++private:
++    Fsr4Upscaler(const Device& device, Scheduler& scheduler, MemoryAllocator& allocator,
++                 const Api& api, u64 version_id);
++
++    bool CreateContext(VkExtent2D render_size, VkExtent2D upscale_size);
++    void DestroyContext();
++
++    const Device& device;
++    Scheduler& scheduler;
++    MemoryAllocator& allocator;
++    const Api& api;
++    const u64 version_id;
++    void* context{};
++    VkExtent2D max_render_size{};
++    VkExtent2D upscale_size{};
++    vk::Image output;
++    vk::ImageView output_view;
++    vk::Image exposure;
++    vk::Sampler point_sampler;
++    bool images_initialized{};
++    std::atomic<bool> failed{};
++};
++
++} // namespace Vulkan
 diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
 index 0cb6e6132..80563f764 100644
 --- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
@@ -8569,10 +11040,10 @@ index 0cb6e6132..80563f764 100644
                                         std::chrono::steady_clock::now() - begin)
                                         .count(),
 diff --git a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
-index ecde60dea..1d6dd2214 100644
+index ecde60dea..49a366d43 100644
 --- a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
 +++ b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
-@@ -3,21 +3,30 @@
+@@ -3,21 +3,31 @@
  
  #include <algorithm>
  #include <cmath>
@@ -8587,6 +11058,7 @@ index ecde60dea..1d6dd2214 100644
 +#include "video_core/fsr.h"
 +#include "video_core/renderer_vulkan/vk_compute_pass.h"
 +#include "video_core/renderer_vulkan/vk_fsr3_upscaler.h"
++#include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
  #include "video_core/host_shaders/ocarina_dlss_color_comp_spv.h"
  #include "video_core/host_shaders/ocarina_dlss_output_comp_spv.h"
  #include "video_core/host_shaders/ocarina_dlss_4k_composite_comp_spv.h"
@@ -8605,7 +11077,7 @@ index ecde60dea..1d6dd2214 100644
  #include "video_core/renderer_vulkan/vk_ocarina_camera_motion.h"
  #include "video_core/renderer_vulkan/vk_scheduler.h"
  #include "video_core/renderer_vulkan/vk_update_descriptor.h"
-@@ -408,9 +417,9 @@ public:
+@@ -408,9 +418,9 @@ public:
                        code) {}
  
      void Record(Scheduler& scheduler, const void* descriptors, VkImage input,
@@ -8617,7 +11089,7 @@ index ecde60dea..1d6dd2214 100644
                  return;
              }
              const VkImageMemoryBarrier prepare = ProbeBarrier(input, VK_ACCESS_MEMORY_READ_BIT |
-@@ -432,10 +441,10 @@ public:
+@@ -432,10 +442,10 @@ public:
          });
      }
      void RecordOutput(Scheduler& scheduler, const void* descriptors,
@@ -8630,7 +11102,7 @@ index ecde60dea..1d6dd2214 100644
                  return;
              }
              const VkMemoryBarrier before{
-@@ -457,8 +466,9 @@ public:
+@@ -457,8 +467,9 @@ public:
              };
              cmd.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                  0, after);
@@ -8642,7 +11114,7 @@ index ecde60dea..1d6dd2214 100644
              }
          });
      }
-@@ -491,7 +501,7 @@ public:
+@@ -491,7 +502,7 @@ public:
                        OCARINA_DLSS_4K_COMPOSITE_COMP_SPV) {}
  
      void Record(Scheduler& scheduler, const void* descriptors, VkImage image,
@@ -8651,7 +11123,7 @@ index ecde60dea..1d6dd2214 100644
          scheduler.Record([this, descriptors, image, &upscaler, frame](vk::CommandBuffer cmd) {
              const auto output = ProbeBarrier(image, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
                                               VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-@@ -507,7 +517,7 @@ public:
+@@ -507,7 +518,7 @@ public:
              device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptors);
              cmd.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
              cmd.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
@@ -8660,7 +11132,7 @@ index ecde60dea..1d6dd2214 100644
              cmd.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, enabled);
              cmd.Dispatch(3840 / 8, 2160 / 8, 1);
              const VkMemoryBarrier complete{
-@@ -518,7 +528,7 @@ public:
+@@ -518,7 +529,7 @@ public:
              cmd.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                  0, complete);
              if (enabled && (!logged || frame % 120 == 0)) {
@@ -8669,7 +11141,7 @@ index ecde60dea..1d6dd2214 100644
                  logged = true;
              }
          });
-@@ -528,7 +538,71 @@ private:
+@@ -528,7 +539,71 @@ private:
      bool logged{};
  };
  
@@ -8741,7 +11213,7 @@ index ecde60dea..1d6dd2214 100644
  
  vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                              VkImageUsageFlags usage) {
-@@ -575,22 +649,97 @@ struct OcarinaFrameSlot {
+@@ -575,22 +650,123 @@ struct OcarinaFrameSlot {
      std::unique_ptr<ActorOverlay> overlay;
  };
  
@@ -8784,6 +11256,7 @@ index ecde60dea..1d6dd2214 100644
 +         VideoCommon::OcarinaUpscaleBackend backend)
          : device{device_}, scheduler{scheduler_}, queue{queue_}, allocator{allocator_}, pool{pool},
 -          upscaler{device, scheduler, allocator}, motion_pass{device, scheduler, pool},
++          staging_pool{staging},
 +          motion_pass{device, scheduler, pool},
            color_pass{device, scheduler, pool},
 -          output_pass{device, scheduler, pool, OCARINA_DLSS_OUTPUT_COMP_SPV} {}
@@ -8805,8 +11278,31 @@ index ecde60dea..1d6dd2214 100644
 +            if (!Fsr3Upscaler::IsSupported(device)) {
 +                throw vk::Exception(VK_ERROR_FEATURE_NOT_PRESENT);
 +            }
-+            fsr = std::make_unique<Fsr3Upscaler>(device, scheduler, allocator, staging, pool, queue,
-+                                               Fsr3Upscaler::Profile::OcarinaLdr);
++            // FSR 4 starts at the first evaluation, which knows the sizes; FSR 3.1 is its fallback.
++            fsr4_pending = Fsr4Upscaler::Wanted();
++            if (!fsr4_pending) {
++                CreateFsr3();
++            }
++        }
++    }
++
++    void CreateFsr3() {
++        fsr = std::make_unique<Fsr3Upscaler>(device, scheduler, allocator, staging_pool, pool,
++                                             queue, Fsr3Upscaler::Profile::OcarinaLdr);
++    }
++
++    /// Starts FSR 4 on the first evaluation and moves to FSR 3.1 when it can't run.
++    void SelectFsr(VkExtent2D render_size, VkExtent2D upscale_size) {
++        if (fsr4_pending) {
++            fsr4_pending = false;
++            fsr4 = Fsr4Upscaler::Create(device, scheduler, allocator, render_size, upscale_size);
++            if (!fsr4) {
++                CreateFsr3();
++            }
++        } else if (fsr4 && fsr4->Failed()) {
++            scheduler.Finish();
++            fsr4.reset();
++            CreateFsr3();
 +        }
 +    }
  
@@ -8816,35 +11312,37 @@ index ecde60dea..1d6dd2214 100644
      MemoryAllocator& allocator;
      DescriptorPool& pool;
 -    StreamlineDlssUpscaler upscaler;
++    StagingBufferPool& staging_pool;
 +#ifdef EGLANTINE_STREAMLINE
 +    std::unique_ptr<StreamlineDlssUpscaler> dlss;
 +#endif
 +    std::unique_ptr<Fsr3Upscaler> fsr;
++    std::unique_ptr<Fsr4Upscaler> fsr4;
++    bool fsr4_pending{};
 +    std::optional<std::chrono::steady_clock::time_point> last_evaluation;
 +
 +    bool Failed() const {
 +#ifdef EGLANTINE_STREAMLINE
-+        return dlss ? dlss->Failed() : !fsr;
-+#else
-+        return !fsr;
++        if (dlss) return dlss->Failed();
 +#endif
++        return !fsr && !fsr4 && !fsr4_pending;
 +    }
 +    VkSampler PointSampler() const {
 +#ifdef EGLANTINE_STREAMLINE
 +        if (dlss) return dlss->PointSampler();
 +#endif
-+        return fsr->PointSampler();
++        return fsr4 ? fsr4->PointSampler() : fsr->PointSampler();
 +    }
 +    VkImageView OutputView() const {
 +#ifdef EGLANTINE_STREAMLINE
 +        if (dlss) return dlss->OutputView();
 +#endif
-+        return fsr->OutputView();
++        return fsr4 ? fsr4->OutputView() : fsr->OutputView();
 +    }
      CameraMotionPass motion_pass;
      OcarinaColorPass color_pass;
      OcarinaColorPass output_pass;
-@@ -605,6 +754,10 @@ struct OcarinaLiveDlss::Impl {
+@@ -605,6 +781,10 @@ struct OcarinaLiveDlss::Impl {
      std::unique_ptr<OcarinaCompositePass> composite_pass;
      vk::Sampler linear_sampler;
      std::optional<u64> composited_frame;
@@ -8855,7 +11353,7 @@ index ecde60dea..1d6dd2214 100644
  
      VkSampler LinearSampler() {
          if (!linear_sampler) {
-@@ -623,17 +776,18 @@ struct OcarinaLiveDlss::Impl {
+@@ -623,17 +803,18 @@ struct OcarinaLiveDlss::Impl {
      }
  };
  
@@ -8881,7 +11379,7 @@ index ecde60dea..1d6dd2214 100644
      auto& state = *impl;
      constexpr VkExtent2D extent{2560, 1440};
      if (!state.native_scene_view) {
-@@ -645,14 +799,14 @@ void OcarinaLiveDlss::SaveSceneReference(VkImageView color) {
+@@ -645,14 +826,14 @@ void OcarinaLiveDlss::SaveSceneReference(VkImageView color) {
              state.device, state.scheduler, state.pool, OCARINA_DLSS_4K_REFERENCE_COMP_SPV);
      }
      state.queue.Acquire(state.scheduler, 2);
@@ -8899,7 +11397,7 @@ index ecde60dea..1d6dd2214 100644
      auto& state = *impl;
      if (state.composited_frame == frame) {
          return;
-@@ -668,34 +822,82 @@ void OcarinaLiveDlss::Composite4k(VkImageView native_composite, u64 frame) {
+@@ -668,34 +849,82 @@ void OcarinaLiveDlss::Composite4k(VkImageView native_composite, u64 frame) {
      state.scheduler.RequestOutsideRenderPassOperationContext();
      state.queue.Acquire(state.scheduler, 4);
      const auto sampler = state.LinearSampler();
@@ -8989,16 +11487,22 @@ index ecde60dea..1d6dd2214 100644
          return false;
      }
      state.scheduler.GetMasterSemaphore().Refresh();
-@@ -709,7 +911,7 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -709,7 +938,13 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
          *slot = std::make_unique<OcarinaFrameSlot>(state.device, state.allocator, extent);
      }
      auto& resources = **slot;
 -    const VkSampler sampler = state.upscaler.PointSampler();
++#ifdef EGLANTINE_STREAMLINE
++    if (!state.dlss)
++#endif
++    {
++        state.SelectFsr(extent, output_extent);
++    }
 +    const VkSampler sampler = state.PointSampler();
      const ActorTransforms actor_transforms{
          current, previous, mesh.current_origin, mesh.previous_origin,
          {static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0, 0},
-@@ -736,10 +938,30 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -736,10 +971,30 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
      state.queue.AddImage(*resources.color_view);
      state.color_pass.Record(state.scheduler, state.queue.UpdateData(), *resources.color, extent);
  
@@ -9030,7 +11534,7 @@ index ecde60dea..1d6dd2214 100644
              .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,
                        VK_IMAGE_ASPECT_COLOR_BIT},
              .depth = {depth, depth_image, VK_FORMAT_D32_SFLOAT, DEPTH_RANGE, VK_IMAGE_ASPECT_DEPTH_BIT},
-@@ -752,10 +974,43 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -752,10 +1007,68 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
              .reset = reset,
              .depth_inverted = false,
              .hdr = false,
@@ -9041,40 +11545,65 @@ index ecde60dea..1d6dd2214 100644
          return false;
      }
 +#endif
-+    if (state.fsr) {
++    if (state.fsr || state.fsr4) {
 +        const auto now = std::chrono::steady_clock::now();
 +        const f32 elapsed = state.last_evaluation
 +            ? std::chrono::duration<f32, std::milli>(now - *state.last_evaluation).count() : 16.67f;
 +        const f32 sharpness = FSR::RcasSharpnessFromStops(
 +            static_cast<f32>(Settings::values.fsr_sharpening_slider.GetValue()) / 100.0f);
-+        state.fsr->Upscale({
-+            .color = *resources.color_view,
-+            .depth = depth,
-+            .motion_vectors = *resources.motion_view,
-+            .render_size = extent,
-+            .upscale_size = output_extent,
-+            .jitter = {0.0f, 0.0f},
-+            .motion_vector_scale = {1.0f, 1.0f},
-+            .frame_time_ms = elapsed,
-+            .reset = reset || elapsed > 250.0f,
-+            .sharpen = sharpness > 0.0f,
-+            .sharpness = sharpness,
-+            .reactive_mask = bias_view,
-+            .transparency_mask = bias_view,
-+            .vertical_fov = 2.0f * std::atan(1.0f / projection_y),
-+        });
++        const bool history_reset = reset || elapsed > 250.0f;
++        const f32 vertical_fov = 2.0f * std::atan(1.0f / projection_y);
++        if (state.fsr4) {
++            // The same inputs as FSR 3.1's: camera near and far as its Ocarina profile assumes.
++            state.fsr4->Upscale({
++                .color = {*resources.color, LIVE_COLOR_FORMAT},
++                .depth = {depth_image, VK_FORMAT_D32_SFLOAT},
++                .motion_vectors = {*resources.motion, MOTION_FORMAT},
++                .reactive = {bias_image, BIAS_FORMAT},
++                .transparency = {bias_image, BIAS_FORMAT},
++                .render_size = extent,
++                .upscale_size = output_extent,
++                .jitter = {0.0f, 0.0f},
++                .motion_vector_scale = {1.0f, 1.0f},
++                .frame_time_ms = elapsed,
++                .reset = history_reset,
++                .sharpen = sharpness > 0.0f,
++                .sharpness = sharpness,
++                .camera_near = 0.1f,
++                .camera_far = 25000.0f,
++                .vertical_fov = vertical_fov,
++            });
++        } else {
++            state.fsr->Upscale({
++                .color = *resources.color_view,
++                .depth = depth,
++                .motion_vectors = *resources.motion_view,
++                .render_size = extent,
++                .upscale_size = output_extent,
++                .jitter = {0.0f, 0.0f},
++                .motion_vector_scale = {1.0f, 1.0f},
++                .frame_time_ms = elapsed,
++                .reset = history_reset,
++                .sharpen = sharpness > 0.0f,
++                .sharpness = sharpness,
++                .reactive_mask = bias_view,
++                .transparency_mask = bias_view,
++                .vertical_fov = vertical_fov,
++            });
++        }
 +        state.last_evaluation = now;
 +        static const bool trace = std::getenv("EDEN_NX2_DLSS_CONTRACT_TRACE") != nullptr;
 +        if (trace || frame % 120 == 0 || reset) {
-+            LOG_INFO(Render_Vulkan, "Ocarina FSR 3.1 evaluated frame={} {}x{} -> {}x{} reset={} effects={}",
-+                     frame, extent.width, extent.height, output_extent.width, output_extent.height,
-+                     reset || elapsed > 250.0f, bias_view != VK_NULL_HANDLE);
++            LOG_INFO(Render_Vulkan, "Ocarina {} evaluated frame={} {}x{} -> {}x{} reset={} effects={}",
++                     state.fsr4 ? "FSR 4" : "FSR 3.1", frame, extent.width, extent.height,
++                     output_extent.width, output_extent.height, history_reset,
++                     bias_view != VK_NULL_HANDLE);
 +        }
 +    }
      // A resize can submit the inputs before recording evaluation, so keep the later tick.
      resources.tick = state.scheduler.CurrentTick();
      if (target) {
-@@ -763,9 +1018,9 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -763,9 +1076,9 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
          const bool same_size = output_extent.width == target_extent.width &&
                                 output_extent.height == target_extent.height;
          const auto output_sampler = same_size ? sampler : state.LinearSampler();
@@ -9086,7 +11615,7 @@ index ecde60dea..1d6dd2214 100644
                                          target_extent, frame, reset);
      }
      state.scheduler.InvalidateState();
-@@ -774,4 +1029,3 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -774,4 +1087,3 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
      return true;
  }
  } // namespace Vulkan
@@ -11815,7 +14344,7 @@ index ef50be156..7d7bf6067 100644
  
  template <bool TO_LINEAR, u32 BYTES_PER_PIXEL>
 diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
-index d2cb70818..29b3a18b6 100644
+index d2cb70818..4571967e7 100644
 --- a/src/video_core/vulkan_common/vulkan_device.cpp
 +++ b/src/video_core/vulkan_common/vulkan_device.cpp
 @@ -642,8 +642,14 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
@@ -11835,11 +14364,46 @@ index d2cb70818..29b3a18b6 100644
              LOG_WARNING(Render_Vulkan,
                          "AMD drivers (2026+) have broken float16 math");
              features.shader_float16_int8.shaderFloat16 = false;
+@@ -1791,6 +1797,22 @@ void Device::RemoveUnsuitableExtensions() {
+                                            VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+     }
+ 
++    // VK_EXT_shader_float8 and VK_KHR_compute_shader_derivatives: Lichii's shaders don't use them,
++    // AMD FSR 4's FP8 and INT8 networks do. Float 8 matrices need the cooperative matrices.
++    if (!extensions.cooperative_matrix) {
++        features.shader_float8.shaderFloat8CooperativeMatrix = VK_FALSE;
++    }
++    extensions.shader_float8 = extensions.shader_float8 && features.shader_float8.shaderFloat8;
++    RemoveExtensionFeatureIfUnsuitable(extensions.shader_float8, features.shader_float8,
++                                       VK_EXT_SHADER_FLOAT8_EXTENSION_NAME);
++    extensions.compute_shader_derivatives =
++        extensions.compute_shader_derivatives &&
++        (features.compute_shader_derivatives.computeDerivativeGroupQuads ||
++         features.compute_shader_derivatives.computeDerivativeGroupLinear);
++    RemoveExtensionFeatureIfUnsuitable(extensions.compute_shader_derivatives,
++                                       features.compute_shader_derivatives,
++                                       VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
++
+     // VK_KHR_workgroup_memory_explicit_layout
+     extensions.workgroup_memory_explicit_layout =
+         features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout &&
 diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
-index a940e4d85..e91ea11ec 100644
+index a940e4d85..bc8d69d64 100644
 --- a/src/video_core/vulkan_common/vulkan_device.h
 +++ b/src/video_core/vulkan_common/vulkan_device.h
-@@ -375,6 +375,23 @@ public:
+@@ -74,8 +74,11 @@ VK_DEFINE_HANDLE(VmaPool)
+             primitive_topology_list_restart)                                                       \
+     FEATURE(EXT, ProvokingVertex, PROVOKING_VERTEX, provoking_vertex)                              \
+     FEATURE(EXT, Robustness2, ROBUSTNESS_2, robustness2)                                           \
++    FEATURE(EXT, ShaderFloat8, SHADER_FLOAT8, shader_float8)                                       \
+     FEATURE(EXT, TransformFeedback, TRANSFORM_FEEDBACK, transform_feedback)                        \
+     FEATURE(EXT, VertexInputDynamicState, VERTEX_INPUT_DYNAMIC_STATE, vertex_input_dynamic_state)  \
++    FEATURE(KHR, ComputeShaderDerivatives, COMPUTE_SHADER_DERIVATIVES,                             \
++            compute_shader_derivatives)                                                            \
+     FEATURE(KHR, CooperativeMatrix, COOPERATIVE_MATRIX, cooperative_matrix)                        \
+     FEATURE(KHR, Maintenance5, MAINTENANCE_5, maintenance5)                                        \
+     FEATURE(KHR, Maintenance6, MAINTENANCE_6, maintenance6)                                        \
+@@ -375,6 +378,23 @@ public:
                 id != VK_DRIVER_ID_MESA_RADV;
      }
  
@@ -11863,7 +14427,7 @@ index a940e4d85..e91ea11ec 100644
      /// Returns true for tile-based deferred renderers.
      bool IsTiler() const {
          switch (GetDriverID()) {
-@@ -420,6 +437,7 @@ public:
+@@ -420,6 +440,7 @@ public:
      FN_MAX_LIMIT_ELEM(PerStageDescriptorSampledImages) \
      FN_MAX_LIMIT_ELEM(PerStageDescriptorStorageBuffers) \
      FN_MAX_LIMIT_ELEM(PerStageResources) \

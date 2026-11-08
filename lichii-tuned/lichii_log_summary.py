@@ -11,7 +11,7 @@ import sys
 LINE = re.compile(r"^\[\s*(\d+\.\d+)\]\s+(\S+)\s+<(\w+)>\s+(\S+?):(\d+):(\S*?):\s(.*)$")
 SETUP_KEYS = ("Lichii Version", "Booting game", "Hybrid CPU", "CPU:", "Driver", "Device",
               "Vulkan", "GPU:", "lichii-tuned:", "anti-aliasing", "PGO training", "Texture cache thresholds",
-              "Memory margins", "VRAM", "device memory")
+              "Memory margins", "VRAM", "device memory", "AMD FSR 4:", "Preflushing")
 MEMORY_KEYS = ("out of device memory", "over the memory budget", "placed in host memory",
                "device lost", "device loss", "not reached in 4 s", "timed out", "out_of_")
 
@@ -49,7 +49,24 @@ def main(path):
     runtime, tc_stats, tc_uploads, vma, skipped = [], [], [], [], 0
     present_stats, present_frames = [], []
     finish_sites = collections.defaultdict(list)
+    # Round 15: each frame's time (DKB frame_ms, from 1 s windows) and the guest core profile.
+    frame_ms, guest_cores = [], collections.defaultdict(lambda: collections.defaultdict(list))
     for t, cls, level, func, msg in parse(path):
+        m = re.match(r"DKB frame_ms n=\d+((?: [\d.]+)*)$", msg)
+        if m:
+            frame_ms.append((t, [float(v) for v in m.group(1).split()]))
+            continue
+        m = re.match(r"Guest core (\d+) per second: guest code ([\d.]+) ms \(([\d.]+) entries, "
+                     r"([\d.]+) slow memory accesses, [\d.]+ slow exclusive stores\), supervisor "
+                     r"calls ([\d.]+) ms \(([\d.]+)\), kernel ([\d.]+) ms, idle spin ([\d.]+) ms, "
+                     r"idle wait ([\d.]+) ms \| calls: (.*)", msg)
+        if m:
+            core = guest_cores[int(m.group(1))]
+            for name, index in (("guest code", 2), ("slow accesses/s", 4), ("calls", 5),
+                                ("calls/s", 6), ("kernel", 7), ("idle spin", 8), ("idle wait", 9)):
+                core[name].append(float(m.group(index)))
+            core["top"].append(m.group(10))
+            continue
         if any(k in msg for k in SETUP_KEYS) and len(setup) < 60:
             setup.append(f"{t:9.2f}  {msg[:220]}")
         if cls == "Config" and re.match(r"^(M[-C]|-C) ", msg):
@@ -183,6 +200,32 @@ def main(path):
     for (t0, n0), (t1, n1) in zip(presents, presents[1:]):
         if n1 > n0 and t1 > t0:
             print(f"  presents {n0}-{n1}: {(n1 - n0) / (t1 - t0):5.1f} per s ({t0:.0f}-{t1:.0f} s)")
+
+    if frame_ms:
+        # Gameplay: after the first frame over 1.5 s (the load into the save), else the longest.
+        hangs = [i for i, (_, window) in enumerate(frame_ms) if max(window, default=0) > 1500]
+        load = hangs[0] if hangs else max(range(len(frame_ms)),
+                                          key=lambda i: max(frame_ms[i][1], default=0))
+        for label, part in (("whole log", frame_ms), (f"from {frame_ms[load][0]:.0f} s (after the "
+                                                      "first load)", frame_ms[load + 1:])):
+            values = sorted(v for _, window in part for v in window)
+            if not values:
+                continue
+            n = len(values)
+            low = lambda f: 1000.0 * max(1, int(f * n)) / sum(values[-max(1, int(f * n)):])
+            over = lambda ms: 100.0 * sum(v > ms for v in values) / n
+            print(f"\n== Frame times, {label}: {n} frames, {1000.0 * n / sum(values):.1f} fps")
+            print(f"  ms p50 {pct(values, 0.5):.1f}, p90 {pct(values, 0.9):.1f}, p99 {pct(values, 0.99):.1f}, "
+                  f"max {values[-1]:.1f}; 1% low {low(0.01):.1f} fps, 0.1% low {low(0.001):.1f} fps; "
+                  f"over 33.4 ms {over(33.4):.1f}%, over 50 ms {over(50):.1f}%, over 100 ms {over(100):.2f}%")
+    if guest_cores:
+        print("\n== Guest cores (ms per second, every 10 s)")
+        for core, values in sorted(guest_cores.items()):
+            parts = ", ".join(f"{name} {statistics.median(values[name]):.0f}"
+                              for name in ("guest code", "calls", "kernel", "idle spin", "idle wait",
+                                           "calls/s", "slow accesses/s"))
+            print(f"  core {core}: {parts}")
+            print(f"    last calls: {values['top'][-1][:200]}")
 
     print("\n== Host CPU ms per frame by thread (DKB)")
     for role, values in sorted(role_ms.items(), key=lambda kv: -statistics.median(kv[1])):

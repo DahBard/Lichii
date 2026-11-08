@@ -205,5 +205,26 @@ Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d54
   #679 imports AMD fixes from the CheezerWheezer survey (several were already ours).
 - Open pull requests taken: #415 (store extents bound native compute write marks; the owner's
   download trace shows exactly its over-marked 2.8-8 MiB skinning ranges), #288, #699, #700, #621,
-  #687, #695 (AMD FSR 3.1 for Ocarina, opt-in), #296, #609, #610, #611, #589, #645. Left: #161's
-  upload-word counter (needs a port), #640, #408, #652, #579, #559, #698, #655, #166, #615, #575.
+  #687, #695 (AMD FSR 3.1 for Ocarina, opt-in), #296, #609, #610, #611, #589, #645. Left: #640,
+  #408, #652, #579, #559, #698, #655, #166, #615, #575. (#161's upload-word counter turned out to
+  be in already: #184 merged a per-word form, `clean_words`/`ForEachDirtyUploadRange`.)
+
+## 10. Round 15 (2026-11-08): FSR 4 through the AMD FSR SDK 2.4
+
+- zortos293/Lichii nx2 is still at `bf4c42e22`: nothing new to merge.
+- FSR 4 is integrated through the AMD FSR API: `ffxQuery(GET_VERSIONS)` with a `VkDeviceContext`
+  lists the upscaler versions for the device, `ffxCreateContext` takes
+  `ffxCreateContextDescUpscale` + `ffxCreateContextDescUpscaleVersion` (`FFX_UPSCALER_VERSION`
+  4.1.2) + `ffxCreateBackendVKDesc` + `ffxOverrideVersion`, and `ffxDispatch` records into a
+  `VkCommandBuffer`, with `FfxApiResource` = a `VkImage` plus its description and state
+  (UNORDERED_ACCESS = GENERAL; the backend returns the images to it). The loader exports only
+  ffxCreateContext/Destroy/Configure/Query/Dispatch; the upscaler DLL (36 MB) imports
+  vulkan-1.dll and the MSVC runtime (MSVCP140, VCRUNTIME140, _1), which AMD's driver installer
+  brings. The SDK's own Vulkan sample enables VK_KHR_cooperative_matrix, VK_EXT_shader_float8
+  (with shaderFloat8CooperativeMatrix) and VK_KHR_compute_shader_derivatives ("FSR4 INT8
+  prepass"); the backend source (`Kits/FidelityFX/backend/vk/ffx_vk.cpp`) only queries what the
+  device supports, so the application has to enable them. The doc's limitation line says RX 7000
+  and newer; its timings list RX 6000 INT8 too. 9070 XT, FP8, 1440p->4K target: ~1.3 ms (AMD).
+- Inputs FSR 4 doesn't need (it makes its own reactivity) may still be given; this build passes
+  #644's effects bias as both masks, as FSR 3.1 does. No jitter yet (#253 has a Halton camera
+  jitter for DLSS): without it the upscaler can't recover sub-pixel detail.
