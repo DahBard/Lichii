@@ -503,6 +503,12 @@ public:
         }
     }
 
+    /// A new emulation session starts: the last one's fences may never have run.
+    void ClearDelayedReleases() {
+        std::scoped_lock lk{mutex};
+        delayed.clear();
+    }
+
     [[nodiscard]] u64 LatchEpoch() {
         std::scoped_lock lk{mutex};
         return latch_epoch;
