@@ -34,6 +34,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
+#include "video_core/renderer_vulkan/upload_batch.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -173,7 +174,8 @@ void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
 Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
     : device{device_}, state_tracker{state_tracker_},
       master_semaphore{std::make_unique<MasterSemaphore>(device)},
-      command_pool{std::make_unique<CommandPool>(*master_semaphore, device)} {
+      command_pool{std::make_unique<CommandPool>(*master_semaphore, device)},
+      upload_batch{std::make_unique<UploadBatch>()} {
 
     if (Common::DkbFrameTrace::Enabled()) {
         if (const char* every = std::getenv("LICHII_TRACE_DRAWS_EVERY")) {
@@ -351,6 +353,10 @@ void Scheduler::DispatchWork() {
     if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::DispatchWork");
     }
+    if (uploads_pending) {
+        // What the worker gets is everything recorded so far.
+        FlushUploads();
+    }
     if (chunk && !chunk->Empty()) {
         // Waking the worker is a system call (~2% of the GPU thread at one dispatch per 8
         // draws): skip it while the worker is still busy, it pops the queue before waiting.
@@ -365,6 +371,32 @@ void Scheduler::DispatchWork() {
         }
         AcquireNewChunk();
     }
+}
+
+void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies) {
+    if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+        VideoCommon::GpuSplit::CheckOwner("Scheduler::RecordUpload");
+    }
+    if (copies.empty()) {
+        return;
+    }
+    if (uploads_pending && !upload_batch->CanAdd(src, dst, copies)) {
+        FlushUploads();
+    }
+    upload_batch->Add(src, dst, copies);
+    uploads_pending = true;
+}
+
+void Scheduler::FlushUploads() {
+    // Copies, so the batch's vectors keep their capacity for the next one.
+    auto command = [copies = upload_batch->copies,
+                    groups = upload_batch->groups](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
+        UploadBatch::Record(cmdbuf, copies, groups);
+    };
+    upload_batch->copies.clear();
+    upload_batch->groups.clear();
+    uploads_pending = false;
+    RecordWithUploadBuffer(std::move(command));
 }
 
 void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass renderpass,
@@ -871,6 +903,10 @@ void Scheduler::TraceGpuSubmission() {
 }
 
 u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
+    if (uploads_pending) {
+        // In the tick they were recorded at.
+        FlushUploads();
+    }
     if (VideoCommon::Nx2Profile::Enabled()) {
         g_profile_submits.fetch_add(1, std::memory_order_relaxed);
         ReportSubmitCounts();

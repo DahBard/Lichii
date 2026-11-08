@@ -28,6 +28,13 @@
 
 namespace Vulkan {
 namespace {
+// LICHII_UPLOAD_BATCH=0: every in-order upload from the stream buffer records its own command
+// and pair of barriers, as before upload batching.
+const bool g_upload_batching = [] {
+    const char* value = std::getenv("LICHII_UPLOAD_BATCH");
+    return value == nullptr || value[0] != '0';
+}();
+
 void HostReadBarrier(vk::CommandBuffer cmdbuf) {
     const VkMemoryBarrier barrier{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -563,6 +570,14 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
     }
 
     scheduler.RequestOutsideRenderPassOperationContext();
+    if (g_upload_batching && barrier && src_buffer == staging_pool.StreamBuf() &&
+        !vk_copies.empty()) {
+        // An upload in order, with these barriers. Runs of them (Ocarina of Time's inline writes
+        // into GPU-written pages: ~600 a frame) go in one command between one pair of them.
+        scheduler.RecordUpload(src_buffer, dst_buffer,
+                               std::span<const VkBufferCopy>(vk_copies.data(), vk_copies.size()));
+        return;
+    }
     scheduler.Record([src_buffer, dst_buffer, vk_copies, barrier](vk::CommandBuffer cmdbuf) {
         if (barrier) {
             cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER,
