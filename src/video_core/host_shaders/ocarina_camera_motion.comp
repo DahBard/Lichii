@@ -18,7 +18,8 @@ void main() {
     vec2 size = vec2(extent);
     float depth = texelFetch(scene_depth, pixel, 0).r;
     vec2 screen = (vec2(pixel) + 0.5) / size;
-    // The captured Zelda path is unjittered, with [-1, 1] clip depth and negative viewport height.
+    // The camera matrices are unjittered (FSR's jitter moves the viewport), with [-1, 1] clip
+    // depth and negative viewport height, so the motion leaves the jitter out as FSR expects.
     vec4 clip = vec4(screen * vec2(2, -2) + vec2(-1, 1), depth * 2 - 1, 1);
     vec4 previous = params.clip_to_previous_clip * clip;
     vec2 pixels = vec2(0);

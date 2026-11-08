@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <utility>
 #include <optional>
 #include <string_view>
 
@@ -249,6 +250,11 @@ private:
     bool OcarinaTemporalEnabled() const;
     void TrackOcarinaCamera();
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
+    /// Offsets the viewports of Ocarina's scene draws by the frame's camera jitter while FSR
+    /// evaluates the frames, so its temporal upscale gathers new sample positions.
+    void UpdateOcarinaJitter();
+    [[nodiscard]] bool OcarinaJitterWanted() const;
+    [[nodiscard]] bool IsOcarinaSceneCameraDraw();
     bool TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace);
     void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
     /// Records the uniform and storage buffers of the current draw or dispatch for the frame dump.
@@ -303,6 +309,24 @@ private:
     const char* oot_fallback_reason{};
     u32 oot_fallback_repeats{};
     std::optional<u64> oot_dlss_frame;
+    struct OcarinaJitter {
+        u64 frame{~u64{0}};          ///< render_trace_frame the offset below was chosen for
+        bool active{};               ///< this frame's scene draws are offset
+        u32 index{};                 ///< position in the Halton sequence
+        u32 phases{8};               ///< FSR's cycle for the last evaluation's sizes
+        std::array<f32, 2> offset{}; ///< this frame's offset in render pixels
+        std::array<f32, 2> applied{}; ///< the offset the recorded viewports carry
+        /// Offsets by frame, for the evaluation of the frame that drew with them.
+        std::array<std::pair<u64, std::array<f32, 2>>, 4> recent{};
+        struct Camera {
+            GPUVAddr address{};
+            u64 frame{~u64{0}};
+            bool perspective{};
+        };
+        std::array<Camera, 4> cameras{}; ///< camera buffers classified this frame
+        u32 next_camera{};
+        bool logged{};
+    } oot_jitter;
     std::optional<u64> oot_4k_scene_frame;
     VkImage oot_4k_guest_present{};
     std::optional<u64> oot_effects_frame;

@@ -1087,6 +1087,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
     }
 
+    UpdateOcarinaJitter();
     {
         Profile::Scope scope{Profile::Zone::DynamicState};
         UpdateDynamicStates(pipeline);
@@ -2890,6 +2891,82 @@ void RasterizerVulkan::TrackOcarinaCamera() {
     });
 }
 
+bool RasterizerVulkan::OcarinaJitterWanted() const {
+    // LICHII_FSR_JITTER=0 renders unjittered as before. DLSS keeps the unjittered frames: its
+    // jitter convention is untested here.
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_FSR_JITTER");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled && oot_live_dlss && !oot_live_failed && oot_backend &&
+           *oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr;
+}
+
+/// A draw of the scene's camera into a scene-sized depth buffer: the depth prepass, the opaque
+/// pass that tests EQUAL against its copy, and the effects after them. Full-screen passes on the
+/// same depth buffer bind no perspective camera and stay where they are (zortos293/Lichii#253).
+bool RasterizerVulkan::IsOcarinaSceneCameraDraw() {
+    const auto& regs = maxwell3d->regs;
+    if (!regs.viewport_scale_offset_enabled || !regs.zeta_enable ||
+        regs.zeta.format != Tegra::DepthFormat::Z32_FLOAT ||
+        regs.zeta_size.width != oot_motion.extent.width ||
+        regs.zeta_size.height != oot_motion.extent.height) {
+        return false;
+    }
+    const auto& camera =
+        maxwell3d->state.shader_stages[0].const_buffers[VideoCommon::OcarinaCameraBuffer];
+    if (!camera.enabled || camera.size < VideoCommon::OcarinaCameraBytes) {
+        return false;
+    }
+    for (const auto& entry : oot_jitter.cameras) {
+        if (entry.address == camera.address && entry.frame == render_trace_frame) {
+            return entry.perspective;
+        }
+    }
+    auto& entry = oot_jitter.cameras[oot_jitter.next_camera++ % oot_jitter.cameras.size()];
+    entry = {.address = camera.address, .frame = render_trace_frame, .perspective = false};
+    const GPUVAddr projection_address =
+        camera.address + VideoCommon::OcarinaCameraProjectionOffset;
+    std::array<f32, 16> projection;
+    if (gpu_memory->IsFullyMappedRange(projection_address, sizeof(projection))) {
+        gpu_memory->ReadBlockUnsafe(projection_address, projection.data(), sizeof(projection));
+        entry.perspective = VideoCommon::IsOcarinaPerspective(projection);
+    }
+    return entry.perspective;
+}
+
+void RasterizerVulkan::UpdateOcarinaJitter() {
+    std::array<f32, 2> wanted{};
+    if (OcarinaJitterWanted()) {
+        auto& jitter = oot_jitter;
+        if (jitter.frame != render_trace_frame) {
+            // Chosen once per frame, at its first draw: the opaque pass tests EQUAL against the
+            // prepass depth, so every scene draw of a frame needs the same offset. Only frames
+            // after an evaluated one are jittered; the others have nothing to resolve them.
+            jitter.frame = render_trace_frame;
+            jitter.active = oot_dlss_frame && *oot_dlss_frame + 1 == render_trace_frame;
+            if (jitter.active) {
+                jitter.offset = VideoCommon::FsrJitter(jitter.index++, jitter.phases);
+                jitter.recent[render_trace_frame % jitter.recent.size()] = {render_trace_frame,
+                                                                           jitter.offset};
+                if (!jitter.logged) {
+                    jitter.logged = true;
+                    LOG_INFO(Render_Vulkan,
+                             "Ocarina FSR camera jitter on: {} phases ({}x{} render size)",
+                             jitter.phases, oot_motion.extent.width, oot_motion.extent.height);
+                }
+            }
+        }
+        if (jitter.active && IsOcarinaSceneCameraDraw()) {
+            wanted = jitter.offset;
+        }
+    }
+    if (wanted != oot_jitter.applied) {
+        oot_jitter.applied = wanted;
+        state_tracker.InvalidateViewports();
+    }
+}
+
 /// Capture the skinning pose of the recognized Link draw for frame-to-frame motion.
 void RasterizerVulkan::TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect) {
     if (shader_hash != 0x28c6e527634f814aULL || !is_indexed || is_indirect ||
@@ -3124,10 +3201,13 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
         }
         const VkExtent2D target_extent{target.size.width, target.size.height};
         const VkExtent2D output_extent = upscale_4k ? VkExtent2D{3840, 2160} : target_extent;
+        const auto& drawn = oot_jitter.recent[render_trace_frame % oot_jitter.recent.size()];
+        const std::array<f32, 2> jitter =
+            drawn.first == render_trace_frame ? drawn.second : std::array<f32, 2>{};
         const bool recorded = oot_live_dlss->Record(color_view, depth.DepthView(), target_view,
                                                    extent, output_extent, target_extent, oot_motion.current,
                                                    oot_motion.previous, mesh, depth.ImageHandle(),
-                                                   render_trace_frame);
+                                                   render_trace_frame, jitter);
         if (!recorded) {
             return fail("temporal upscaler declined the frame");
         }
@@ -3137,6 +3217,7 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
             oot_4k_guest_present = VK_NULL_HANDLE;
         }
         oot_dlss_frame = render_trace_frame;
+        oot_jitter.phases = VideoCommon::FsrJitterPhaseCount(extent.width, output_extent.width);
         oot_fallback_reason = nullptr;
         return true;
     } catch (const vk::Exception& error) {
@@ -3732,7 +3813,7 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
     }
     const bool is_rescaling{texture_cache.IsRescaling()};
     const float scale = is_rescaling ? Settings::values.resolution_info.up_factor : 1.0f;
-    const std::array viewport_list{
+    std::array viewport_list{
         GetViewportState(device, regs, 0, scale),  GetViewportState(device, regs, 1, scale),
         GetViewportState(device, regs, 2, scale),  GetViewportState(device, regs, 3, scale),
         GetViewportState(device, regs, 4, scale),  GetViewportState(device, regs, 5, scale),
@@ -3742,6 +3823,13 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
         GetViewportState(device, regs, 12, scale), GetViewportState(device, regs, 13, scale),
         GetViewportState(device, regs, 14, scale), GetViewportState(device, regs, 15, scale),
     };
+    if (oot_jitter.applied != std::array<f32, 2>{}) {
+        // Moving the viewport by the jitter moves the image by it, whatever the y flip.
+        for (VkViewport& viewport : viewport_list) {
+            viewport.x += oot_jitter.applied[0] * scale;
+            viewport.y += oot_jitter.applied[1] * scale;
+        }
+    }
     scheduler.Record([this, viewport_list](vk::CommandBuffer cmdbuf) {
         const u32 num_viewports = std::min<u32>(device.GetMaxViewports(), Maxwell::NumViewports);
         const vk::Span<VkViewport> viewports(viewport_list.data(), num_viewports);
