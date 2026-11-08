@@ -74,13 +74,33 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    queued constant buffer writes take those words from the queue instead of waiting (94% of
    those waits in r23; LICHII_DMA_MIXED_READS=0 as before), pipelines keyed only by the vertex
    attributes their programs read, so the same shaders stop compiling again for leftover
-   attribute types (LICHII_KEY_ALL_ATTRIBUTES=1 as before), and cached pipelines whose newest
-   record fails to load are built from an older one and stored again. ab-12 turns all of these
+   attribute types (LICHII_KEY_ALL_ATTRIBUTES=1 as before). ab-12 turns the switchable ones
    off at once; verify-r16.bat checks the two new shortcuts against the old way.
  * Fritchii's host frame pacer, off unless asked for: LICHII_HOST_PACE=1 (trace-host-pace.bat)
    holds each frame for its display refresh and locks the game's frame clock to the display,
    for evenly shown frames at 60 fps on 120 Hz displays; LICHII_HOST_PACE=2
    (trace-display.bat) only measures how many refreshes frames stay on screen.
+ * Round 17: upstream Lichii's 53 pull requests of 2026-11-08. Among them: the shader cache
+   builds each pipeline from its first record and removes exact duplicates and broken records
+   from the file; GPU copies that overwrite a whole texture skip its upload; the texture cache
+   keeps 5/8 of the VRAM budget, as this build already did. Also upstream pull requests that
+   are still open: faster texture untiling in 16-byte blocks (#784, 1.7 to 2.4 times as fast
+   in our test), Ocarina's images recycled instead of created and freed every frame (#836),
+   and fewer waits between memory protection changes (#810). Textures in one contiguous piece
+   of memory are untiled in place instead of being copied out first (from tomk134's fork;
+   ab-13 copies again), and GPU shaders' signed adds report overflow correctly at the
+   boundary (from the Elysium fork).
+ * From the "Lichii OoT AMD" builds (medicinauvsecretaria-lang): the driver's shader cache is
+   saved more often (after 32 new pipelines, at most every 10 s; the list of used pipelines
+   every 5 s), so a driver crash loses less, and at launch the emulator offers to precompile
+   the game's compute shaders on the loading screen (Graphics > Advanced, "Precache shaders
+   before game start": now Ask; Always or Off there). Those builds are compiled for AMD Zen 3
+   CPUs (-march=znver3), which is why they may not start on Intel CPUs; this build stays
+   compiled for any x86-64-v3 CPU.
+ * Upstream now pins the GPU threads to cores of their own by default (GraphicsExtra > Hacks,
+   "Pin GPU threads to their own cores"); this build leaves it off: on the Core Ultra 7 255H
+   it would put the emulated CPU cores on the four P-cores left instead of spreading them over
+   P- and E-cores.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -97,7 +117,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-4-strict-placement.bat    emulated CPU cores on P-cores too, pipeline builds on E-cores only
                               (LICHII_CPU_POLICY=strict)
  ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
- ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
+ ab-6-official-texture-cache.bat  texture cache collects from 5 GiB, as official Lichii did
+                              before 2026-11-08
  ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
                               (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
                               can be missing for a few frames; logs like perf-trace.bat
@@ -109,9 +130,12 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
  ab-12-round15-paths.bat      round 16's new shortcuts off (bank check, texture uploads,
-                              storage-pointer handles, mixed macro reads, attribute keys),
-                              logged like perf-trace.bat: if a glitch or a frame-rate change
-                              goes away here, one of them caused it
+                              mixed macro reads, attribute keys), logged like perf-trace.bat:
+                              if a glitch or a frame-rate change goes away here, one of them
+                              caused it
+ ab-13-round16-texture-reads.bat  textures copied out of guest memory before they are untiled,
+                              as in round 16 (EDEN_NX2_UNSWIZZLE_COPY=1), logged like
+                              perf-trace.bat
  verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
                               way on every use and logs differences ("missed" and "differed"
                               should stay 0); slower
