@@ -122,6 +122,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdDrawIndexedIndirectCount);
     X(vkCmdDrawIndirectByteCountEXT);
     X(vkCmdDrawMeshTasksEXT);
+    X(vkCmdDrawMeshTasksIndirectEXT);
     X(vkCmdEndConditionalRenderingEXT);
     X(vkCmdEndQuery);
     X(vkCmdEndRenderPass);

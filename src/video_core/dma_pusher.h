@@ -255,6 +255,10 @@ public:
     /// EDEN_NX2_LIST_VERIFY: reads the list ReadGpuWrittenCommands just read again as before
     /// (Nx2ListStats) and leaves the words read last in command_headers.
     void VerifyGpuWrittenCommands(GPUVAddr address, u32 count);
+    /// A GPU-written entry whose words are all the parameters of a 3D macro that only draws with
+    /// them (Maxwell3D::FrontDrawFromGpuArguments): the draw is sent without reading the words.
+    /// False when it isn't one; the caller reads the entry as usual.
+    bool DrawFromGpuArguments(const CommandListHeader& header);
     /// Brings command list words the GPU wrote (still only in host buffers) to guest memory.
     bool FlushGpuWrittenCommands(GPUVAddr address, size_t size);
 
