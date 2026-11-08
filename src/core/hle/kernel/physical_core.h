@@ -13,6 +13,7 @@
 #include <mutex>
 
 #include "core/arm/arm_interface.h"
+#include "core/hle/kernel/guest_core_profile.h"
 
 namespace Kernel {
 class KernelCore;
@@ -68,6 +69,7 @@ public:
 
 private:
     const std::size_t m_core_index;
+    GuestCoreProfile m_profile;
     std::mutex m_guard;
     std::condition_variable m_on_interrupt;
     Core::ArmInterface* m_arm_interface{};

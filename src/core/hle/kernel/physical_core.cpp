@@ -21,7 +21,7 @@
 namespace Kernel {
 
 PhysicalCore::PhysicalCore(KernelCore& kernel, std::size_t core_index)
-    : m_core_index{core_index}
+    : m_core_index{core_index}, m_profile{core_index}
 {
     m_is_single_core = !kernel.IsMulticore();
 }
@@ -96,6 +96,7 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
                 return;
             }
 
+            m_profile.Switch(GuestCoreProfile::Activity::Guest);
             if (thread->GetStepState() == StepState::StepPending) {
                 hr = interface->StepThread(thread);
 
@@ -105,6 +106,7 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
             } else {
                 hr = interface->RunThread(thread);
             }
+            m_profile.Switch(GuestCoreProfile::Activity::Kernel);
 
             ExitContext();
         }
@@ -156,7 +158,10 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
         // Handle system calls.
         if (supervisor_call) {
             // Perform call.
-            Svc::Call(system, interface->GetSvcNumber());
+            const u32 svc = interface->GetSvcNumber();
+            m_profile.Switch(GuestCoreProfile::Activity::Svc, svc);
+            Svc::Call(system, svc);
+            m_profile.Switch(GuestCoreProfile::Activity::Kernel);
             return;
         }
 
@@ -244,6 +249,7 @@ void PhysicalCore::Idle(KernelCore& kernel) {
 #endif
     }
     const auto spin = std::chrono::microseconds{spin_us};
+    m_profile.Switch(GuestCoreProfile::Activity::IdleSpin);
     if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
         // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
         Common::SpinUntilFor(&m_is_interrupted, spin, [this] {
@@ -256,8 +262,12 @@ void PhysicalCore::Idle(KernelCore& kernel) {
             std::this_thread::yield();
         }
     }
-    std::unique_lock lk{m_guard};
-    m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
+    m_profile.Switch(GuestCoreProfile::Activity::IdleWait);
+    {
+        std::unique_lock lk{m_guard};
+        m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
+    }
+    m_profile.Switch(GuestCoreProfile::Activity::Kernel);
 }
 
 bool PhysicalCore::IsInterrupted() const {
