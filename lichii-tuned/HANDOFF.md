@@ -25,8 +25,8 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `92f021240` (merged in round 13; `588bfa6`
-  before) + `.github/workflows/lichii-tuned.yml` + this folder. The workflow applies `lichii-tuned/lichii-tuned.patch` and builds on every push to
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `bf4c42e22` (build 117 + 3; merged in round 14,
+  `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The workflow applies `lichii-tuned/lichii-tuned.patch` and builds on every push to
   `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with `[skip ci]` doesn't).
 - Variants (windows-2022): `pgo` (MSYS2 UCRT64 clang, repo's `eglantine.profdata`,
   `-march=x86-64-v3 -mtune=arrowlake -ffp-contract=off`), `pgo-lto` (+ ThinLTO). Commented out
@@ -36,10 +36,10 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (120 commits over upstream nx2
-  `92f021240`, which round 13 merged into it; pushing it doesn't trigger builds).
+  `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `92f021240`). The patch is `git diff --binary 92f021240 tuned4` (108 files, 384 KB); check it
+  `bf4c42e22`). The patch is `git diff --binary bf4c42e22 tuned4` (108 files, 384 KB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -56,6 +56,19 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 14 (2026-11-08): upstream nx2 merged up to `bf4c42e22` (build 117 #657, #659, #664 GPU Clocks
+shrink Switch 2 GPU durations again: Ocarina sizes its dynamic resolution from them, #679 AMD fixes:
+blend key always rebuilt, null texture past the TIC pool, preloaded pipelines never evicted). Open
+upstream PRs on top: #415 (native compute stores bound the GPU-written mark: the 4-8 MiB skinning
+ranges behind the read-trap stalls and preflush downloads; setting "Native compute write mark"),
+#288 (Kokiri shadow map uploads a join copy overwrites), #699 (draws after a deferred clear stay in
+the render pass), #700 (invalidation blocks, query walks stop early), #621 (Windows one-tick polls),
+#687 (fence release while acquires wait; ported onto our acquire polls), #695 (opt-in AMD FSR 3.1 in
+place of Ocarina's output pass; `trace-fsr.bat`), #296 (ASTC uploads), #609, #610, #611, #589, #645.
+Not taken: #161's upload-word counter (5a0cdcbee: conflicts with the 64-SSBO and RangeSet code;
+worth a careful port, bind stage buffers is the back's top zone), #640 (cache record repair), #408,
+#652, #579, #559 (fake occlusion leaves no pending reports), #698 (our placement doesn't use #232's).
 
 Round 13 (2026-11-07 night): upstream nx2 merged up to `92f021240` (102 commits since
 `09b78bd2df`), which brings everything rounds 10-12 cherry-picked plus #432 (pipeline cache
@@ -334,6 +347,19 @@ Own changes:
     frame, GPU busy 46.8 ms. Round 13 lets marks expire.
 - Runs #19 (round 13), #20 (13b) and #21 (13c: logic op keys) built `pgo` and `pgo-lto` (artifacts
   `lichii-tuned-r21-pgo`, `lichii-tuned-r21-pgo-lto`).
+- r21 with the shared build-86 cache (all four launchers): Total Pipeline Count 19,416-19,450 at
+  boot (was 1,707): 21,062 records from another driver, all turned into this device's logic op form,
+  3,368 duplicates once they were. Runtime builds in game: 1-16 per 10 s. Gameplay (93-139 s each):
+  perf 27.8 fps median (r18 25.2), p10 20.7 (14.1); old drains 26.7; preflush 27.4 (downloads flat
+  at 400-520 MiB/s, no growth); downloads 27.2. The owner: "all relatively similar", old drains
+  maybe slower, preflush maybe faster. New waits against old: the front's CPU time 12.9 against
+  22.4 ms a frame, macro DMA flush drains 279 -> 0 ms/s and split drain 383 -> 74, but macro DMA
+  read waits 46 -> 202 and writer waits 407 -> 712 ms/s: the front now waits on the back for the
+  same work in other places. Acquire waits barely moved (246 -> 233 ms/s): most acquires aren't on
+  a stable word. Read-trap waits 59-75 a second (92-100 ms/s on the guest cores). The download trace:
+  GPU writes of 2.8-8 MiB (0x2b4ce800 +0x800000, 0x302ff200 +0x441e00, ...) about once a frame each,
+  5-6.4 GB queued per 10 s, copied back from the 0x2b6x-0x2b8x and 0x304x-0x305x regions the CPU
+  reads: #415's over-marked skinning bindings.
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
   `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
   vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
@@ -388,19 +414,15 @@ Own changes:
 
 ## Next steps
 
-1. Run #19 (round 13), docked, 1x, ScaleForce, the same Kokiri spots, about 2 minutes each:
-   `perf-trace.bat` (new defaults), `trace-old-drains.bat` (r18's split waits, to measure the
-   acquire and report-drain changes), `trace-preflush.bat` (expiring marks; was the downloads'
-   growth gone?), and `trace-downloads.bat` if preflush still downloads much. First boot after the
-   merge: the log should say "Pipeline cache started from the version 53 cache"; look at the new
-   "Pipeline cache: N of M cached graphics pipelines left out" line (the owner's 22,000-pipeline
-   cache from Lichii build 86 built ~1,700 at boot on r18). Watch for hangs (a channel that stops),
-   flicker and wrong occlusion (objects missing) from the new waits. Next candidates: front
-   shadow of answered report values for the remaining MME DMA read waits (49 ms/s in r18);
-   Firefly's bank uploads against #345's per-bind memcmp (bind stage buffers 195 ms/s of the
-   back); FSR 3.1/4 from #606's camera motion vectors; try the "Game" AA mode now that HMMA runs on
-   RDNA4 cooperative matrices (#583: 24.4 -> 8.1 ms on RDNA4); make preflush the default if its
-   downloads stay low; clang-cl build for upstream's Ocarina PGO profile.
+1. Run #22 (round 14), docked, 1x, ScaleForce, the same Kokiri spots, about 2 minutes each:
+   `perf-trace.bat` (#415 should cut the read-trap waits at buffer_cache.h and the white leaves;
+   #288 the back's texture uploads), `trace-preflush.bat` (downloads should fall far below 450
+   MiB/s), `trace-fsr.bat` (FSR 3.1 in place of the output pass: look for the FSR lines and the
+   image), and one `perf-trace.bat` run with GPU Clocks = Normal (#664 changes the game's
+   resolution with Boost: compare GPU busy and the image). Next candidates: a front shadow of
+   answered report values for the macro DMA read waits (202 ms/s in r21); #161's upload-word counter
+   for bind stage buffers; FSR from 1440p to 4K (the resolution scaler on the images after the
+   output pass); #640 so a damaged record doesn't delete the 1 GB cache.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);

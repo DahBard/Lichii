@@ -192,3 +192,18 @@ Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d54
   page drains that round 13 removes for answered occlusion reports.
 - **Kitsu**: new commits are UI only (console-style home, box art); its exit-hang fix 4276c9c7d
   is in.
+
+## 9. Round 14 (2026-11-08): upstream builds 115-117 and open pull requests
+
+- Builds 116 (`92f021240`) and 117 (`89440b29a`) are the newest releases; 113-115 were never
+  published. Round 13's base already was build 116. Its notes credit Ocarina's "60+ fps" for many
+  users to #551 (foliage), #583/#582 (the AA network on matrix units: "41 -> 60 fps on RDNA4", which
+  the owner's "No sharpening" skips anyway), #446, #250, #481, #580. Build 117 only keeps HMMA off
+  AMD GPUs without matrix cores (#657).
+- After 117: #664 makes GPU Clocks Boost (the default) and Overclock shrink Switch 2 GPU durations
+  again; Ocarina sizes its dynamic resolution from them (upstream: 854x480 -> 1920x1080 with Boost).
+  #679 imports AMD fixes from the CheezerWheezer survey (several were already ours).
+- Open pull requests taken: #415 (store extents bound native compute write marks; the owner's
+  download trace shows exactly its over-marked 2.8-8 MiB skinning ranges), #288, #699, #700, #621,
+  #687, #695 (AMD FSR 3.1 for Ocarina, opt-in), #296, #609, #610, #611, #589, #645. Left: #161's
+  upload-word counter (needs a port), #640, #408, #652, #579, #559, #698, #655, #166, #615, #575.
