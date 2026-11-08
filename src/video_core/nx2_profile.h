@@ -284,9 +284,10 @@ inline void Report(const char* thread_name = "GPU thread") {
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
     if (data.counters[8] != 0 || data.counters[9] != 0) {
+        const double seconds = static_cast<double>(window) / 1e9;
         line += fmt::format(" | bank pages compared {:.0f} ({:.0f} skipped as compared this draw)",
-                            static_cast<double>(data.counters[8]) * 1e9 / window,
-                            static_cast<double>(data.counters[9]) * 1e9 / window);
+                            static_cast<double>(data.counters[8]) / seconds,
+                            static_cast<double>(data.counters[9]) / seconds);
     }
     std::string drains;
     for (size_t i = 0; i < data.drain_count.size(); ++i) {
