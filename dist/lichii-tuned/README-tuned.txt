@@ -53,10 +53,21 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * "GPU Clocks" (Boost by default) again shortens how long the game thinks its GPU work takes
    (Lichii #664). Ocarina sizes its render resolution from that, so it can render sharper and
    ask more of the GPU; Normal keeps the old behaviour.
+ * AMD FSR 4 upscales Ocarina to 4K by default (docked: the game's 2560x1440 to 3840x2160),
+   with AMD's FSR 4 libraries from the AMD FSR SDK 2.4 next to lichii.exe
+   (amd_fidelityfx_loader_vk.dll, amd_fidelityfx_upscaler_vk.dll; AMD's license is in
+   amd_fidelityfx_license.md). Where FSR 4 can't run (another GPU, missing libraries, an
+   error), FSR 3.1 takes over and the log says why ("AMD FSR 4:" lines). The setting is
+   "Use AMD FSR upscaling in Ocarina of Time" (Graphics); trace-fsr31.bat compares FSR 3.1.
+ * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
+   GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
+ * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
+   perf-trace.bat or frame-times.bat) and, with perf-trace.bat, what each emulated CPU core
+   spends its time on ("Guest core N per second:").
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
-   settings; "Game" brings the game's network back).
+   settings; "Game" brings the game's network back). Round 15 adds Ocarina's FSR upscaling on.
 
 The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
 CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
@@ -70,9 +81,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (LICHII_CPU_POLICY=strict)
  ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
  ab-6-official-texture-cache.bat  texture cache collects from 5 GiB as in official Lichii
- ab-7-preflush.bat            preflushes GPU readbacks (EDEN_NX2_PREFLUSH=1): fewer readback stalls
-                              over OCuLink; a page stays preflushed for 120 frames, longer if the
-                              game reads it again (LICHII_PREFLUSH_FRAMES=0 keeps it for good)
  ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
                               (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
                               can be missing for a few frames; logs like perf-trace.bat
@@ -83,26 +91,34 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               GPU does not idle between frames; logs like perf-trace.bat
  ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
                               pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
- trace-preflush.bat           ab-7 with the logging of perf-trace.bat
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
  trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
                               (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
- trace-fsr.bat                AMD FSR 3.1 in place of Ocarina's own anti-aliasing pass
-                              (EDEN_NX2_DLSS_REPLACEMENT=fsr), logged like perf-trace.bat
- trace-downloads.bat          trace-preflush.bat plus a list of what the GPU copies back and
-                              which GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
+ trace-fsr31.bat              AMD FSR 3.1 instead of FSR 4 (LICHII_FSR4=0), logged like
+                              perf-trace.bat
+ trace-no-fsr.bat             Ocarina's own upscale pass, no 4K output
+                              (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
+ trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
+                              perf-trace.bat
+ trace-no-list-wait.bat       experiment: the GPU thread reads the next commands without waiting
+                              for queued compute work (LICHII_LIST_WRITER_WAIT=0), logged like
+                              perf-trace.bat; look for flicker, broken objects or crashes
+ trace-downloads.bat          perf-trace.bat plus a list of what the GPU copies back and which
+                              GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
  trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
                               (LICHII_ACQUIRE_POLL=0, LICHII_REPORT_DRAIN=all), logged like
                               perf-trace.bat: for comparison, or if the new waits misbehave
  trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
                               logged like perf-trace.bat: slower, for comparison
- perf-trace.bat               default settings plus GPU thread zones (every 10 s) and frame timing
-                              (every second) in the log (EDEN_NX2_GPU_PROFILE=1,
-                              EDEN_DKB_FRAME_TRACE=1). Draws are timed one sampled frame in four
-                              (LICHII_TRACE_DRAWS_EVERY=4), since timing them slows that frame
+ perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores and
+                              frame times in the log (EDEN_NX2_GPU_PROFILE=1,
+                              EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1). Draws are timed
+                              one sampled frame in four (LICHII_TRACE_DRAWS_EVERY=4)
+ frame-times.bat              default settings with only each frame's time logged
+                              (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
 Each start replaces the log, so copy it after every run you want to compare.
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
