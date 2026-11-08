@@ -61,8 +61,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `zlib-ng-compat`; dropped) and was rebuilt alone as run #25 (`workflow_dispatch` with
   `only: cachyos`; `windows` rebuilds the other). Windows failed on the host pacer's
   `#pragma comment(lib, "dwmapi.lib")` (MinGW clang: unknown pragma, an error under
-  `-Werror=all`; video_core now links dwmapi in CMake) and was rebuilt alone as run #26. In run #25 the
-  toolchain step used CachyOS's own clang (it reads the profile) and configure passed. The cloud
+  `-Werror=all`; video_core now links dwmapi in CMake) and was rebuilt alone as run #26. Run #25 built both
+  CachyOS variants (~30 min each without a cache, on 4 cores) with CachyOS's own clang 23.1.4
+  (no LLVM download) and its Boost 1.92 linked statically: 12 MB packages, 25 launchers, no
+  missing library; run #26 built both Windows variants. Its `cachyos-packages.txt` still listed
+  every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
+  the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (175 commits over upstream nx2
   `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).

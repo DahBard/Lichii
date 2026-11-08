@@ -594,8 +594,9 @@ jobs:
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
 
       # A tar keeps the executable bits that GitHub's artifact zip drops. cachyos-packages.txt
-      # lists the CachyOS packages that own the libraries the program loads, plus the Qt plugins
-      # it uses (Wayland, SVG icons), for `pacman -S --needed $(cat cachyos-packages.txt)`.
+      # lists the CachyOS packages that own the libraries the program links directly (pacman
+      # brings their own dependencies), plus the Qt plugins it uses (Wayland, SVG icons), for
+      # `pacman -S --needed $(cat cachyos-packages.txt)`.
       - name: Package
         run: |
           set -euo pipefail
@@ -616,13 +617,17 @@ jobs:
             python -I lichii-tuned/make_linux_launchers.py dist/lichii-tuned "$out"
           fi
           cp lichii-tuned/README-cachyos.md "$out/"
+          needed=" $(readelf -d "$out/lichii" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | tr '\n' ' ') "
           {
-            ldd "$out/lichii" | awk '/=> \// {print $3}' | while read -r lib; do
-              pacman -Qqo "$lib" 2>/dev/null || true
+            ldd "$out/lichii" | while read -r lib _ path _; do
+              case "$needed" in *" $lib "*) ;; *) continue ;; esac
+              if [ -e "$path" ]; then
+                pacman -Qqo "$path" 2>/dev/null || true
+              fi
             done
             echo qt6-wayland
             echo qt6-svg
-          } | grep -v -x -E 'glibc|gcc-libs' | sort -u > "$out/cachyos-packages.txt"
+          } | grep -v -x -E 'glibc|gcc-libs|libgcc|libstdc\+\+' | sort -u > "$out/cachyos-packages.txt"
           echo "Packages:"; cat "$out/cachyos-packages.txt"
           if ldd "$out/lichii" | grep -q 'not found'; then
             ldd "$out/lichii" | grep 'not found'
