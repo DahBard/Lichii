@@ -670,6 +670,7 @@ void BufferCache<P>::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
 
 template <class P>
 void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
+    ++bank_check_draw;
     do {
         channel_state->has_deleted_buffers = false;
         DoUpdateGraphicsBuffers(is_indexed);
@@ -705,11 +706,16 @@ void BufferCache<P>::BindHostGeometryBuffers(bool is_indexed) {
 
 template <class P>
 void BufferCache<P>::BindHostStageBuffers(size_t stage) {
-    BindHostGraphicsUniformBuffers(stage);
+    {
+        Nx2Profile::Scope scope{Nx2Profile::Zone::UniformBuffers};
+        BindHostGraphicsUniformBuffers(stage);
+    }
     if (channel_state->enabled_storage_buffers[stage] != 0) {
+        Nx2Profile::Scope scope{Nx2Profile::Zone::StorageBuffers};
         BindHostGraphicsStorageBuffers(stage);
     }
     if (channel_state->enabled_texture_buffers[stage] != 0) {
+        Nx2Profile::Scope scope{Nx2Profile::Zone::StageTextureBuffers};
         BindHostGraphicsTextureBuffers(stage);
     }
 }
@@ -1520,14 +1526,29 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             mapped_size += Core::DEVICE_PAGESIZE - ((device_addr + mapped_size) & Core::DEVICE_PAGEMASK);
         }
         const u64 check_size = (std::min<u64>)(mapped_size, size);
+        Nx2Profile::Scope scope{Nx2Profile::Zone::BankCheck};
         // Banks slide through larger buffers, a new address per draw: compare each page with
         // its last contents and mark only the pages that changed.
         if (native_indirect_page_snapshots.size() >= 16384) {
             native_indirect_page_snapshots.clear();
         }
+        // A draw's stages often bind the same bank: nothing on this thread writes guest memory
+        // between them, so a page compared for this draw is not compared again.
+        // LICHII_BANK_DEDUPE=0 compares on every bind as before.
+        static const bool dedupe = [] {
+            const char* const value = std::getenv("LICHII_BANK_DEDUPE");
+            return value == nullptr || value[0] != '0';
+        }();
         const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
         const DAddr end = device_addr + check_size;
         for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
+            auto& memo = bank_check_memo[(page / Core::DEVICE_PAGESIZE) % bank_check_memo.size()];
+            if (dedupe && memo.page == page && memo.draw == bank_check_draw) {
+                Nx2Profile::Add(Nx2Profile::Counter::BankPagesSkipped, 1);
+                continue;
+            }
+            memo = {page, bank_check_draw};
+            Nx2Profile::Add(Nx2Profile::Counter::BankPagesChecked, 1);
             const u8* const guest = device_memory.template GetPointer<u8>(page);
             if (guest == nullptr) {
                 continue;

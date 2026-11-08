@@ -474,6 +474,13 @@ public:
     /// unchanged pages keep their tracking (marking them CPU-modified costs two mprotect calls
     /// per page).
     std::unordered_map<DAddr, std::array<u8, Core::DEVICE_PAGESIZE>> native_indirect_page_snapshots;
+    /// Native bank pages compared during the current draw (UpdateGraphicsBuffers counts draws).
+    struct BankCheckMemo {
+        DAddr page{~DAddr{0}};
+        u64 draw{};
+    };
+    std::array<BankCheckMemo, 64> bank_check_memo{};
+    u64 bank_check_draw{};
 
 private:
     template <typename Mask, typename Func>

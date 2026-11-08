@@ -48,6 +48,10 @@ enum class Zone : u32 {
     UpdateBuffers,
     DescriptorAcquire,
     BindStageBuffers,
+    UniformBuffers,      ///< Of a stage's buffers: its uniform buffers
+    BankCheck,           ///< Of those: native 64 KiB banks compared with their last contents
+    StorageBuffers,      ///< Of a stage's buffers: its storage buffers
+    StageTextureBuffers, ///< Of a stage's buffers: its texture buffers
     PushDescriptors,
     RenderTargets,
     ConfigureDraw,
@@ -70,7 +74,8 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "tick",          "run",           "flush/inval",    "macro",          "draw",
     "clear",         "compute",       "flush work",     "pipeline lookup", "configure",
     "sync descriptors", "read handles", "fill image views", "texture buffers", "update buffers",
-    "descriptor acquire", "bind stage buffers", "push descriptors", "render targets",
+    "descriptor acquire", "bind stage buffers", "uniform buffers", "bank check",
+    "storage buffers", "stage texture buffers", "push descriptors", "render targets",
     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
     "fence skipped", "method", "split drain", "split wait",
     "writer wait", "list submit wait", "list GPU wait",
@@ -103,7 +108,7 @@ inline u64 Ticks() {
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 8> counters{}; ///< See Counter
+    std::array<u64, 10> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
@@ -157,6 +162,8 @@ enum class Counter : u32 {
     SameValueWrites, ///< Of MethodWrites: the register already held the value
     AcquireChecks,  ///< Semaphore acquires evaluated
     AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
+    BankPagesChecked, ///< Native uniform bank pages compared with their snapshot
+    BankPagesSkipped, ///< Bank pages not compared again within one draw
 };
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and
@@ -276,6 +283,11 @@ inline void Report(const char* thread_name = "GPU thread") {
     line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
+    if (data.counters[8] != 0 || data.counters[9] != 0) {
+        line += fmt::format(" | bank pages compared {:.0f} ({:.0f} skipped as compared this draw)",
+                            static_cast<double>(data.counters[8]) * 1e9 / window,
+                            static_cast<double>(data.counters[9]) * 1e9 / window);
+    }
     std::string drains;
     for (size_t i = 0; i < data.drain_count.size(); ++i) {
         if (data.drain_count[i] != 0) {
