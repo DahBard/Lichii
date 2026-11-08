@@ -332,6 +332,8 @@ Own changes:
     ranges (0x2b69xxxx-0x2b8dxxxx, 0x3019xxxx-0x3058xxxx) a few times a second each. Fps fell from
     22-35 to 15-20 as the downloads grew (median 20.6); guest cores 4 and 5 40.2 and 37.9 ms a
     frame, GPU busy 46.8 ms. Round 13 lets marks expire.
+- Runs #19 (round 13), #20 (13b) and #21 (13c: logic op keys) built `pgo` and `pgo-lto` (artifacts
+  `lichii-tuned-r21-pgo`, `lichii-tuned-r21-pgo-lto`).
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
   `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
   vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
