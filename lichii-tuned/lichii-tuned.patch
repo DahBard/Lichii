@@ -6624,7 +6624,7 @@ index 6059b70ee..bcfee7e35 100644
  
  struct Runtime {
 diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
-index ed0fd673f..fc01b286c 100644
+index ed0fd673f..685faf190 100644
 --- a/src/video_core/CMakeLists.txt
 +++ b/src/video_core/CMakeLists.txt
 @@ -62,6 +62,9 @@ add_library(video_core STATIC
@@ -6663,7 +6663,17 @@ index ed0fd673f..fc01b286c 100644
      renderer_vulkan/vk_query_cache.cpp
      renderer_vulkan/vk_query_cache.h
      renderer_vulkan/vk_rasterizer.cpp
-@@ -476,6 +484,8 @@ target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
+@@ -458,7 +466,8 @@ endif()
+ 
+ target_link_libraries(video_core PUBLIC common core)
+ if(WIN32)
+-    target_link_libraries(video_core PRIVATE advapi32)
++    # dwmapi: the host frame pacer's refresh rate (vk_host_pacer.cpp).
++    target_link_libraries(video_core PRIVATE advapi32 dwmapi)
+ endif()
+ target_link_libraries(video_core PUBLIC shader_recompiler stb bc_decoder gpu_logging)
+ if (ENABLE_OPENGL)
+@@ -476,6 +485,8 @@ target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
  
  add_dependencies(video_core host_shaders)
  target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
@@ -11671,10 +11681,10 @@ index 0cb6e6132..e9b1e9496 100644
                                         .count(),
 diff --git a/src/video_core/renderer_vulkan/vk_host_pacer.cpp b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
 new file mode 100644
-index 000000000..0b18f3ed9
+index 000000000..2339f0e02
 --- /dev/null
 +++ b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,387 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -11693,7 +11703,6 @@ index 000000000..0b18f3ed9
 +#include <windows.h>
 +#include <dwmapi.h>
 +#include "common/string_util.h"
-+#pragma comment(lib, "dwmapi.lib")
 +#endif
 +
 +namespace Vulkan {

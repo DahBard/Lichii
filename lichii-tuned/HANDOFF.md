@@ -56,13 +56,15 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii`, `nx2_switches.txt` (checked for the preload switch), the Windows README,
   `README-cachyos.md`, `cachyos-packages.txt` (pacman owners of what `ldd` shows, plus the Qt
   Wayland and SVG plugins) and a `.sh` twin of every `.bat` launcher, written by
-  `lichii-tuned/make_linux_launchers.py` (fails on any .bat line it doesn't understand). Round 16's
-  Windows builds are run #24; its CachyOS jobs failed there in pacman (`zlib` conflicts with
-  CachyOS's `zlib-ng-compat`; dropped) and were rebuilt alone as run #25 (`workflow_dispatch`
-  with `only: cachyos`, which rebuilds one platform; `windows` the other). In run #25 the
+  `lichii-tuned/make_linux_launchers.py` (fails on any .bat line it doesn't understand). Round 16:
+  run #24 failed on both platforms. CachyOS failed in pacman (`zlib` conflicts with CachyOS's
+  `zlib-ng-compat`; dropped) and was rebuilt alone as run #25 (`workflow_dispatch` with
+  `only: cachyos`; `windows` rebuilds the other). Windows failed on the host pacer's
+  `#pragma comment(lib, "dwmapi.lib")` (MinGW clang: unknown pragma, an error under
+  `-Werror=all`; video_core now links dwmapi in CMake) and was rebuilt alone as run #26. In run #25 the
   toolchain step used CachyOS's own clang (it reads the profile) and configure passed. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (174 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (175 commits over upstream nx2
   `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
@@ -78,6 +80,13 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   -Wconversion off for the rest of every file that includes it. Qt, Windows-only and test files need
   a look by hand. Locally `vk_frame_dump.cpp` (needs stb) and `nvhost_ctrl_gpu.cpp` (the cloud's
   clang crashes on it at any commit) fail; ignore them.
+- That script compiles for Linux, so `#ifdef _WIN32` code goes unchecked (round 16's pragma).
+  Check it as the Windows CI compiles it: `apt-get install mingw-w64-x86-64-dev
+  g++-mingw-w64-x86-64-posix`, then `clang++ --target=x86_64-w64-mingw32 -fsyntax-only` with
+  the flags of a Windows job's compile line (`-std=gnu++20 -Werror=all -Werror=extra
+  -Werror=missing-declarations -Werror=shadow -Werror=unused` and its `-Wno-` list), Boost from
+  a folder holding only a `boost` symlink and FFmpeg from one holding only the `libav*`
+  symlinks. The old MinGW headers there break `xbyak_util.h` (`EfficiencyClass`); MSYS2's don't.
 - The workflow's "AMD FSR 4 libraries" step downloads AMD's signed `amd_fidelityfx_loader_vk.dll`
   and `amd_fidelityfx_upscaler_vk.dll` and the SDK license from GPUOpen-LibrariesAndSDKs/
   FidelityFX-SDK `7539ae8` (v2.4.0) into the package and checks their SHA-256 (binary
@@ -559,7 +568,7 @@ Own changes:
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
    must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 16
-   (Windows run #24, CachyOS run #25): from its logs, the back thread's bank check
+   (Windows run #26, CachyOS run #25): from its logs, the back thread's bank check
    and split wait (EXP9), the front's macro dma read waits (mixed reads) and the 1% lows
    (EXP8, pipeline keys); verify-r16 must log 0 missed and 0 differed, ab-12 tells a regression
    from one of them. Ask the owner for the monitor's refresh rate and whether FreeSync is on: the
