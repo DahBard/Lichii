@@ -57,6 +57,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <random>
+#include <shared_mutex>
 #include <utility>
 
 #include "common/alignment.h"
@@ -263,7 +264,10 @@ public:
         }
         const size_t virtual_end = virtual_offset + length;
 
-        std::scoped_lock lock{placeholder_mutex};
+        // Shared: only Map and Unmap change the placeholders. Buffer uploads on the GPU thread
+        // and write traps on the guest cores change protections at the same time, and each
+        // VirtualProtect is a kernel call.
+        std::shared_lock lock{placeholder_mutex};
         auto [it, end] = placeholders.equal_range({virtual_offset, virtual_end});
         while (it != end) {
             const size_t offset = (std::max)(it->lower(), virtual_offset);
@@ -446,7 +450,7 @@ private:
     PFN_MapViewOfFile3 pfn_MapViewOfFile3{};
     PFN_UnmapViewOfFile2 pfn_UnmapViewOfFile2{};
 
-    std::mutex placeholder_mutex;                                 ///< Mutex for placeholders
+    std::shared_mutex placeholder_mutex;                          ///< Mutex for placeholders
     boost::icl::separate_interval_set<size_t> placeholders;       ///< Mapped placeholders
     ::Common::unordered_map<size_t, size_t> placeholder_host_pointers; ///< Placeholder backing offset
 };
