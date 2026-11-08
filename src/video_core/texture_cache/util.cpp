@@ -29,6 +29,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_perf.h"
+#include "video_core/texture_upload_switches.h"
 #include "video_core/surface.h"
 #include "video_core/texture_cache/decode_bc.h"
 #include "video_core/texture_cache/format_lookup_table.h"
@@ -919,12 +920,22 @@ boost::container::small_vector<BufferImageCopy, 16> UnswizzleImage(
         for (s32 layer = 0; layer < info.resources.layers; ++layer) {
             const std::span<u8> dst = output.subspan(host_offset);
             const std::span<const u8> src = input.subspan(guest_offset + guest_layer_offset);
-            if (!worker ||
+            // LICHII_TEXTURE_UPLOADS bit 4 (Fritchii v4): large 2D levels untiled in bands on the
+            // transcode workers too (only from the texture cache's own thread, which passes a
+            // worker).
+            const bool banded = worker && info.type == ImageType::e2D && info.num_samples == 1 &&
+                                (VideoCommon::TextureUploadBits() & 4) != 0 &&
+                                Tegra::Texture::TryUnswizzleBands(
+                                    dst.first(host_bytes_per_layer), src.first(level_sizes[level]),
+                                    1U << bpp_log2, num_tiles.width, num_tiles.height,
+                                    num_tiles.depth, block.height, block.depth, stride_alignment,
+                                    gpu_memory.UsesNativeTiling(), Nx2Perf::Verify());
+            if (!banded && (!worker ||
                 info.type != ImageType::e2D || info.num_samples != 1 ||
                 !worker->TryUnswizzle(
                     dst.first(host_bytes_per_layer), src.first(level_sizes[level]), 1U << bpp_log2,
                     num_tiles.width, num_tiles.height, num_tiles.depth, block.height, block.depth,
-                    stride_alignment, gpu_memory.UsesNativeTiling(), Nx2Perf::Verify())) {
+                    stride_alignment, gpu_memory.UsesNativeTiling(), Nx2Perf::Verify()))) {
                 UnswizzleTexture(dst, src, 1U << bpp_log2, num_tiles.width, num_tiles.height,
                                  num_tiles.depth, block.height, block.depth, stride_alignment,
                                  gpu_memory.UsesNativeTiling());

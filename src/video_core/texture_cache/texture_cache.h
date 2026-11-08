@@ -21,6 +21,7 @@
 
 #include "common/alignment.h"
 #include "common/scope_exit.h"
+#include "video_core/texture_upload_switches.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
 #include "video_core/control/channel_state.h"
@@ -698,8 +699,13 @@ void TextureCache<P>::TickFrame() {
     TickAsyncDecode();
     TickAsyncUnswizzle();
     if (frame_tick % 600 == 0 && !uploaded_ranges.empty()) {
-        for (const auto& [address, size] : uploaded_ranges) {
-            device_memory.HintCold(address, size);
+        // LICHII_TEXTURE_UPLOADS bit 8 (Fritchii v4): none. An image created again over cold memory
+        // (re-created after eviction, or a render target at a new size) faulted all of it back in
+        // while uploading.
+        if ((VideoCommon::TextureUploadBits() & 8) == 0) {
+            for (const auto& [address, size] : uploaded_ranges) {
+                device_memory.HintCold(address, size);
+            }
         }
         uploaded_ranges.clear();
     }
@@ -3171,11 +3177,82 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             break;
         }
     }
-    if (overwritten_by_clear()) {
+    // Whether one of the GPU copies writes all of a single-level 2D image, so an upload before it
+    // is never seen (Fritchii v4, LICHII_TEXTURE_UPLOADS bit 2): copies of GPU-written images
+    // made whole and alias copies either way, beside copied_whole's plain alias copies above.
+    // Ocarina of Time creates a D32 image at each new size of a dynamic-resolution target over the
+    // same memory, uploading 6-14 MiB of it each time.
+    const auto overwritten_by_copies = [&] {
+        const ImageInfo& image_info = new_image.info;
+        constexpr ImageFlagBits unusual = ImageFlagBits::Sparse | ImageFlagBits::SparseLayers |
+                                          ImageFlagBits::SparseTiles |
+                                          ImageFlagBits::UnwrittenSparse | ImageFlagBits::Unbacked;
+        if (image_info.type != ImageType::e2D || image_info.resources.levels != 1 ||
+            image_info.resources.layers != 1 || image_info.num_samples != 1 ||
+            True(new_image.flags & (unusual | ImageFlagBits::Converted |
+                                    ImageFlagBits::AsynchronousDecode))) {
+            return false;
+        }
+        const auto blocks = [](const ImageInfo& of, s32 level) {
+            const Extent3D level_size = MipSize(of.size, static_cast<u32>(level));
+            return Extent2D{
+                .width = Common::DivCeil(level_size.width, DefaultBlockWidth(of.format)),
+                .height = Common::DivCeil(level_size.height, DefaultBlockHeight(of.format)),
+            };
+        };
+        const Extent2D new_blocks = blocks(image_info, 0);
+        const auto covers = [&](const ImageInfo& overlap_info, s32 level) {
+            const Extent2D overlap_blocks = blocks(overlap_info, level);
+            return overlap_blocks.width >= new_blocks.width &&
+                   overlap_blocks.height >= new_blocks.height;
+        };
+        for (const JoinCopy& copy : join_copies_to_do) {
+            const ImageBase& overlap = slot_images[copy.id];
+            if (overlap.info.type != ImageType::e2D || overlap.info.num_samples != 1 ||
+                True(overlap.flags & unusual) ||
+                GetFormatType(overlap.info.format) != GetFormatType(image_info.format) ||
+                BytesPerBlock(overlap.info.format) != BytesPerBlock(image_info.format) ||
+                overlap.info.astc_opaque != image_info.astc_opaque) {
+                continue;
+            }
+            if (!copy.is_alias) {
+                // Copied whole (MakeShrinkImageCopies) when the GPU wrote it.
+                const std::optional<SubresourceBase> base = new_image.TryFindBase(overlap.gpu_addr);
+                if (True(overlap.flags & ImageFlagBits::GpuModified) && base &&
+                    base->level == 0 && base->layer == 0) {
+                    return true;
+                }
+                continue;
+            }
+            if (!overlap.IsSafeGpuCopy()) {
+                continue;
+            }
+            // The extent AddImageAlias gives the copy: the smaller of the two at the base found.
+            constexpr auto options = RelaxedOptions::Size | RelaxedOptions::Format;
+            if (std::ranges::find(join_left_aliased_ids, copy.id) != join_left_aliased_ids.end()) {
+                const std::optional<SubresourceBase> base =
+                    FindSubresource(image_info, overlap, new_image.gpu_addr, options, false, true);
+                if (base && covers(overlap.info, base->level)) {
+                    return true;
+                }
+            } else {
+                const std::optional<SubresourceBase> base = FindSubresource(
+                    overlap.info, new_image, overlap.gpu_addr, options, false, true);
+                if (base && base->level == 0 && base->layer == 0 && covers(overlap.info, 0)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    const bool clear_skip = overwritten_by_clear();
+    const bool copy_skip = !clear_skip && !copied_whole &&
+                           (VideoCommon::TextureUploadBits() & 2) != 0 && overwritten_by_copies();
+    if (clear_skip) {
         // Stays CpuModified: UpdateRenderTargets' PrepareImage drops the upload only when
         // IsFullClear agrees the clear covers the whole image, and uploads it otherwise.
         runtime.TransitionImageLayout(new_image);
-    } else if (copied_whole) {
+    } else if (copied_whole || copy_skip) {
         // What RefreshContents does, without the upload.
         new_image.flags &= ~ImageFlagBits::CpuModified;
         if (False(new_image.flags & ImageFlagBits::Tracked)) {
