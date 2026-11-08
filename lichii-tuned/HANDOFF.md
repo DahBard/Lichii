@@ -88,7 +88,10 @@ Round 15 (2026-11-08, the 60 fps plan's first round; upstream nx2 had nothing ne
   likely bulk of bind stage buffers' 8.7 ms a frame.
 - Experiment `LICHII_LIST_WRITER_WAIT=0` (trace-no-list-wait.bat): the front reads GP entries
   without waiting for queued compute and copy work until a GPU-written entry shows up (the
-  front's biggest wait, ~350 ms/s, ~5,800/s; no GPU-written entry in the r22 logs).
+  front's biggest wait, ~350 ms/s, ~5,800/s). Nothing logged GPU-written entries before, so
+  whether Ocarina has any is unknown; with the experiment on, the first one logs a warning and
+  the waits return (that first entry may be read before its writer ran). The comment in
+  dma_pusher.cpp and commit 79de9bd2a claim r22 showed none: wrong, fix the comment next round.
 - #161's upload-word counter turned out to be in already (#184's per-word clean_words and
   ForEachDirtyUploadRange, and the index-buffer rebind skip).
 - Launchers: trace-fsr31, trace-no-fsr, trace-no-preflush, trace-no-list-wait, frame-times;
