@@ -95,6 +95,13 @@ inline const bool g_tuned4_dma_reads = [] {
     const char* value = std::getenv("LICHII_TUNED4_DMA_READS");
     return value != nullptr && value[0] == '1';
 }();
+/// LICHII_LIST_WRITER_WAIT=all: before the front reads a command list it waits for every compute
+/// and copy work sent so far, as tuned4 did, not only for the writers before the last host sync
+/// (#805), and lists that begin between methods wait too.
+inline const bool g_list_wait_all_writers = [] {
+    const char* value = std::getenv("LICHII_LIST_WRITER_WAIT");
+    return value != nullptr && value[0] == 'a';
+}();
 /// tuned4's front write tracking (NoteMemoryWrite, NoteMemoryBarrier): only those two read it.
 inline const bool g_tuned4_tracking = [] {
     const char* acquires = std::getenv("LICHII_TUNED4_ACQUIRES");

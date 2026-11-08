@@ -45,6 +45,18 @@ constexpr u32 ComputeInline = 0x6D;
 
 namespace {
 
+/// The split's position after the last copy engine method that may write memory (the front's).
+u64 g_last_copy_writer{};
+
+/// Whether copy engine work sent so far may still be queued on the split's back. A new session
+/// starts the split's positions over: a position past the current one is from an older session.
+[[nodiscard]] bool CopyWritersPending(const VideoCommon::GpuSplit& split) {
+    if (g_last_copy_writer > split.Position()) {
+        g_last_copy_writer = 0;
+    }
+    return !split.Ran(g_last_copy_writer);
+}
+
 /// EDEN_NX2_LIST_STATS and _VERIFY: the front read `words` of a command list at `address`
 /// (`device`) on a GPU-written page, as `where` tells; see Nx2ListStats::NoteRead.
 void NoteListRead(MemoryManager& memory, s32 channel, GPUVAddr address, u64 device,
@@ -320,10 +332,26 @@ bool DmaPusher::Step() {
         // queued before it. The GPU fetches the list after that work only past a host-level wait
         // (NoteSync): later work is not ordered before the fetch, and the list does not wait for
         // it (nor for draws, which write memory too; draw-written lists wait for the last sync).
-        // Recheck even when the wait returns at once: a writer may have finished (and marked the
-        // pages) since the check above.
-        if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
-            VideoCommon::GpuSplit::Get().WaitForSyncedWriters();
+        // Lists that begin between methods don't wait for compute work either: they are command
+        // buffers the CPU writes. The words GPU work writes for the front to fetch are the
+        // parameters of a method begun in the entry before (an indirect dispatch's or draw's,
+        // as in Ocarina of Time and title 1), which begin inside its data. An entry resumed after
+        // an acquire resumes after a puller method, which no parameter list holds. The copy
+        // engine can copy GPU-written words anywhere: while its work is queued, every list waits.
+        // The lists that did not wait are checked on the back (EDEN_NX2_DRAIN_CHECK).
+        // LICHII_LIST_WRITER_WAIT=all waits for every writer before every list, as tuned4 did.
+        // A list that waited is checked again even when the wait returns at once: a writer may
+        // have finished (and marked the pages) since the check above.
+        const bool command_entry = dma_state.method_count == 0;
+        const bool wait_all = VideoCommon::g_list_wait_all_writers;
+        const bool waits_for_writers =
+            wait_all || !command_entry || CopyWritersPending(VideoCommon::GpuSplit::Get());
+        if (!gpu_written && VideoCommon::GpuSplit::Get().Active() && waits_for_writers) {
+            if (wait_all) {
+                VideoCommon::GpuSplit::Get().WaitForWriters();
+            } else {
+                VideoCommon::GpuSplit::Get().WaitForSyncedWriters();
+            }
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
         }
@@ -611,6 +639,9 @@ void DmaPusher::CallMethod(u32 argument) {
                 split.NoteMemoryBarrier(0x20000 | (static_cast<u32>(engine_type) << 12) |
                                         (dma_state.method & 0xfff));
             }
+            if (writer && engine_type == Engines::EngineTypes::MaxwellDMA) {
+                g_last_copy_writer = split.Position();
+            }
         };
         if (split.Active()) {
             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
@@ -684,6 +715,9 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
             } else if (untracked_writes) {
                 split.NoteMemoryBarrier(0x20000 | (static_cast<u32>(engine_type) << 12) |
                                         (dma_state.method & 0xfff));
+            }
+            if (writer && engine_type == Engines::EngineTypes::MaxwellDMA) {
+                g_last_copy_writer = split.Position();
             }
         };
         if (split.Active()) {
@@ -887,7 +921,11 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count, bool* pendin
     // meanwhile too.
     const bool resumed = std::exchange(resumed_list_read, false);
     if (split.Active() && !resumed) {
-        split.WaitForSyncedWriters(VideoCommon::DrainSite::ListCopies);
+        if (VideoCommon::g_list_wait_all_writers) {
+            split.WaitForWriters();
+        } else {
+            split.WaitForSyncedWriters(VideoCommon::DrainSite::ListCopies);
+        }
     }
     bool past_sync = !split.Active();
     using GpuWrittenList = VideoCore::RasterizerInterface::GpuWrittenList;
