@@ -256,3 +256,61 @@ Fetched into `refs/forks/*` of the working clone (shallow); upstream nx2 at `d54
 - The host pacer's gains are on the display, not in frame rate: at 60 fps on 120 Hz, frames
   shown for exactly two refreshes 97-99% (91-96% without), longest interval 22-34 ms (70-200).
   On a FreeSync display below 60 fps VRR does more; the owner's monitor is unknown.
+
+## 12. Round 17 (2026-11-08): "Lichii OoT AMD" and the fork survey
+
+- The owner's link: medicinauvsecretaria-lang/Lichii (r/SwitchPirates2, "Ocarina of Time
+  Switch 2 on AMD GPUs Lichii build"), releases `lichii-oot-amd-r1` and `-r2`. Its default
+  branch is upstream nx2 `bf4c42e22` untouched; the tags sit on branch `rx6600-r5500` (the
+  author's RX 6600 and Ryzen 5 5500, by the name): PantACRO4life's #579/#741 graphics pipeline
+  library warm-up (24 commits, `perf/gpl-shader-warmup-v2`) plus four of its own. 7d96f498f and
+  63fc50e99 build only Windows PGO with `/clang:-march=znver3 /clang:-mtune=znver3`
+  (`release-binaries.yml`) and save the driver cache every 32 new pipelines, at most every 10 s
+  (was 128 and 30 s), and the used list every 5 s (15). 965e3e61f journals every pipeline
+  library and link call and builds monolithic pipelines after a call that never returned (AMD's
+  driver crashing in amdvlk64.dll on RDNA 2); f38bbcb62 catches access violations in pipeline
+  creation and writes crash reports.
+- Why it "may not work for Intel CPUs": `-march=znver3` lets the compiler use any Zen 3
+  instruction. SSE4a (EXTRQ/INSERTQ, which LLVM can pick for some vector shuffles), CLZERO,
+  MWAITX and RDPRU exist on no Intel CPU; SHA, VAES, VPCLMULQDQ, RDPID and CLWB are missing on
+  Intel CPUs before Ice Lake/Alder Lake. Any of them in the program stops an Intel CPU with an
+  illegal instruction. Measured here: 117 Lichii files (video_core, the shader recompiler,
+  common, dynarmic's x64 backend) compiled by clang 18 with `-O3 -march=znver3` contain none
+  of them, so on a recent Intel CPU (Arrow Lake has everything else Zen 3 has) the downloads
+  would likely start, and the warning is the author's caution (tested on AMD only). Their
+  binaries couldn't be checked (the cloud session can't download release assets). Nothing in
+  the source depends on the CPU: built with x86-64-v3, as tuned4 is, it runs on any Intel Core
+  since Haswell.
+- Migrated: the cache saves (`403a22b82`); the compute half of the warm-up, through upstream
+  #781 (merged 2026-11-08: compute programs found in the game files, built on the loading
+  screen), seeded Ask (`8b3a3c54a`, tuned defaults 3). Not migrated: graphics pipeline
+  libraries and the graphics warm-up, heavy skip, fast first builds and both guards. Fast-linked
+  libraries draw white fringes on AMD's Windows driver (AMD-Gfx-Drivers#126; c196b4f28 links
+  them optimized there) and crashed it often enough that the fork needed the two guards, the
+  owner's preload already builds every cached pipeline at boot, and the code collides with our
+  pipeline cache. Shared functions as calls (`EDEN_NX2_GRAPHICS_NOINLINE`, `_COMPUTE_NOINLINE`)
+  compile faster, but Fritchii measured -2.6 fps on NVIDIA with a broader DontInline: A/B it on
+  the 9070 XT before taking it.
+- Its unreleased branches: `win/hybrid-core-placement` (4a2b6003a: CPU sets of the highest
+  efficiency class for time-critical threads; "within noise" on an i9-13900K) is what
+  hybrid_cpu.cpp already does per class (P, E, LP-E); `perf/oot-acquire-no-drain` resolves
+  waiting acquires without draining, as tuned4 has since round 13 (Frizti's), plus experiment
+  commits upstream later merged.
+- Fork survey (heads in the session clone, `refs/forks/*/head`). Taken: tomk134 e8e50e797
+  (unswizzle contiguous guest memory in place, `43321b8db`), Elysium fc0ac4b3b (scratch buffer
+  for the other runs, `d05a02108`) and 4a680b22d (IADD overflow's negative bound in both shader
+  backends, `da24ac9c1`; a brute-force check agrees, its test needs Elysium's SPIR-V helpers).
+  Upstream's open #836 (image recycler), #810 (shared Protect lock) and #784 (16-byte swizzle,
+  1.7-2.4x in its microbenchmark here) too. Not taken: Eglantine 1e2c2dd4d (Lichii lowers BRA.U
+  already; HSETP2's constant buffer form is a Mario Kart World fix and no Ocarina log shows
+  that rejection), Kitsu e05b28cf1 (dynarmic block ranges by page, for Tears of the Kingdom's
+  invalidations), Vendichii 368450b57 (AMD FSR 3 frame generation, FidelityFX SDK 1.1.4: a
+  later option for showing 60 fps, not frame rate), Orchid's upload/copy synchronization and
+  download-ordering fixes (cc04f48b3, f2eb04bab, 225ed15fb: no Ocarina symptom yet),
+  Lichii-Superbuild (docs and a Zen 3 preset), Sharkiix (nothing new). #806 (NVN draw
+  parameters, Hyrule Field grass on AMD) waits for an A/B at the field spawn.
+- Upstream's open #805 (decoupled split threads: about 700 ms/s of front waits, claimed 46-49 ->
+  60 fps on an RX 7900 XTX) and pieces of #717 (guest JIT and kernel, Ocarina's native macros;
+  #831's author measured 1% lows 18.8 -> 33.0 on a 9800X3D + RX 9070 XT) are the next big
+  levers. Both are drafts that conflict with tuned4 in 25-31 files; the survey's order and
+  per-commit notes are in HANDOFF's next steps.

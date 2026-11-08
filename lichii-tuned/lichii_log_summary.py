@@ -11,7 +11,8 @@ import sys
 LINE = re.compile(r"^\[\s*(\d+\.\d+)\]\s+(\S+)\s+<(\w+)>\s+(\S+?):(\d+):(\S*?):\s(.*)$")
 SETUP_KEYS = ("Lichii Version", "Booting game", "Hybrid CPU", "CPU:", "Driver", "Device",
               "Vulkan", "GPU:", "lichii-tuned:", "anti-aliasing", "PGO training", "Texture cache thresholds",
-              "Memory margins", "VRAM", "device memory", "AMD FSR 4:", "Preflushing")
+              "Memory margins", "VRAM", "device memory", "AMD FSR 4:", "Preflushing",
+              "Pipeline cache", "Total Pipeline Count")
 MEMORY_KEYS = ("out of device memory", "over the memory budget", "placed in host memory",
                "device lost", "device loss", "not reached in 4 s", "timed out", "out_of_")
 

@@ -1,9 +1,10 @@
 name: lichii-tuned
 
 # Windows and CachyOS (Linux) builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H)
-# CPU and an AMD RDNA4 (RX 9070 XT) GPU. Every push to the `tuned` branch that touches the patch
-# or this workflow builds every variant of both; the source is this branch plus
-# lichii-tuned/lichii-tuned.patch.
+# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch plus
+# lichii-tuned/lichii-tuned.patch. Every push to the `tuned` branch that touches the patch or this
+# workflow builds the Windows variants. The CachyOS ones build only when the owner asks for a
+# Linux build: run the workflow by hand with `only: cachyos` (or `all`).
 on:
   push:
     branches: [tuned]
@@ -15,8 +16,8 @@ on:
       only:
         description: "Platforms to build"
         type: choice
-        options: [all, windows, cachyos]
-        default: all
+        options: [windows, cachyos, all]
+        default: windows
 
 permissions:
   contents: read
@@ -369,7 +370,7 @@ jobs:
   # Packaged as a tar with .sh twins of the Windows launchers (lichii-tuned/README-cachyos.md).
   cachyos:
     name: cachyos ${{ matrix.variant }}
-    if: github.event_name != 'workflow_dispatch' || inputs.only != 'windows'
+    if: github.event_name == 'workflow_dispatch' && inputs.only != 'windows'
     runs-on: ubuntu-24.04
     container:
       image: cachyos/cachyos-v3:latest

@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-08 (round 16), for the next Claude session.
+State of the work on 2026-11-08 (round 17), for the next Claude session.
 
 ## Goal
 
@@ -24,17 +24,21 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `nx2_switches.txt` (the owner's request, round 14: each new download's copy lacked it, and r22
   booted with 6,313 of the ~19,400 cached pipelines).
 - The log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
-- Since round 16 every run also builds a CachyOS (Linux) package from the same source: the
-  owner asked for one and to "update the CachyOS version alongside the Windows version" from
-  now on, and that it work on any modern-generation Intel CPU (x86-64-v3: every Intel Core since
-  Haswell, every Intel CPU since 12th gen). The workflow builds both on every push; keep
-  `lichii-tuned/README-cachyos.md` current with the Windows README.
+- The workflow can build a CachyOS (Linux) package from the same source (round 16; it must run
+  on any modern-generation Intel CPU: x86-64-v3, every Intel Core since Haswell, every Intel CPU
+  since 12th gen). Since round 17 the owner wants it built only when they ask ("only commit a
+  linux version when I specify to"): pushes build Windows only; when asked, run the workflow by
+  hand with `only: cachyos` and bring `lichii-tuned/README-cachyos.md` up to date first.
 
 ## How builds are made
 
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `bf4c42e22` (build 117 + 3; merged in round 14,
-  `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The workflow applies `lichii-tuned/lichii-tuned.patch` and builds on every push to
-  `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with `[skip ci]` doesn't).
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `ad477ef1f` (the 53 pull requests of
+  2026-11-08; merged in round 17, `bf4c42e22` = build 117 + 3 in round 14, `92f021240` = build 116
+  in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
+  workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
+  push to `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with
+  `[skip ci]` doesn't); the CachyOS ones only in a manual run (`workflow_dispatch` with
+  `only: cachyos`, or `all` for both).
 - Variants (windows-2022): `pgo` (MSYS2 UCRT64 clang, repo's `eglantine.profdata`,
   `-march=x86-64-v3 -mtune=arrowlake -ffp-contract=off`), `pgo-lto` (+ ThinLTO). Commented out
   until needed: `msvc` (built like the official MSVC download, to A/B a glitch that only the pgo
@@ -42,7 +46,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
   with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Job `cachyos` (same workflow and run number; artifacts `lichii-tuned-r<run>-cachyos-<variant>`,
+- Job `cachyos` (manual runs only since round 17; same workflow and run number; artifacts `lichii-tuned-r<run>-cachyos-<variant>`,
   each a tar.gz inside the zip so the executable bits survive): variants `pgo` and `pgo-lto` in
   the `cachyos/cachyos-v3` container (x86-64-v3 repos; the v4 one needs AVX-512) on
   ubuntu-24.04, with the runner's SDK folders deleted through volume mounts for disk space.
@@ -68,11 +72,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (175 commits over upstream nx2
-  `bf4c42e22`, which round 14 merged into it; pushing it doesn't trigger builds).
+- Source of the patch: branch `tuned4` of DahBard/Lichii (189 commits over upstream nx2
+  `ad477ef1f`, which round 17 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `bf4c42e22`). The patch is `git diff --binary bf4c42e22 tuned4` (181 files, 804 KB); check it
+  `ad477ef1f`, as `tuned` does). The patch is `git diff --binary ad477ef1f tuned4` (167 files,
+  718 KB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -82,8 +87,9 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   unhandled enumerators, video_core conversions); a changed header is compiled through two files
   that include it. The pgo builds don't catch them: `common/x64/xbyak.h` turns -Wshadow and
   -Wconversion off for the rest of every file that includes it. Qt, Windows-only and test files need
-  a look by hand. Locally `vk_frame_dump.cpp` (needs stb) and `nvhost_ctrl_gpu.cpp` (the cloud's
-  clang crashes on it at any commit) fail; ignore them.
+  a look by hand. Locally the files that need opus, stb, ReShade's `effect_module.hpp`, the generated
+  host shaders, `windows.h` or SDL3 fail, and the cloud's clang 18 crashes on the three
+  `nvhost_*gpu.cpp` files at any commit; ignore them.
 - That script compiles for Linux, so `#ifdef _WIN32` code goes unchecked (round 16's pragma).
   Check it as the Windows CI compiles it: `apt-get install mingw-w64-x86-64-dev
   g++-mingw-w64-x86-64-posix`, then `clang++ --target=x86_64-w64-mingw32 -fsyntax-only` with
@@ -91,6 +97,9 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   -Werror=missing-declarations -Werror=shadow -Werror=unused` and its `-Wno-` list), Boost from
   a folder holding only a `boost` symlink and FFmpeg from one holding only the `libav*`
   symlinks. The old MinGW headers there break `xbyak_util.h` (`EfficiencyClass`); MSYS2's don't.
+  The header-only dependencies are the ones check_patch_warnings.py clones
+  (`<deps>/<package>/<version>/include`). Round 17 checked its 22 changed files with Windows
+  code or Windows-relevant changes this way: all clean.
 - The workflow's "AMD FSR 4 libraries" step downloads AMD's signed `amd_fidelityfx_loader_vk.dll`
   and `amd_fidelityfx_upscaler_vk.dll` and the SDK license from GPUOpen-LibrariesAndSDKs/
   FidelityFX-SDK `7539ae8` (v2.4.0) into the package and checks their SHA-256 (binary
@@ -100,6 +109,43 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 17 (2026-11-08): upstream nx2 merged up to `ad477ef1f`, the owner's new AMD fork migrated
+for Intel, and the fork survey's picks. The owner skipped testing round 16 (r26), so its checks
+(verify-r16, ab-12) carry over.
+- Merge `0bb650836` (53 pull requests). Upstream's final versions replace tuned4's copies of
+  #816 (store extent; Cap64K goes), #815 and #591 (pipeline cache: a key's first record is
+  built; exact duplicates, the same stored key, and incomplete records are removed from the file
+  by the serialization thread; this replaces round 16's newest-first retry, record groups and
+  failed-record set), #817/#818 (join copies that write a whole image; StalePages), #778
+  (Fritchii v4 imports without switches), #268 (5/8 of the VRAM budget), #621, #687, #488. New:
+  #781 (`precache_shaders`: compute programs found in the game files, built on the loading
+  screen), #769 (GPU thread pinning, on by default), #841 (task/mesh records build without
+  VK_EXT_mesh_shader, so our drop of them went), #812, #752 (a channel waits for a GPU-written
+  list without blocking the others). Kept from tuned4: the record conversions, #408's attribute
+  keys (deduplicated in memory only: the file keeps every record, so builds that key them apart
+  lose nothing), EXP8's copy skip, banded untiles, no cold hints,
+  batched collector downloads, the front's write tracking and mixed macro reads, the genlock
+  beside #655's timer pacing, and the raw Dynamic FPS step, now also applied to #655's FPS
+  Unlock patch (it shares the routine head TuneDynamicFps patches).
+- `fc44e7064`: `pin_gpu_threads` off by default: #769's pinning would leave the six emulated
+  cores the four P-cores the GPU threads don't take, where hybrid_cpu.cpp spreads them over P-
+  and E-cores.
+- Open upstream pull requests: #836 (`d708c15c7`, `3b339161f`: Ocarina's images recycled
+  instead of created and freed every frame), #810 (`f4375c906`, `a2b91c3b5`: HostMemory::Protect
+  shares the placeholder lock), #784 (`4ebb88a88`, `b6bbe06b1`: 16-byte units untiled from a
+  per-GOB offset table, subrects in runs; combined with our line pool, its test passes, also
+  with layouts large enough for the pool; 1024x1024 RGBA8 unswizzle 0.50 -> 0.29 ms, native
+  tiling 0.67 -> 0.28 ms on the cloud's 4 cores).
+- From medicinauvsecretaria-lang's "Lichii OoT AMD" (research section 12): `403a22b82` saves the
+  driver cache every 32 new pipelines at most every 10 s and the used list every 5 s;
+  `8b3a3c54a` seeds #781's precache as Ask (tuned defaults 3). Its downloads are built with
+  `-march=znver3`, the reason they "may not work for Intel CPUs"; tuned4 stays x86-64-v3.
+- Forks: `43321b8db` (tomk134 e8e50e797: unswizzle contiguous guest memory in place;
+  `EDEN_NX2_UNSWIZZLE_COPY=1` copies, ab-13), `d05a02108` (Elysium fc0ac4b3b: a thread_local
+  scratch buffer for the runs still copied), `da24ac9c1` (Elysium 4a680b22d: the IADD overflow
+  flag's negative bound in the SPIR-V and GLSL backends).
+- Launchers: ab-13-round16-texture-reads; ab-12 lost `LICHII_NULL_POINTER_HANDLES`.
 
 Round 16 (2026-11-08): Fritchii v4 and v4.1 (Frizti/Lichii, tags `fritchii-v4`, `fritchii-v4.1`;
 the owner says people consider v4.1 the best-performing fork) ported, and our own fixes for what
@@ -114,15 +160,18 @@ r23 showed. Fritchii's numbered switches are read too (`EDEN_NX2_EXP<n>`).
   `LICHII_BANK_DEDUPE`.
 - EXP8 (`54dd4bf3c`, Fritchii 7d75f9133, 7cdbcc3fa; Hyrule Field 1% low 30.3 -> 35.1 there):
   idle staging buffers kept, no guest upload for a new 2D image GPU copies overwrite whole,
-  banded untiles on the transcode workers, no HintCold. `LICHII_TEXTURE_UPLOADS` bits (15).
+  banded untiles on the transcode workers, no HintCold. `LICHII_TEXTURE_UPLOADS` bits (15; since
+  round 17 bit 1 switches nothing: upstream #778 always keeps idle buffers).
 - EXP21 (`2b72dc569`, Fritchii d603d98bb): a texture handle word that is a storage buffer
-  address binds no texture (waterfall flicker). `LICHII_NULL_POINTER_HANDLES=0` as before.
+  address binds no texture (waterfall flicker). Round 17: upstream #778 does it always, so
+  `LICHII_NULL_POINTER_HANDLES` went.
 - Our own: macro DMA reads take still-queued constant buffer words from the front's shadow and
   the rest from memory when nothing queued may change them (`b4c9e78b7`; r23: 94% of those
   waits, 208 ms/s of the front). `LICHII_DMA_MIXED_READS` 1, 2 verify, 0 off.
 - Pipeline cache (`4afd7df1b`, Fritchii 9b8fef282 and its record grouping): records of one key
   are tried newest first, a key whose records all fail is stored again at run time, compute
-  translations newest first. `fc68cbdd3` (Fritchii 55bba8812 = zortos293/Lichii#408): graphics
+  translations newest first (round 17: upstream #815's first record per key replaces the
+  graphics part). `fc68cbdd3` (Fritchii 55bba8812 = zortos293/Lichii#408): graphics
   keys hold only the vertex attribute types the native vertex program reads (none for task and
   mesh), stored records are masked at load; `LICHII_KEY_ALL_ATTRIBUTES=1` as before.
 - Fritchii's host frame pacer and genlock (`fe9a0f3f4`; v3's 53ba1b2c7 to 72e5ad6c2 with v4's
@@ -515,6 +564,21 @@ Own changes:
   wait experiment met a GPU-written entry at 149.7 s (126 s after boot), as gameplay began, and
   turned itself off: it never ran in gameplay (the menus before ran 60 fps either way). Round 16 targets the bank check, the dma read waits and the
   upload and pipeline hitches behind the 1% lows.
+- Runs #24-#26 (round 16): #26 built Windows, #25 CachyOS. Not tested: the owner went on to
+  round 17.
+- The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
+  "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
+  keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
+  each key once, so records that differ only in attribute types the shaders never read are one
+  pipeline. A cache gathered over many sessions and builds holds many such copies (#408 counted
+  191 keys for 31 shader sets of Ocarina's task and mesh programs), while a build without the
+  masking (round 15, another fork) counts every record. r26 logs "Pipeline cache: N records
+  repeat a pipeline already cached" (round 17: "N graphics records share their pipeline with
+  an earlier one") beside "Total Pipeline Count". Nothing is lost, and neither round rewrites
+  the file for it (round 17's #815 removes only exact duplicates and incomplete records). Not
+  confirmed from a log yet: if the repeats are far fewer than ~67,000, read the "left out"
+  lines and check that `nx2_switches.txt` next to lichii.exe still has
+  `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` (the log doesn't show the switches).
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
   `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
   vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
@@ -571,8 +635,8 @@ Own changes:
 
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
-   must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 16
-   (Windows run #26, CachyOS run #25): from its logs, the back thread's bank check
+   must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 17
+   (round 16 untested, so its checks come with it): from its logs, the back thread's bank check
    and split wait (EXP9), the front's macro dma read waits (mixed reads) and the 1% lows
    (EXP8, pipeline keys); verify-r16 must log 0 missed and 0 differed, ab-12 tells a regression
    from one of them. Ask the owner for the monitor's refresh rate and whether FreeSync is on: the
@@ -583,12 +647,28 @@ Own changes:
    recording if per-draw work still dominates the back, area-load stalls (ASTC decode and
    uploads off the back thread, #166's NUP cache), #253's camera jitter for FSR 4. Compare the
    CachyOS log (RADV, FSR 3.1) with Windows on the same scene.
-2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
+2. The big levers left (survey of 2026-11-08, research section 12): upstream #805 (jpkto, draft,
+   61 commits, conflicts with tuned4 in 25 files): decoupled split threads, attacking all three
+   front waits (list writers 310, macro DMA 208, acquires 180 ms/s). Take its near-clean commits
+   first (20628c90a, 1457bd01f, b62f49104, 8b5be87f7, d4e8d85d4, 758b5aae3, 90e334298,
+   d4e91e81d, 739a6ed95, d8988e703), then list writers (6229487c8, 34656e822), macro DMA reads
+   (1d9b6ef31, a442c38fe), acquires (fb4d4e47a, 188baa144), the QMD view last; run its verify
+   switches (`EDEN_NX2_DRAIN_CHECK`, `READ_CHECK`, `LIST_VERIFY`, `BACK_MACRO_VERIFY`). Then
+   pieces of #717 (stephenjayakar, one squashed commit on build 116): guest JIT and kernel
+   (dynarmic TSO loads, flag reuse, KSpinLock/arbiter spin, trap fast paths), Ocarina's native
+   macros (`macro_hle_oot.*`), host zstd, strcmp and resource poll patches, for the guest cores'
+   27 ms; not its thread pinning (Zen-tuned), not its drain changes (they duplicate #805), and
+   its native LSE atomics only after the CAS-on-write-protected-page panic #831's author found.
+   Re-fetch both heads first: they move. Later: #579/#741's graphics warm-up only if graphics
+   pipeline libraries work on RDNA 4 (AMD-Gfx-Drivers#126), the noinline switches after an A/B,
+   #806 after an A/B at the Hyrule Field spawn (grass), Vendichii's FSR 3 frame generation if
+   the owner wants 60 shown frames before 60 real ones.
+3. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
-3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
+4. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
    try `ab-8-skip-unbuilt-draws.bat` for first-time shaders and `ab-4-strict-placement.bat`;
    PGO training on Ocarina. If a glitch shows up that the official build doesn't have and the
    A/B launchers don't remove, turn `msvc` back on to tell the compiler from the source.
-4. Each round, port new commits from the included pull requests (#354 was still changing late
+5. Each round, port new commits from the included pull requests (#354 was still changing late
    on 2026-11-06): `git fetch https://github.com/zortos293/Lichii refs/pull/<n>/head` and compare
    patch ids with tuned4. Per `AGENTS.md`, also check Eglantine (Djihads80/Eglantine).
