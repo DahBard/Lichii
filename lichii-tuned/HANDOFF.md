@@ -566,6 +566,9 @@ Own changes:
   upload and pipeline hitches behind the 1% lows.
 - Runs #24-#26 (round 16): #26 built Windows, #25 CachyOS. Not tested: the owner went on to
   round 17.
+- Run #27 (round 17, a push: Windows only, the CachyOS job skipped) built `pgo` and `pgo-lto`
+  (artifacts `lichii-tuned-r27-pgo`, `lichii-tuned-r27-pgo-lto`, ~90 MB each; pgo-lto in 15 min,
+  pgo in 28 min with warm caches), the FSR 4 libraries checked by hash.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
@@ -636,7 +639,7 @@ Own changes:
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
    must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 17
-   (round 16 untested, so its checks come with it): from its logs, the back thread's bank check
+   (Windows run #27; round 16 untested, so its checks come with it): from its logs, the back thread's bank check
    and split wait (EXP9), the front's macro dma read waits (mixed reads) and the 1% lows
    (EXP8, pipeline keys); verify-r16 must log 0 missed and 0 differed, ab-12 tells a regression
    from one of them. Ask the owner for the monitor's refresh rate and whether FreeSync is on: the
