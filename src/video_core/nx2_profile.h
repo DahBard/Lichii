@@ -163,7 +163,7 @@ enum class Counter : u32 {
     AcquireChecks,  ///< Semaphore acquires evaluated
     AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
     BankPagesChecked, ///< Native uniform bank pages compared with their snapshot
-    BankPagesSkipped, ///< Bank pages not compared again within one draw
+    BankPagesSkipped, ///< Bank pages no write could have changed, not compared
 };
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and
@@ -285,7 +285,7 @@ inline void Report(const char* thread_name = "GPU thread") {
                         static_cast<double>(data.counters[7]) * 1e9 / window);
     if (data.counters[8] != 0 || data.counters[9] != 0) {
         const double seconds = static_cast<double>(window) / 1e9;
-        line += fmt::format(" | bank pages compared {:.0f} ({:.0f} skipped as compared this draw)",
+        line += fmt::format(" | bank pages compared {:.0f} ({:.0f} skipped as unchanged)",
                             static_cast<double>(data.counters[8]) / seconds,
                             static_cast<double>(data.counters[9]) / seconds);
     }

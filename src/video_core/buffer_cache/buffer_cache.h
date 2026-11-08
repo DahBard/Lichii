@@ -231,6 +231,7 @@ void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size
 
 template <class P>
 void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu_data) {
+    Core::g_buffer_write_pages.Mark(device_addr, size);
     Nx2NoteListHostWrite(device_addr, size);
     // The written range lies within its pages: when they hold no GPU-written data, both lookups
     // below find nothing, so one lookup answers them.
@@ -670,7 +671,6 @@ void BufferCache<P>::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
 
 template <class P>
 void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
-    ++bank_check_draw;
     do {
         channel_state->has_deleted_buffers = false;
         DoUpdateGraphicsBuffers(is_indexed);
@@ -1146,6 +1146,7 @@ Common::RangeSet<DAddr> BufferCache<P>::PendingCpuWriteRanges() {
 template <class P>
 void BufferCache<P>::WriteDownloadedMemory(const Common::RangeSet<DAddr>& cpu_written,
                                            DAddr device_addr, const u8* data, u64 size) {
+    Core::g_buffer_write_pages.Mark(device_addr, size);
     if (!cpu_written.Intersects(device_addr, size)) {
         device_memory.WriteBlockUnsafe(device_addr, data, size);
         return;
@@ -1516,9 +1517,26 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     // the memory tracker, leaving stale host contents, so check such a bank on every bind: games
     // rewrite per-draw data between draws, and checking once per frame left it stale for a frame
     // now and then (white flashes in Ocarina of Time, Eglantine 031e07436c).
-    if (has_host_buffer && (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
-        size != 0 && gpu_memory != nullptr && gpu_memory->UsesNativeTiling() &&
-        !memory_tracker.IsRegionGpuModified(device_addr, size)) {
+    // LICHII_BANK_CHECK (Fritchii v4's EDEN_NX2_EXP9, which it also reads): 1 (default) compares
+    // only the pages that may have changed (CheckNativeBankPagesTracked), 2 compares every page
+    // and logs what 1 would have missed, 3 is 1 without the once-a-frame compare, 0 compares
+    // every page on every bind as before: ~650,000 pages a second in Ocarina (r23), 99.7%
+    // unchanged.
+    static const int bank_check_mode = [] {
+        const char* value = std::getenv("LICHII_BANK_CHECK");
+        if (value == nullptr || value[0] == '\0') {
+            value = std::getenv("EDEN_NX2_EXP9");
+        }
+        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 1;
+    }();
+    const bool native_bank = has_host_buffer &&
+                             (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
+                             size != 0 && gpu_memory != nullptr && gpu_memory->UsesNativeTiling() &&
+                             !memory_tracker.IsRegionGpuModified(device_addr, size);
+    if (native_bank && bank_check_mode != 0) {
+        Nx2Profile::Scope scope{Nx2Profile::Zone::BankCheck};
+        CheckNativeBankPagesTracked(device_addr, size, bank_check_mode);
+    } else if (native_bank) {
         // The bank size is only an upper limit: stop at the end of the mapped memory.
         u64 mapped_size = 0;
         while (mapped_size < size &&
@@ -1532,30 +1550,17 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         if (native_indirect_page_snapshots.size() >= 16384) {
             native_indirect_page_snapshots.clear();
         }
-        // A draw's stages often bind the same bank: nothing on this thread writes guest memory
-        // between them, so a page compared for this draw is not compared again.
-        // LICHII_BANK_DEDUPE=0 compares on every bind as before.
-        static const bool dedupe = [] {
-            const char* const value = std::getenv("LICHII_BANK_DEDUPE");
-            return value == nullptr || value[0] != '0';
-        }();
         const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
         const DAddr end = device_addr + check_size;
         for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
-            auto& memo = bank_check_memo[(page / Core::DEVICE_PAGESIZE) % bank_check_memo.size()];
-            if (dedupe && memo.page == page && memo.draw == bank_check_draw) {
-                Nx2Profile::Add(Nx2Profile::Counter::BankPagesSkipped, 1);
-                continue;
-            }
-            memo = {page, bank_check_draw};
             Nx2Profile::Add(Nx2Profile::Counter::BankPagesChecked, 1);
             const u8* const guest = device_memory.template GetPointer<u8>(page);
             if (guest == nullptr) {
                 continue;
             }
             auto [it, inserted] = native_indirect_page_snapshots.try_emplace(page);
-            const bool same =
-                !inserted && std::memcmp(it->second.data(), guest, Core::DEVICE_PAGESIZE) == 0;
+            const bool same = !inserted && std::memcmp(it->second.words.data(), guest,
+                                                       Core::DEVICE_PAGESIZE) == 0;
             // EDEN_NX2_MME_DMA_STATS: how many checked pages had changed.
             if (static const bool stats = std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr;
                 stats) {
@@ -1582,7 +1587,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             if (same) {
                 continue;
             }
-            std::memcpy(it->second.data(), guest, Core::DEVICE_PAGESIZE);
+            std::memcpy(it->second.words.data(), guest, Core::DEVICE_PAGESIZE);
             memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
         }
     }
@@ -1746,6 +1751,112 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
     } else {
         return false;
     }
+}
+
+template <class P>
+void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, int mode) {
+    // From Fritchii v4 (Frizti/Lichii 9e8cb73ed, 1a64fe500, EDEN_NX2_EXP9). Most changes the
+    // per-bind compare finds the memory tracker already knows. The ones it doesn't include guest
+    // CPU writes collected by the GPU dirty memory managers: HandleRasterizerWrite keeps a core's
+    // last_address on a page once a write to it was collected and never resets it, so later
+    // writes there are only collected and reach the buffer cache at the next InvalidateGPUCache.
+    // Compare a page when such a write or one the buffer cache saw flagged it, when it was
+    // flagged at the previous bind (the write's bytes may land after the compare), when it is
+    // CPU-modified, when it changed within NativeBankHotFrames frames (per-draw data rewritten by
+    // paths no flag sees), and once a frame (mode 1) for writers none of these see: semaphore and
+    // query writes, HLE. Mode 2 compares every page and counts what mode 1 would have missed.
+    static_assert(Core::DevicePageFlags::AddressBits >=
+                  Tegra::MaxwellDeviceTraits::device_virtual_bits);
+    u64 mapped_size = 0;
+    while (mapped_size < size &&
+           device_memory.template GetPointer<u8>(device_addr + mapped_size) != nullptr) {
+        mapped_size += Core::DEVICE_PAGESIZE - ((device_addr + mapped_size) & Core::DEVICE_PAGEMASK);
+    }
+    if (native_indirect_page_snapshots.size() >= 16384) {
+        native_indirect_page_snapshots.clear();
+    }
+    const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
+    const DAddr end = device_addr + (std::min<u64>)(mapped_size, size);
+    const bool verify = mode == 2;
+    const bool frame_check = mode != 3;
+    // Most banks have no CPU-modified page: ask per page only when one has.
+    const bool any_cpu_dirty = memory_tracker.IsRegionCpuModified(first_page, end - first_page);
+    auto& stats = native_bank_tracked_stats;
+    ++stats.binds;
+    for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
+        const u8* const guest = device_memory.template GetPointer<u8>(page);
+        if (guest == nullptr) {
+            continue;
+        }
+        // Take the flags before reading the page: a write flagged later is compared next bind.
+        const bool collected = Core::g_collected_write_pages.Take(page);
+        const bool written = Core::g_buffer_write_pages.Take(page);
+        auto [it, inserted] = native_indirect_page_snapshots.try_emplace(page);
+        NativeBankPage& snapshot = it->second;
+        if (inserted) {
+            ++stats.pages_new;
+            std::memcpy(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE);
+            snapshot.checked_frame = frame_tick;
+            snapshot.recheck = collected || written;
+            memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
+            continue;
+        }
+        const bool recheck = std::exchange(snapshot.recheck, collected || written);
+        NativeBankReason reason = BankNone;
+        if (collected) {
+            reason = BankCollected;
+        } else if (written) {
+            reason = BankWritten;
+        } else if (recheck) {
+            reason = BankRecheck;
+        } else if (any_cpu_dirty &&
+                   memory_tracker.IsRegionCpuModified(page, Core::DEVICE_PAGESIZE)) {
+            reason = BankCpuDirty;
+        } else if (snapshot.changed_frame != ~u64{0} &&
+                   frame_tick - snapshot.changed_frame < NativeBankHotFrames) {
+            reason = BankHot;
+        } else if (frame_check && snapshot.checked_frame != frame_tick) {
+            reason = BankFrame;
+        }
+        if (reason != BankNone) {
+            snapshot.checked_frame = frame_tick;
+        } else if (!verify) {
+            ++stats.pages_skipped;
+            Nx2Profile::Add(Nx2Profile::Counter::BankPagesSkipped, 1);
+            continue;
+        }
+        ++stats.compared[reason];
+        Nx2Profile::Add(Nx2Profile::Counter::BankPagesChecked, 1);
+        if (std::memcmp(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE) == 0) {
+            continue;
+        }
+        ++stats.changed[reason];
+        snapshot.changed_frame = frame_tick;
+        std::memcpy(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE);
+        memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
+    }
+    if (!verify && !Nx2Profile::Enabled()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - stats.last_log < std::chrono::seconds{10}) {
+        return;
+    }
+    const auto& compared = stats.compared;
+    const auto& changed = stats.changed;
+    LOG_INFO(HW_GPU,
+             "Native bank check (mode {}, 10 s): {} binds, {} new pages, {} skipped; compared / "
+             "changed: collected CPU writes {} / {}, buffer cache writes {} / {}, recheck {} / {}, "
+             "CPU-modified {} / {}, hot {} / {}, frame check {} / {}, verify only {} / {}; missed "
+             "{}",
+             mode, stats.binds, stats.pages_new, stats.pages_skipped, compared[BankCollected],
+             changed[BankCollected], compared[BankWritten], changed[BankWritten],
+             compared[BankRecheck], changed[BankRecheck], compared[BankCpuDirty],
+             changed[BankCpuDirty], compared[BankHot], changed[BankHot], compared[BankFrame],
+             changed[BankFrame], compared[BankNone], changed[BankNone],
+             verify ? changed[BankNone] : 0);
+    stats = {};
+    stats.last_log = now;
 }
 
 template <class P>
@@ -2853,6 +2964,7 @@ bool BufferCache<P>::InlineMemory(DAddr dest_address, size_t copy_size,
 template <class P>
 void BufferCache<P>::InlineMemoryImplementation(DAddr dest_address, size_t copy_size,
                                                 std::span<const u8> inlined_buffer) {
+    Core::g_buffer_write_pages.Mark(dest_address, copy_size);
     ClearDownload(dest_address, copy_size);
     gpu_modified_ranges.Subtract(dest_address, copy_size);
     MarkVertexBuffersStale(dest_address, copy_size);

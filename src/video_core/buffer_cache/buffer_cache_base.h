@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <array>
+#include <chrono>
 #include <bit>
 #include <functional>
 #include <memory>
@@ -32,6 +33,7 @@
 #include "common/range_sets.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "common/slot_vector.h"
 #include "shader_recompiler/shader_info.h"
 #include "video_core/buffer_cache/buffer_base.h"
@@ -473,14 +475,38 @@ public:
     /// The guest words of each page of native programs' indirectly read banks when last checked:
     /// unchanged pages keep their tracking (marking them CPU-modified costs two mprotect calls
     /// per page).
-    std::unordered_map<DAddr, std::array<u8, Core::DEVICE_PAGESIZE>> native_indirect_page_snapshots;
-    /// Native bank pages compared during the current draw (UpdateGraphicsBuffers counts draws).
-    struct BankCheckMemo {
-        DAddr page{~DAddr{0}};
-        u64 draw{};
+    struct NativeBankPage {
+        std::array<u8, Core::DEVICE_PAGESIZE> words;
+        /// frame_tick of the page's last compare, and whether the next bind compares it again
+        /// (a flagged write's bytes may land after the compare that took the flag).
+        u64 checked_frame = ~u64{0};
+        /// frame_tick when the page was last seen changed: such pages are compared on every bind.
+        u64 changed_frame = ~u64{0};
+        bool recheck = false;
     };
-    std::array<BankCheckMemo, 64> bank_check_memo{};
-    u64 bank_check_draw{};
+    std::unordered_map<DAddr, NativeBankPage> native_indirect_page_snapshots;
+    /// A bank page that changed within this many frames is compared on every bind.
+    static constexpr u64 NativeBankHotFrames = 120;
+    /// Why bank pages were compared and which of them had changed, by the first reason that
+    /// applies (CheckNativeBankPagesTracked), logged every 10 s with the GPU profile.
+    enum NativeBankReason : size_t {
+        BankCollected, ///< Collected CPU writes (Core::g_collected_write_pages)
+        BankWritten,   ///< Writes the buffer cache saw (Core::g_buffer_write_pages)
+        BankRecheck,   ///< Flagged at the previous bind
+        BankCpuDirty,  ///< CPU-modified in the tracker
+        BankHot,       ///< Changed within the last NativeBankHotFrames frames (per-draw data)
+        BankFrame,     ///< Not compared yet this frame
+        BankNone,      ///< No reason: LICHII_BANK_CHECK=2 compares these only to verify
+        BankReasons,
+    };
+    struct NativeBankTrackedStats {
+        u64 binds = 0;
+        u64 pages_new = 0;
+        u64 pages_skipped = 0;
+        std::array<u64, BankReasons> compared{};
+        std::array<u64, BankReasons> changed{};
+        std::chrono::steady_clock::time_point last_log{};
+    } native_bank_tracked_stats;
 
 private:
     template <typename Mask, typename Func>
@@ -526,6 +552,10 @@ private:
     void BindHostGraphicsUniformBuffers(size_t stage);
 
     void BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 binding_index, bool needs_bind);
+
+    /// The native uniform bank check of a bind of [device_addr, device_addr + size) that compares
+    /// only the pages whose guest memory may have changed (LICHII_BANK_CHECK 1-3).
+    void CheckNativeBankPagesTracked(DAddr device_addr, u32 size, int mode);
 
     void BindHostGraphicsStorageBuffers(size_t stage);
 
