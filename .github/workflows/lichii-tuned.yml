@@ -416,7 +416,8 @@ jobs:
           rm -rf /host/dotnet/* /host/android/* /host/ghc/* /host/boost/* || true
           df -h / "$GITHUB_WORKSPACE" | sed 's/^/after: /'
 
-      # The keyrings first, so packages signed by newer keys install on an older image.
+      # The keyrings first, so packages signed by newer keys install on an older image. No
+      # `zlib`: CachyOS's zlib is zlib-ng-compat, which pacman would have to remove for it.
       - name: Install build dependencies
         run: |
           set -euo pipefail
@@ -428,7 +429,7 @@ jobs:
           pacman -Su --noconfirm --needed \
             base-devel git cmake ninja ccache python clang lld llvm \
             boost catch2 enet ffmpeg fmt glslang libzip lz4 nlohmann-json openssl opus \
-            qt6-base qt6-charts qt6-svg qt6-wayland sdl3 zlib zstd zip unzip \
+            qt6-base qt6-charts qt6-svg qt6-wayland sdl3 zstd zip unzip \
             vulkan-headers vulkan-icd-loader vulkan-utility-libraries libusb \
             spirv-tools spirv-headers libpulse alsa-lib
           pacman -Q clang qt6-base ffmpeg sdl3 boost mesa 2>/dev/null || true
