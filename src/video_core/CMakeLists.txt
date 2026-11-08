@@ -466,7 +466,8 @@ endif()
 
 target_link_libraries(video_core PUBLIC common core)
 if(WIN32)
-    target_link_libraries(video_core PRIVATE advapi32)
+    # dwmapi: the host frame pacer's refresh rate (vk_host_pacer.cpp).
+    target_link_libraries(video_core PRIVATE advapi32 dwmapi)
 endif()
 target_link_libraries(video_core PUBLIC shader_recompiler stb bc_decoder gpu_logging)
 if (ENABLE_OPENGL)
