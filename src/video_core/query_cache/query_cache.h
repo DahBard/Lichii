@@ -300,12 +300,22 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     // The GPU thread split's back entry this report came in: the front counts the report in
     // memory once its operation ran with a fence (GpuSplit::NoteFencedWrite).
     const std::optional<u64> split_entry = VideoCommon::GpuSplit::Get().BackEntry();
+    // Without delayed fence operations only fence-flagged reports wait for the host GPU to write.
+    const bool delayed_release = is_fence && counter_type == QueryType::Payload &&
+                                 (Settings::IsGPUFenceBehaviorDefault()
+                                      ? !Settings::IsGPULevelHigh()
+                                      : !Settings::IsGPUFenceBehaviorBalanced() &&
+                                            !Settings::IsGPUFenceBehaviorAccurate());
     std::function<void()> operation([this, streamer, query_base = query, query_location,
                                      pointer, pointer_timestamp, cpu_addr, addr,
-                                     asid = gpu_memory->GetID(), counter_type, split_entry] {
+                                     asid = gpu_memory->GetID(), counter_type, split_entry,
+                                     delayed_release, payload] {
         SCOPE_EXIT {
             if (split_entry) {
                 VideoCommon::GpuSplit::Get().NoteFencedWrite(*split_entry);
+            }
+            if (delayed_release) {
+                Tegra::Nx2SemaphoreWaiters::Get().OnDelayedReleaseDone(cpu_addr, payload);
             }
         };
         if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
@@ -358,6 +368,9 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         impl->pending_unregister.push_back(query_location);
     });
     if (is_fence) {
+        if (delayed_release) {
+            Tegra::Nx2SemaphoreWaiters::Get().OnDelayedRelease(cpu_addr, payload);
+        }
         VideoCore::g_signaling_query_report_fence = true;
         impl->rasterizer.SignalFence(std::move(operation));
         VideoCore::g_signaling_query_report_fence = false;

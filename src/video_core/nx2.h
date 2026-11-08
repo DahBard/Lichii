@@ -398,7 +398,8 @@ inline bool Nx2SparseUnwritten(u64 gpu_address, u64 size) {
 
 /// Channels suspended on a semaphore acquire. A console channel polls and sees every release;
 /// Eden writes releases in bursts when fences signal and resumes waiters only between command
-/// lists, so an acquire-equal could miss its value. Writes latch the waiters they satisfy.
+/// lists, so an acquire-equal could miss its value. Writes latch the waiters they satisfy, and so do
+/// releases whose write waits for the host GPU.
 class Nx2SemaphoreWaiters {
 public:
     // Puller GpuSemaphoreOperation values.
@@ -424,7 +425,13 @@ public:
     void Add(const void* owner, u64 device_address, u32 value, u32 operation) {
         std::scoped_lock lk{mutex};
         std::erase_if(waiters, [owner](const Waiter& w) { return w.owner == owner; });
-        waiters.push_back({owner, device_address, value, operation, false, Source::Unknown});
+        Waiter waiter{owner, device_address, value, operation, false, Source::Unknown};
+        if (const auto it = delayed.find(device_address); it != delayed.end() &&
+                                                           Matches(waiter, it->second)) {
+            waiter.latched = true;
+            waiter.source = Source::PayloadRelease;
+        }
+        waiters.push_back(waiter);
         count.store(waiters.size(), std::memory_order_release);
     }
 
@@ -462,22 +469,37 @@ public:
         if (count.load(std::memory_order_acquire) == 0) {
             return;
         }
-        bool latched = false;
+        bool latched;
         {
             std::scoped_lock lk{mutex};
-            for (auto& w : waiters) {
-                if (w.address == device_address && !w.latched && Matches(w, value)) {
-                    w.latched = true;
-                    w.source = source;
-                    latched = true;
-                }
-            }
-            if (latched) {
-                ++latch_epoch;
-            }
+            latched = Latch(device_address, value, source);
         }
         if (latched) {
             latch_cv.notify_all();
+        }
+    }
+
+    /// A release the GPU reached in command order whose write waits for the host GPU to finish
+    /// the work before it (fence-flagged reports, see FenceManager::SignalFence). It meets
+    /// acquires now: work a channel runs after its acquire reaches the host GPU after that work.
+    /// Waiting for the write instead made every handoff between channels wait for the host GPU.
+    void OnDelayedRelease(u64 device_address, u32 value) {
+        bool latched;
+        {
+            std::scoped_lock lk{mutex};
+            delayed.insert_or_assign(device_address, value);
+            latched = Latch(device_address, value, Source::PayloadRelease);
+        }
+        if (latched) {
+            latch_cv.notify_all();
+        }
+    }
+
+    /// The fence of a delayed release ran: memory holds its value or a later write.
+    void OnDelayedReleaseDone(u64 device_address, u32 value) {
+        std::scoped_lock lk{mutex};
+        if (const auto it = delayed.find(device_address); it != delayed.end() && it->second == value) {
+            delayed.erase(it);
         }
     }
 
@@ -502,6 +524,21 @@ private:
         Source source;
     };
 
+    bool Latch(u64 device_address, u32 value, Source source) {
+        bool latched = false;
+        for (auto& w : waiters) {
+            if (w.address == device_address && !w.latched && Matches(w, value)) {
+                w.latched = true;
+                w.source = source;
+                latched = true;
+            }
+        }
+        if (latched) {
+            ++latch_epoch;
+        }
+        return latched;
+    }
+
     static bool Matches(const Waiter& w, u32 current) {
         switch (w.operation) {
         case AcquireEqual:
@@ -519,6 +556,7 @@ private:
     std::condition_variable latch_cv;
     u64 latch_epoch{};
     std::vector<Waiter> waiters;
+    std::map<u64, u32> delayed;
     std::atomic<size_t> count{};
 };
 
