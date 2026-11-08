@@ -199,25 +199,19 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
 }
 
 // ASTC that would be re-compressed to BC1/BC3 but has uneven block mips (HasUnevenBlockMips) on
-// a driver that samples those wrong: kept as the GPU decoder's RGBA8 instead, like huge arrays.
-// EDEN_NX2_UNEVEN_BCN_RGBA8=1 does it on any driver, =0 on none.
+// an AMD driver, which samples those wrong: kept as the GPU decoder's RGBA8 instead, like huge
+// arrays.
 [[nodiscard]] bool IsUnevenMipRgba8Astc(const Device& device, const ImageInfo& info) {
-    static const char forced = [] {
-        const char* value = std::getenv("EDEN_NX2_UNEVEN_BCN_RGBA8");
-        return value == nullptr ? '\0' : value[0];
-    }();
-    if (forced == '0' || !IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported() ||
+    if (!IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported() ||
         info.type != ImageType::e2D || info.size.depth != 1 || info.resources.levels <= 1 ||
         Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu ||
         Settings::GetAstcRecompression() == Settings::AstcRecompression::Uncompressed) {
         return false;
     }
-    if (forced != '1') {
-        const VkDriverIdKHR id = device.GetDriverID();
-        if (id != VK_DRIVER_ID_AMD_PROPRIETARY && id != VK_DRIVER_ID_AMD_OPEN_SOURCE &&
-            id != VK_DRIVER_ID_MESA_RADV) {
-            return false;
-        }
+    const VkDriverIdKHR id = device.GetDriverID();
+    if (id != VK_DRIVER_ID_AMD_PROPRIETARY && id != VK_DRIVER_ID_AMD_OPEN_SOURCE &&
+        id != VK_DRIVER_ID_MESA_RADV) {
+        return false;
     }
     return HasUnevenBlockMips(info) && !IsHugeAstcArray(device, info);
 }
