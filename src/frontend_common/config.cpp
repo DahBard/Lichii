@@ -151,9 +151,10 @@ void Config::SetUpIni() {
         // lichii-tuned: the speed settings it recommends, applied once to an existing
         // configuration as well. Whatever is changed afterwards is kept.
         BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
-        constexpr s64 TunedDefaultsVersion = 1;
+        constexpr s64 TunedDefaultsVersion = 2;
         // Read without a default: with one, a key without a default flag reads as that default.
-        if (ReadIntegerSetting(std::string("lichii_tuned_defaults")) < TunedDefaultsVersion) {
+        const s64 applied = ReadIntegerSetting(std::string("lichii_tuned_defaults"));
+        if (applied < 1) {
             seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
             seed(Settings::values.use_asynchronous_shaders, ToString(true));
             seed(Settings::values.use_reactive_flushing, ToString(false));
@@ -161,8 +162,15 @@ void Config::SetUpIni() {
             seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
             seed(Settings::values.oot_anti_aliasing,
                  ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
+        }
+        if (applied < 2) {
+            // Round 15: Ocarina's FSR upscaling (FSR 4, else FSR 3.1) on by default.
+            seed(Settings::values.ocarina_fsr, ToString(true));
+        }
+        if (applied < TunedDefaultsVersion) {
             WriteIntegerSetting(std::string("lichii_tuned_defaults"), TunedDefaultsVersion);
-            LOG_INFO(Config, "lichii-tuned: applied the recommended speed settings");
+            LOG_INFO(Config, "lichii-tuned: applied the recommended settings (version {})",
+                     TunedDefaultsVersion);
         }
         EndGroup();
     }

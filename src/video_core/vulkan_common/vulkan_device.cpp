@@ -1797,6 +1797,22 @@ void Device::RemoveUnsuitableExtensions() {
                                            VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     }
 
+    // VK_EXT_shader_float8 and VK_KHR_compute_shader_derivatives: Lichii's shaders don't use them,
+    // AMD FSR 4's FP8 and INT8 networks do. Float 8 matrices need the cooperative matrices.
+    if (!extensions.cooperative_matrix) {
+        features.shader_float8.shaderFloat8CooperativeMatrix = VK_FALSE;
+    }
+    extensions.shader_float8 = extensions.shader_float8 && features.shader_float8.shaderFloat8;
+    RemoveExtensionFeatureIfUnsuitable(extensions.shader_float8, features.shader_float8,
+                                       VK_EXT_SHADER_FLOAT8_EXTENSION_NAME);
+    extensions.compute_shader_derivatives =
+        extensions.compute_shader_derivatives &&
+        (features.compute_shader_derivatives.computeDerivativeGroupQuads ||
+         features.compute_shader_derivatives.computeDerivativeGroupLinear);
+    RemoveExtensionFeatureIfUnsuitable(extensions.compute_shader_derivatives,
+                                       features.compute_shader_derivatives,
+                                       VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
+
     // VK_KHR_workgroup_memory_explicit_layout
     extensions.workgroup_memory_explicit_layout =
         features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout &&
