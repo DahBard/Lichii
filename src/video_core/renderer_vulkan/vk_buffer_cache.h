@@ -358,6 +358,16 @@ private:
     bool bound_index_valid = false;
 
     Nx2ListSlots nx2_list_slots{memory_allocator, scheduler};
+    /// The vertex buffer each binding last recorded, and the scheduler recording epoch it was
+    /// recorded at (~0: unknown).
+    struct BoundVertexBuffer {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        VkDeviceSize size = 0;
+        VkDeviceSize stride = 0;
+        u64 epoch = ~u64{0};
+    };
+    std::array<BoundVertexBuffer, VideoCommon::NUM_VERTEX_BUFFERS> bound_vertex_buffers{};
 };
 
 struct BufferCacheParams {
