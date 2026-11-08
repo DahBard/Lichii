@@ -774,6 +774,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     }
 
     SCOPE_EXIT {
+        const VideoCommon::Nx2Profile::FineScope tick_scope{
+            VideoCommon::Nx2Profile::Zone::TickWork};
         gpu.TickWork();
     };
     bool submitted = false;
@@ -859,6 +861,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
         return;
     }
+    // TEST: up to Configure (EDEN_NX2_GPU_PROFILE=2).
+    std::optional<Profile::FineScope> setup_scope;
+    setup_scope.emplace(Profile::Zone::DrawSetup);
     if (VideoCommon::OotNetwork::BypassEnabled(Settings::GetCurrentProgramID())) {
         TrackOotTonemappedImage(*pipeline);
     }
@@ -1033,6 +1038,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             }
         }
     }
+    setup_scope.reset();
     const bool delta_holds =
         delta_pipeline != nullptr && DeltaStillHolds(draw_serial, draw_map_serial);
     const DrawPath path = delta_holds && !verify_pipeline ? DrawPath::Delta : DrawPath::Full;
@@ -1109,9 +1115,13 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         UpdateDynamicStates(pipeline);
     }
 
-    query_cache.NotifySegment(true);
-    HandleTransformFeedback();
-    query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64, maxwell3d->regs.zpass_pixel_count_enable);
+    {
+        const Profile::FineScope queries_scope{Profile::Zone::DrawQueries};
+        query_cache.NotifySegment(true);
+        HandleTransformFeedback();
+        query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64,
+                                  maxwell3d->regs.zpass_pixel_count_enable);
+    }
     {
         Profile::Scope scope{Profile::Zone::DrawRecord};
         scheduler.TraceGraphicsPipeline(pipeline->ShaderHashes());
@@ -2082,6 +2092,8 @@ void RasterizerVulkan::DispatchCompute() {
     // As after a draw: run the sync operations threads wait for, such as a guest read's flush,
     // rather than only at the next draw.
     SCOPE_EXIT {
+        const VideoCommon::Nx2Profile::FineScope tick_scope{
+            VideoCommon::Nx2Profile::Zone::TickWork};
         gpu.TickWork();
     };
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Compute};
