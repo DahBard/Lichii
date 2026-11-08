@@ -364,6 +364,15 @@ Own changes:
   reads: #415's over-marked skinning bindings.
 - Run #22 (round 14) built `pgo` and `pgo-lto` (artifacts `lichii-tuned-r22-pgo`,
   `lichii-tuned-r22-pgo-lto`); it predates the shipped `EDEN_NX2_PRELOAD_ALL_PIPELINES=1`.
+- r22 (19,467 pipelines at boot; owner: no white leaves since round 1, no flicker, nothing
+  missing): perf 27.2 fps median (p10 17.7), GPU Clocks Normal 27.3 (GPU busy 8.5 ms against 8.3:
+  #664 changed nothing visible), preflush 28.0 (p10 20.8, no hang over 1.5 s), FSR 27.3. #415:
+  preflush downloads 400-520 -> 21-40 MiB/s and its full GPU waits 9 ms/s; without preflush the
+  read traps still wait 61-74 a second (65-77 ms/s). FSR (`trace-fsr.bat`): "FSR 3.1 upscaler:
+  2560x1440 -> 3840x2160", Ocarina temporal presented 3840x2160, GPU +1.1 ms a frame; the owner
+  saw "extreme hitching" once: a 1.35 s guest stall (vsync callback 1 s late, no pipeline build,
+  no GPU wait), likely a game-side load. Each of guest cores 4 and 5 and the back thread still use
+  27-29 ms a frame; the front 13; the GPU works 8-10 ms of each ~36 ms frame.
 - The owner's shared Ocarina pipeline cache (~22,000 pipelines, recorded with Lichii build 86 =
   `b06d1818e`, cache v53 like r18) never loaded: put in place of `shader\0400486024dec000\
   vulkan.fork-v53.bin`, it built ~1,700 pipelines at boot (even with
@@ -418,15 +427,19 @@ Own changes:
 
 ## Next steps
 
-1. Run #22 (round 14), docked, 1x, ScaleForce, the same Kokiri spots, about 2 minutes each:
-   `perf-trace.bat` (#415 should cut the read-trap waits at buffer_cache.h and the white leaves;
-   #288 the back's texture uploads), `trace-preflush.bat` (downloads should fall far below 450
-   MiB/s), `trace-fsr.bat` (FSR 3.1 in place of the output pass: look for the FSR lines and the
-   image), and one `perf-trace.bat` run with GPU Clocks = Normal (#664 changes the game's
-   resolution with Boost: compare GPU busy and the image). Next candidates: a front shadow of
-   answered report values for the macro DMA read waits (202 ms/s in r21); #161's upload-word counter
-   for bind stage buffers; FSR from 1440p to 4K (the resolution scaler on the images after the
-   output pass); #640 so a damaged record doesn't delete the 1 GB cache.
+1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
+   The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
+   must each fall from 27-29 to under ~15 ms, the GPU has room (8-10 ms of 16.7, FSR 4 adds ~2).
+   Round 15: per-frame frame-time percentiles (1% lows) in perf-trace; preflush on by default for
+   Ocarina (cheap since #415); a sampler of what guest cores 4 and 5 run (JIT code, SVCs/HLE, read
+   traps, spins) and finer back-thread zones; #161's upload-word counter for bind stage buffers
+   (235 ms/s); a front shadow of answered report values (macro DMA read waits 225 ms/s); the owner
+   checks P-core clocks under load (laptop power limit). Rounds 16-17: the biggest back-thread
+   and guest costs the profiles show (parallel command recording if per-draw work dominates;
+   JIT/HLE fixes), area-load stalls (ASTC decode and uploads off the back thread's path, the NUP
+   decompression cache from #166). Then FSR 4: AMD FidelityFX SDK 2.x Vulkan ML upscaler (RDNA4,
+   signed DLLs beside the exe) in place of the shader FSR 3.1, same inputs (#695 masks, #606
+   motion), with #253's camera jitter; FSR 3.1 stays the fallback.
 2. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 3. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
