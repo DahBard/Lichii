@@ -2100,13 +2100,13 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                                 .read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
                             const bool compute = kind == 1;
                             ComputePipelineCacheKey compute_key{};
-                            GraphicsPipelineCacheKey graphics_key{};
+                            GraphicsPipelineCacheKey record_key{};
                             if (compute) {
                                 in.read(reinterpret_cast<char*>(&compute_key),
                                         sizeof(compute_key));
                             } else {
-                                in.read(reinterpret_cast<char*>(&graphics_key),
-                                        sizeof(graphics_key));
+                                in.read(reinterpret_cast<char*>(&record_key),
+                                        sizeof(record_key));
                             }
                             std::vector<FileEnvironment> envs(count);
                             for (size_t i = 0; i < count; ++i) {
@@ -2122,10 +2122,10 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                                                              nullptr, false)
                                            .pipeline != nullptr;
                             }
-                            if (!ConvertRecordedKey(graphics_key, envs)) {
+                            if (!ConvertRecordedKey(record_key, envs)) {
                                 return false;
                             }
-                            if (known->contains(graphics_key.Hash())) {
+                            if (known->contains(record_key.Hash())) {
                                 return true;
                             }
                             boost::container::static_vector<Shader::Environment*,
@@ -2135,7 +2135,7 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                                 env_ptrs.push_back(&env);
                             }
                             const auto pipeline = CreateGraphicsPipeline(
-                                pools, graphics_key, MakeSpan(env_ptrs), nullptr, false);
+                                pools, record_key, MakeSpan(env_ptrs), nullptr, false);
                             return pipeline != nullptr && !pipeline->Failed();
                         }});
     }
