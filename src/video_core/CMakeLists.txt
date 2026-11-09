@@ -65,6 +65,8 @@ add_library(video_core STATIC
     framebuffer_config.h
     frame_time_stats.h
     pipeline_cache_policy.h
+    pipeline_record_file.cpp
+    pipeline_record_file.h
     texture_upload_switches.h
     render_trace.h
     fsr.cpp

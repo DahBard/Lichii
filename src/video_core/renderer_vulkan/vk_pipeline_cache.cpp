@@ -8,14 +8,18 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <istream>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <streambuf>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -45,6 +49,7 @@
 #include "video_core/nx2_precompile.h"
 #include "video_core/pipeline_cache_files.h"
 #include "video_core/pipeline_cache_policy.h"
+#include "video_core/pipeline_record_file.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/mesh_fallback_limits.h"
@@ -916,6 +921,247 @@ constexpr size_t MaxPipelinesWithoutUsedList = 3000;
 // for a later precache.
 constexpr size_t PrecacheCaptureLimit = size_t{1} << 30;
 
+// EDEN_NX2_PREBUILD_STREAM (on by default, =0 off): the disk cache records of the boot builds
+// are not kept in memory from boot until a worker builds them (over a gigabyte for a large
+// cache, all of it with EDEN_NX2_PRELOAD_ALL_PIPELINES); each keeps its place in the file and is
+// read again just before its build (RecordStream). What is built, in which order, and which
+// record is tried first stay as without it.
+bool PrebuildStreamEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_PREBUILD_STREAM");
+        const bool on = value == nullptr || value[0] != '0';
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_PREBUILD_STREAM: disk cache records {}",
+                 on ? "read again for each boot build" : "kept in memory until built");
+        return on;
+    }();
+    return enabled;
+}
+
+/// An input stream over bytes in memory, for FileEnvironment::Deserialize.
+class MemoryStreamBuf final : public std::streambuf {
+public:
+    MemoryStreamBuf(char* data, size_t size) {
+        setg(data, data, data + size);
+    }
+
+protected:
+    pos_type seekoff(off_type offset, std::ios_base::seekdir dir,
+                     std::ios_base::openmode) override {
+        char* const base = eback();
+        const off_type from = dir == std::ios_base::beg   ? 0
+                              : dir == std::ios_base::cur ? gptr() - base
+                                                          : egptr() - base;
+        const off_type target = from + offset;
+        if (target < 0 || target > egptr() - base) {
+            return pos_type(off_type(-1));
+        }
+        setg(base, base + target, egptr());
+        return pos_type(target);
+    }
+    pos_type seekpos(pos_type position, std::ios_base::openmode which) override {
+        return seekoff(off_type(position), std::ios_base::beg, which);
+    }
+};
+
+/// Reads the environments of `record` again (`key_size`: the size of its key, after them), as
+/// VideoCommon::LoadPipelines read them. False when it cannot be read or is no longer the record
+/// that was there (its bytes hash differently).
+bool ReadRecordEnvs(const VideoCommon::PipelineRecordFile& file,
+                    const VideoCommon::PipelineRecord& record, size_t key_size,
+                    std::vector<FileEnvironment>& envs, std::vector<char>& buffer) {
+    const u64 size = record.end - record.begin;
+    if (record.end <= record.begin || size < sizeof(u32) + key_size || size > (u64{1} << 31)) {
+        return false;
+    }
+    buffer.resize(static_cast<size_t>(size));
+    if (!file.ReadAt(record.begin, buffer) ||
+        Common::CityHash64(buffer.data(), buffer.size()) != record.hash) {
+        return false;
+    }
+    const size_t envs_size = buffer.size() - key_size;
+    MemoryStreamBuf memory{buffer.data(), envs_size};
+    std::istream stream{&memory};
+    stream.exceptions(std::ios_base::failbit | std::ios_base::badbit);
+    try {
+        u32 num_envs{};
+        stream.read(reinterpret_cast<char*>(&num_envs), sizeof(num_envs));
+        if (num_envs == 0 || num_envs > Maxwell::MaxShaderProgram) {
+            return false;
+        }
+        envs.clear();
+        envs.resize(num_envs);
+        const std::streampos end{static_cast<std::streamoff>(envs_size)};
+        for (FileEnvironment& env : envs) {
+            env.Deserialize(stream, end);
+        }
+        // The environments end where the key begins.
+        return static_cast<u64>(std::streamoff{stream.tellg()}) == envs_size;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+/// Reader-side totals of the records read again, for the boot build's log line.
+struct StreamTotals {
+    std::atomic<u64> records{};
+    std::atomic<u64> failed{};
+    std::atomic<u64> bytes{};
+    std::atomic<u64> read_ns{};
+    std::atomic<u64> wait_ns{}; ///< Time workers waited for their records
+    std::atomic<u64> waits{};
+};
+
+/// EDEN_NX2_PREBUILD_STREAM: the records of queued builds, read again from the disk cache by one
+/// thread in the order the builds were queued, up to `window` builds ahead of the workers. A
+/// worker finds its records read already instead of waiting on the disk, and only the window is
+/// held instead of every record from boot until its build. The workers take builds in queue
+/// order (ThreadWorker is first in, first out), so at most one per worker is ahead of a waiting
+/// one, and a window over the worker count always reaches it.
+class RecordStream {
+public:
+    RecordStream(std::shared_ptr<const VideoCommon::PipelineRecordFile> file_, size_t window_)
+        : file{std::move(file_)}, window{window_} {
+        reader = std::jthread([this](std::stop_token stop) { Run(stop); });
+    }
+    ~RecordStream() {
+        reader.request_stop();
+        if (reader.joinable()) {
+            reader.join();
+        }
+    }
+    RecordStream(const RecordStream&) = delete;
+    RecordStream& operator=(const RecordStream&) = delete;
+
+    [[nodiscard]] const StreamTotals& Totals() const noexcept {
+        return totals;
+    }
+
+    /// Adds a build's records (tried in this order); returns its index for Take. Builds are
+    /// added in the order they are queued.
+    size_t Add(std::vector<VideoCommon::PipelineRecord> refs, size_t key_size) {
+        std::scoped_lock lock{mutex};
+        entries.push_back(Entry{std::move(refs), key_size});
+        changed.notify_all();
+        return entries.size() - 1;
+    }
+    /// No more builds come: the reader ends (and closes the file) once it has read them all.
+    void Seal() {
+        std::scoped_lock lock{mutex};
+        sealed = true;
+        changed.notify_all();
+    }
+
+    /// The records of build `index` (one per record added, empty for one that could not be read
+    /// again), waiting for them if the reader is behind (counted in wait_ns).
+    std::vector<std::vector<FileEnvironment>> Take(size_t index) {
+        std::unique_lock lock{mutex};
+        Entry& entry = entries[index];
+        if (entry.state != State::Ready && !finished) {
+            const auto begin = std::chrono::steady_clock::now();
+            changed.wait(lock, [&] { return entry.state == State::Ready || finished; });
+            const auto waited = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - begin);
+            totals.wait_ns.fetch_add(static_cast<u64>(waited.count()), std::memory_order_relaxed);
+            totals.waits.fetch_add(1, std::memory_order_relaxed);
+        }
+        std::vector<std::vector<FileEnvironment>> records;
+        if (entry.state == State::Ready) {
+            records = std::move(entry.records);
+            --ready;
+        }
+        entry.state = State::Taken;
+        lock.unlock();
+        changed.notify_all();
+        return records;
+    }
+
+private:
+    enum class State { Queued, Ready, Taken };
+    struct Entry {
+        std::vector<VideoCommon::PipelineRecord> refs;
+        size_t key_size{};
+        State state{State::Queued};
+        std::vector<std::vector<FileEnvironment>> records;
+    };
+
+    void Run(std::stop_token stop) {
+        Common::SetCurrentThreadName("VkRecordReader");
+        std::vector<char> buffer;
+        size_t next = 0;
+        while (!stop.stop_requested()) {
+            std::vector<VideoCommon::PipelineRecord> refs;
+            size_t key_size{};
+            {
+                std::unique_lock lock{mutex};
+                changed.wait(lock, stop, [&] {
+                    return (next < entries.size() && ready < window) ||
+                           (sealed && next >= entries.size());
+                });
+                if (stop.stop_requested() || next >= entries.size()) {
+                    break;
+                }
+                refs = entries[next].refs;
+                key_size = entries[next].key_size;
+            }
+            const auto begin = std::chrono::steady_clock::now();
+            std::vector<std::vector<FileEnvironment>> records(refs.size());
+            u64 bytes = 0;
+            for (size_t index = 0; index < refs.size(); ++index) {
+                if (ReadRecordEnvs(*file, refs[index], key_size, records[index], buffer)) {
+                    bytes += refs[index].end - refs[index].begin;
+                } else {
+                    records[index].clear();
+                    totals.failed.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            totals.records.fetch_add(refs.size(), std::memory_order_relaxed);
+            totals.bytes.fetch_add(bytes, std::memory_order_relaxed);
+            totals.read_ns.fetch_add(
+                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - begin)
+                                     .count()),
+                std::memory_order_relaxed);
+            {
+                std::scoped_lock lock{mutex};
+                Entry& entry = entries[next];
+                entry.records = std::move(records);
+                entry.state = State::Ready;
+                ++ready;
+                ++next;
+            }
+            changed.notify_all();
+        }
+        {
+            std::scoped_lock lock{mutex};
+            finished = true;
+        }
+        changed.notify_all();
+        // Nothing more to read: the file is not held open for the rest of the session.
+        file.reset();
+    }
+
+    std::shared_ptr<const VideoCommon::PipelineRecordFile> file; ///< The reader thread's
+    const size_t window;
+    StreamTotals totals;
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    std::deque<Entry> entries;
+    size_t ready{}; ///< Entries read and not taken
+    bool sealed{};
+    bool finished{};
+    std::jthread reader; ///< Last: started once the members above exist
+};
+
+/// "workers waited 0.12 s on 3 reads, 812 records (41 MiB) read in 0.40 s, 0 failed"
+std::string StreamTotalsText(const StreamTotals& totals) {
+    return fmt::format("workers waited {:.2f} s on {} reads, {} records ({:.0f} MiB) read in "
+                       "{:.2f} s, {} failed",
+                       static_cast<double>(totals.wait_ns.load()) / 1e9, totals.waits.load(),
+                       totals.records.load(),
+                       static_cast<double>(totals.bytes.load()) / (1024.0 * 1024.0),
+                       static_cast<double>(totals.read_ns.load()) / 1e9, totals.failed.load());
+}
+
 // EDEN_NX2_REKEY_FOREIGN_PIPELINES=0: cached graphics pipelines another GPU driver (or driver
 // version) stored are skipped at boot instead of loaded under this driver (see load_graphics).
 bool RekeyForeignPipelines() {
@@ -1362,39 +1608,78 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (device.IsKhrPipelineExecutablePropertiesEnabled()) {
         state.statistics = std::make_unique<PipelineStatistics>(device);
     }
+    // EDEN_NX2_PREBUILD_STREAM: the boot builds' records are read again for each build, by one
+    // thread a few builds ahead of the workers. The file is opened before the loader reads it
+    // (see PipelineRecordFile); without one there is nothing to read.
+    std::shared_ptr<RecordStream> boot_stream;
+    if (PrebuildStreamEnabled()) {
+        auto record_file =
+            std::make_shared<VideoCommon::PipelineRecordFile>(pipeline_cache_filename);
+        if (record_file->IsOpen()) {
+            boot_stream = std::make_shared<RecordStream>(std::move(record_file),
+                                                         2 * num_pipeline_workers + 8);
+        }
+    }
     const auto load_compute{[&](std::ifstream& file, FileEnvironment env) {
         ComputePipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
         VideoCommon::CheckComputeRecord(env, key.shared_memory_size, key.workgroup_size);
         compute_envs[key].push_back({std::move(env), read_record(file)});
     }};
+    const auto build_compute{[this, &state, &callback](
+                                 const ComputePipelineCacheKey& key,
+                                 std::vector<CachedComputeTranslation>& candidates) {
+        ShaderPools pools;
+        ComputePipelineCacheEntry entry;
+        size_t chosen{};
+        for (; chosen < candidates.size(); ++chosen) {
+            pools.ReleaseContents();
+            entry = CreateComputePipeline(pools, key, candidates[chosen].env,
+                                          state.statistics.get(), false);
+            if (entry.pipeline) {
+                break;
+            }
+        }
+        std::scoped_lock lock{state.mutex};
+        if (entry.pipeline) {
+            compute_cache.emplace(key, std::move(entry));
+        }
+        AddUnchosenComputeTranslations(candidates, chosen, host_info.EnvironmentReadProperties(),
+                                       state.incomplete, state.copies);
+        ++state.built;
+        if (state.has_loaded) {
+            callback(VideoCore::LoadCallbackStage::Build, state.built, state.total);
+        }
+    }};
     const auto queue_compute{[&](const ComputePipelineCacheKey& key,
                                  std::vector<CachedComputeTranslation> candidates) {
-        workers.QueueWork([this, key, candidates_ = std::move(candidates), &state,
-                           &callback]() mutable {
-            ShaderPools pools;
-            ComputePipelineCacheEntry entry;
-            size_t chosen{};
-            for (; chosen < candidates_.size(); ++chosen) {
-                pools.ReleaseContents();
-                entry = CreateComputePipeline(pools, key, candidates_[chosen].env,
-                                              state.statistics.get(), false);
-                if (entry.pipeline) {
-                    break;
+        if (boot_stream) {
+            // In the order chosen above; the environments are read again for the build. One that
+            // can't be read again is left out, as a record that doesn't load.
+            std::vector<VideoCommon::PipelineRecord> refs;
+            refs.reserve(candidates.size());
+            for (const CachedComputeTranslation& candidate : candidates) {
+                refs.push_back(candidate.record);
+            }
+            candidates.clear();
+            const size_t index = boot_stream->Add(refs, sizeof(ComputePipelineCacheKey));
+            workers.QueueWork([key, index, stream_ = boot_stream, refs_ = std::move(refs),
+                               build_compute]() mutable {
+                auto records = stream_->Take(index);
+                std::vector<CachedComputeTranslation> candidates_;
+                for (size_t i = 0; i < records.size() && i < refs_.size(); ++i) {
+                    if (!records[i].empty()) {
+                        candidates_.push_back({std::move(records[i].front()), refs_[i]});
+                    }
                 }
-            }
-            std::scoped_lock lock{state.mutex};
-            if (entry.pipeline) {
-                compute_cache.emplace(key, std::move(entry));
-            }
-            AddUnchosenComputeTranslations(candidates_, chosen,
-                                           host_info.EnvironmentReadProperties(), state.incomplete,
-                                           state.copies);
-            ++state.built;
-            if (state.has_loaded) {
-                callback(VideoCore::LoadCallbackStage::Build, state.built, state.total);
-            }
-        });
+                records.clear();
+                build_compute(key, candidates_);
+            });
+        } else {
+            workers.QueueWork([key, candidates_ = std::move(candidates), build_compute]() mutable {
+                build_compute(key, candidates_);
+            });
+        }
         ++state.total;
     }};
     // Graphics records left out, by reason: a cache recorded on another GPU or with another
@@ -1652,19 +1937,25 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         ++queued_graphics;
 
-        workers.QueueWork([this, key, envs_ = std::move(envs), record, &state,
-                           &callback]() mutable {
-            ShaderPools pools;
-            boost::container::static_vector<Shader::Environment*, Maxwell::MaxShaderProgram>
-                env_ptrs;
-            for (auto& env : envs_) {
-                env_ptrs.push_back(&env);
+        const auto build = [this, key, record, &state,
+                            &callback](std::vector<FileEnvironment>& envs_) {
+            std::unique_ptr<GraphicsPipeline> pipeline;
+            bool incomplete{};
+            // Empty when EDEN_NX2_PREBUILD_STREAM could not read the record again: left out as
+            // a record that doesn't load (a draw builds the pipeline when it needs it).
+            if (!envs_.empty()) {
+                ShaderPools pools;
+                boost::container::static_vector<Shader::Environment*, Maxwell::MaxShaderProgram>
+                    env_ptrs;
+                for (auto& env : envs_) {
+                    env_ptrs.push_back(&env);
+                }
+                pipeline = CreateGraphicsPipeline(pools, key, MakeSpan(env_ptrs),
+                                                  state.statistics.get(), false);
+                incomplete = !pipeline && std::ranges::any_of(envs_, [this](const auto& env) {
+                    return env.LacksRecordedValue(host_info.EnvironmentReadProperties());
+                });
             }
-            auto pipeline{CreateGraphicsPipeline(pools, key, MakeSpan(env_ptrs),
-                                                 state.statistics.get(), false)};
-            const bool incomplete{!pipeline && std::ranges::any_of(envs_, [this](const auto& env) {
-                return env.LacksRecordedValue(host_info.EnvironmentReadProperties());
-            })};
 
             std::scoped_lock lock{state.mutex};
             if (pipeline) {
@@ -1683,7 +1974,21 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             if (state.has_loaded) {
                 callback(VideoCore::LoadCallbackStage::Build, state.built, state.total);
             }
-        });
+        };
+        if (boot_stream) {
+            const size_t index = boot_stream->Add({record}, sizeof(GraphicsPipelineCacheKey));
+            workers.QueueWork([index, stream_ = boot_stream, build]() mutable {
+                auto records = stream_->Take(index);
+                std::vector<FileEnvironment> envs_;
+                if (!records.empty()) {
+                    envs_ = std::move(records.front());
+                }
+                records.clear();
+                build(envs_);
+            });
+        } else {
+            workers.QueueWork([envs_ = std::move(envs), build]() mutable { build(envs_); });
+        }
         ++state.total;
     }};
     VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, CACHE_VERSION, load_compute,
@@ -1693,6 +1998,9 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         queue_compute(key, std::move(candidates));
     }
     compute_envs.clear();
+    if (boot_stream) {
+        boot_stream->Seal();
+    }
 
     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
     if (PreloadAllPipelines() && queued_graphics > 10000) {
@@ -1768,6 +2076,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
 
     workers.WaitForRequests(stop_loading);
     ReportDiskRecordFailures();
+    if (boot_stream) {
+        LOG_INFO(Render_Vulkan, "Boot pipeline builds done, records read again: {}",
+                 StreamTotalsText(boot_stream->Totals()));
+        boot_stream.reset();
+    }
 
     AddIncompleteGraphics(state.incomplete_graphics, graphics_duplicates, disk_pipelines,
                           state.incomplete);

@@ -325,7 +325,7 @@ public:
     FileEnvironment(const FileEnvironment&) = delete;
 
     /// Reads an environment that must end before `end`, the end of the file
-    void Deserialize(std::ifstream& file, std::streampos end);
+    void Deserialize(std::istream& file, std::streampos end);
 
     [[nodiscard]] size_t MemorySize() const;
 
