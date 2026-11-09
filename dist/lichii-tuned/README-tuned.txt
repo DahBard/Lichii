@@ -169,6 +169,20 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    no longer crashes AMD's driver on the recipe's tessellation pipelines: upstream #820's
    emulation of noperspective varyings is reverted, as in Fritchii (it also caused white fog at
    the Hyrule Field drawbridge there).
+ * Round 20, more of Fritchii v5.2, each group with an A/B launcher that brings round 19 back:
+   - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
+     thread, so a new effect stalls the frame less; a draw whose pipeline is still building is
+     skipped only into targets the game clears every frame, so menus and one-time effects still
+     wait; boot pipelines are read from the cache file one at a time (less memory).
+   - Guest memory (ab-23): the emulated CPU's reads and writes of memory the GPU never wrote skip
+     the caches' locks, and its writes reach the GPU before the next command list, semaphore or
+     copy; the uniform bank check skips its once-a-frame compare; two #717 trims; cache
+     invalidations cover exactly the bytes written; the 12 GB guest memory section is committed
+     as the game uses it instead of all at boot.
+   - Render targets (ab-24): a render target the game moves is relocated instead of rebuilt, and
+     the chain images left behind are freed after 4 frames, timed by a render-frame clock
+     (Fritchii measured about +3 fps in Castle Town).
+   verify-r20 checks these shortcuts against the slow way while you play.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -221,6 +235,20 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-21-old-timer.bat          core timing waits as in round 19 instead of on Fritchii's
                               high-resolution timer (EDEN_HIRES_CLOCK=0), logged like
                               perf-trace.bat
+ ab-22-round19-shaders.bat    round 19's shader handling: translation on the GPU thread, every
+                              draw waits for its pipeline, boot records held in memory
+                              (EDEN_NX2_ASYNC_TRANSLATE=0, EDEN_NX2_ASYNC_DISCARD=0,
+                              EDEN_NX2_PREBUILD_STREAM=0), logged like perf-trace.bat
+ ab-23-round19-memory.bat     round 19's guest memory paths (EDEN_NX2_EXP35=0,
+                              LICHII_BANK_CHECK=1, EDEN_NX2_EXP18=0, EDEN_NX2_EXP29=0,
+                              EDEN_NX2_INVALIDATE_BLOCKS=1, EDEN_NX2_SEC_RESERVE=0), logged like
+                              perf-trace.bat
+ ab-24-round19-render-targets.bat  no render target relocation, render-frame clock or cold sweep
+                              (EDEN_NX2_EXP43=0, EDEN_NX2_RENDER_CLOCK=0,
+                              EDEN_NX2_TC_COLD_FRAMES=0), logged like perf-trace.bat
+ verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
+                              verify ... differ", tombstone hits and bank check "missed" should
+                              stay 0); slower
  verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
                               differences ("not met after the drain", "differing" and mismatch
                               counts should stay 0); slower
