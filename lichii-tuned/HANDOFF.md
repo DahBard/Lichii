@@ -24,6 +24,9 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `nx2_switches.txt` (the owner's request, round 14: each new download's copy lacked it, and r22
   booted with 6,313 of the ~19,400 cached pipelines).
 - The log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
+- Sources (the owner, round 20): upstream Lichii (zortos293/Lichii nx2 and its pull requests) and
+  Fritchii (Frizti/Lichii, branch `oot-gather-fix`, tags `fritchii-v*`) are the main influences;
+  take from other forks only for a very good reason or when the owner names one.
 - The workflow can build a CachyOS (Linux) package from the same source (round 16; it must run
   on any modern-generation Intel CPU: x86-64-v3, every Intel Core since Haswell, every Intel CPU
   since 12th gen). Since round 17 the owner wants it built only when they ask ("only commit a
@@ -72,12 +75,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (250 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (288 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (238 files,
-  1.56 MB); check it
+  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (266 files,
+  1.73 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -109,6 +112,55 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 20 (2026-11-09): upstream Lichii's open pull requests and Fritchii v5.2, the owner's two
+sources from now on (upstream nx2 had nothing past `cbb512ee7`). Round 19 was not tested; run #30
+is the next test.
+- Upstream pull requests, cherry-picked with `-x`: #970, #974, #954, #969, #998, #933, #955 (vertex
+  buffer binds skipped while still bound; our camera-motion overlay invalidates the scheduler
+  state, so its own binds can't pass for the guest's), #976 (built-in Texture Pool x2 patch for
+  the Castle Town guard house freeze with Max Resolution, and bad overlaps that a newer GPU write
+  covers freed after 4 frames, ahead of our batched collector downloads), #911 (a fence-delayed
+  payload release latches the waiting channels when the back processes it, not after a host GPU
+  round trip; merged with our latch wake-ups and acquire stats), #922 (8-64 MiB images from
+  256 MiB blocks, +6% fps measured on an RX 9070 XT), #1008, #957, #939, #1005 and #980 (Ocarina's
+  culled mesh draws from GPU-written task counts without the front reading them, ~2,000 waits a
+  second; it sits next to #805's compute list-indirect path, and its register-write hook comes
+  before our state-register fast path in `Maxwell3D::CallMethod`). From #1002 only `45523ba94`:
+  the instrumented ZBIC decoder corrupted the main NSO, the pgo-train "redump your files" error.
+- Not taken: #995 (#969 is the same fix), #984 (our translation generations are already unique),
+  #979 (the semaphore mirror is for other games, nothing in Ocarina's logs, and it changes the
+  release paths #805 rewrote), #956 and #949 (#805's semaphore view covers them), #914, #961, #971
+  (opt-in async discard only), #999, #959 (Fritchii's version taken), the rest of #1002
+  (Fritchii's timer instead; `pgo_training` already dumps every 30 s) and diagnostics, Android
+  and UI pull requests.
+- Fritchii v5.2: `050dbe618` (8f09b0fd9: a guest write waits for a GPU download landing under it
+  instead of being overwritten), the pipeline cache robustness work `6687ab37b` (slow teardown
+  waited for), `4ff78d378` (background builds stop with the game), `730629643` (driver cache
+  written during long builds), `97060abe9`, `4a9596c2c`, `98b89f131`, `5538af81b`, `d5d184e35`
+  (logs), `39f1be83b` (f52631cf6: ASTC decode and unswizzle stores bounds-checked, AMD corruption
+  and device loss), `22d96360d` (5e8db75aa: core timing on a high-resolution waitable timer,
+  `EDEN_HIRES_CLOCK=0` and ab-21 restore the old wait), `cd0d323cb` (464fbb45b: staging buffers
+  may go over the memory budget instead of aborting).
+- Not ported yet: the three porting agents stopped at the weekly usage limit (resets
+  2026-11-14 02:00 UTC). Their finished commits are in (branches `r20-fritchii-core`,
+  `r20-fritchii-shaders`); EXP35 was half done and dropped. Still to port: EXP35=2 with EXP36,
+  EXP60 and the revert of #700's accumulator half; EXP9=3 with 8b7bb3fab's node map; the EXP18=4
+  and EXP29=6 parts tuned4 lacks; EXP37; SEC_RESERVE; EXP42 and EXP43 (Fritchii: +3 fps each in
+  Castle Town) with b3396c01f, the render-frame clock and the cold sweep; d69ecefe3; the slow
+  clear log; async translation (on by default in v5.2); async discard mode 2; c62c15add,
+  166f173ab, fc6d4cab4 (prebuild streaming); #896's cheaper SSA reads.
+- Left out by choice: Fritchii's revert of #820 (its white fog was on an RTX 4080; r28 on the
+  RX 9070 XT, with #820, showed none), graphics pipeline libraries (Fritchii turns them off on
+  AMD's Windows driver), the shader warm-up (#579, needs them), precompile and the precompiled
+  fast path (#895/#896: they need a `.nx2recipe` that nobody ships, and canonical keys would
+  re-key the disk cache), UI, branding and settings revisions.
+- Shader precompile (the owner: under a minute after deleting the shaders, expected ~15): r18's
+  "Precache shaders" (#781, Ask) builds the compute programs found in the game files plus the
+  cached graphics pipelines the boot left for later, and preload-all builds every cached pipeline
+  at boot. With the shader cache deleted there is little to build, so under a minute is what it
+  does. Preparing every graphics pipeline ahead needs a pipeline cache, Fritchii's recipe or
+  #579's warm-up.
 
 Round 19 (2026-11-09), after r28's water artifact:
 - `4f2e4a70f`: the effects mask Ocarina's temporal upscale builds (pixels changed after the fog
@@ -786,9 +838,12 @@ Own changes:
    (~144,000 slow accesses a second per core; #717's trap fast paths make them cheaper, not
    fewer), parallel command recording if per-draw work still dominates the back, area-load
    stalls (ASTC decode and uploads off the back thread, #166's NUP cache).
-2. Round 19's build (run #29): check the water at the screen's edges with the default (reactive 0.5),
-   ab-19 (round 18's mask) and ab-14 (no jitter); compare ab-20 (no kernel spins) with the
-   default on the power-limited laptop (frame rate, guest core and back times). r28's
+2. Round 20's build (run #30; round 19's checks carry over): the water at the screen's edges with
+   the default (reactive 0.5), ab-19 (round 18's mask) and ab-14 (no jitter); ab-20 (no kernel
+   spins) and ab-21 (round 19's timer wait) against the default on the power-limited laptop
+   (frame rate, guest core and back times); the front's list writer and drain waits after #980
+   and #911; pgo-train should load the game now: record a session with it for an Ocarina
+   profile. After 2026-11-14: port the Fritchii items listed under round 20. r28's
    bottlenecks: the back (20.0 ms a frame: 3.78 M methods/s, 1.12 M 3D register writes that
    repeat the value, 0x586 alone 529 k/s; can the front drop them before they are queued?) and
    guest core 5 (20.0 ms, ~640 ms/s of guest code). Then: the rest of #805 (upload reordering
