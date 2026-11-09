@@ -104,11 +104,15 @@ public:
         return std::move(entry->pipeline);
     }
 
+    /// Builds not started yet are dropped, without waiting for those in progress. Callable from
+    /// any thread (the loading stop callback).
+    void RequestStop() {
+        std::scoped_lock lock{mutex};
+        stopped = true;
+    }
+
     void Stop() {
-        {
-            std::scoped_lock lock{mutex};
-            stopped = true;
-        }
+        RequestStop();
         workers.reset();
         tasks.clear();
         entries.clear();

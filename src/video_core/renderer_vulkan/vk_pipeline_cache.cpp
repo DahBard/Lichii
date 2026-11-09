@@ -25,6 +25,7 @@
 #include "common/scope_exit.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/shutdown_progress.h"
 #include "common/thread.h"
 #include "common/thread_worker.h"
 #include "core/core.h"
@@ -817,18 +818,44 @@ size_t KeptPipelines() {
 }
 } // Anonymous namespace
 
+namespace {
+/// Destroys the pipelines of `pipelines` (a map or a deque of pairs holding unique_ptrs), telling
+/// the frontend every few hundred that the teardown still moves: tens of thousands of them took
+/// longer than the frontend waited for the emulation thread.
+template <typename Container>
+void DestroyPipelinesWithProgress(Container& pipelines) {
+    constexpr size_t ProgressEvery = 256;
+    size_t destroyed = 0;
+    for (auto& entry : pipelines) {
+        entry.second.reset();
+        if (++destroyed % ProgressEvery == 0) {
+            Common::NoteShutdownProgress();
+        }
+    }
+    pipelines.clear();
+    Common::NoteShutdownProgress();
+}
+} // Anonymous namespace
+
 PipelineCache::~PipelineCache() {
+    // The stop callback goes first: it uses background_pipelines.
+    loading_stop_callback.reset();
     serialization_stop.request_stop();
     background_pipelines.Stop();
+    Common::NoteShutdownProgress();
     workers.WaitForRequests();
     serialization_thread.WaitForRequests();
+    Common::NoteShutdownProgress();
+    // The caches are written before anything slow is torn down, so a teardown cut short still
+    // leaves them on disk.
     SaveUsedPipelines();
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
     }
-    graphics_cache.clear();
-    evicted_pipelines.clear();
+    Common::NoteShutdownProgress();
+    DestroyPipelinesWithProgress(graphics_cache);
+    DestroyPipelinesWithProgress(evicted_pipelines);
 }
 
 void PipelineCache::SaveUsedPipelines() {
@@ -1560,6 +1587,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (stop_loading.stop_requested()) {
         background_pipelines.Stop();
     } else {
+        // Stopping emulation also stops the background builds at once: they would otherwise
+        // compile on until the cache is destroyed, competing with the teardown for the CPU.
+        loading_stop_callback.emplace(
+            stop_loading, std::function<void()>{[this] { background_pipelines.RequestStop(); }});
         background_pipelines.Start(std::clamp<size_t>(num_pipeline_workers / 4, 1, 2));
     }
 }
@@ -2733,7 +2764,15 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
             cache_data.resize(cache_size);
             pipeline_cache.Read(&cache_size, cache_data.data());
         }
-        file.write(cache_data.data(), cache_size);
+        Common::NoteShutdownProgress();
+        // In pieces: a cache of tens of thousands of pipelines is gigabytes, and a shutdown
+        // waiting on it is told the write still moves.
+        constexpr size_t Chunk = size_t{64} << 20;
+        for (size_t offset = 0; offset < cache_size; offset += Chunk) {
+            file.write(cache_data.data() + offset,
+                       static_cast<std::streamsize>((std::min)(Chunk, cache_size - offset)));
+            Common::NoteShutdownProgress();
+        }
         file.close();
     } catch (const std::ios_base::failure& e) {
         // The cache stays as it was: only the file being written goes.

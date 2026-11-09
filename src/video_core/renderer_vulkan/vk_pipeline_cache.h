@@ -12,10 +12,12 @@
 #include <cstddef>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include "common/container/unordered_map.h"
@@ -273,6 +275,9 @@ private:
     Common::ThreadWorker serialization_thread;
     DynamicFeatures dynamic_features;
     PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
+    /// Stops the background prebuild when the load's stop token is requested (emulation stops).
+    /// Reset first in the destructor: it uses background_pipelines.
+    std::optional<std::stop_callback<std::function<void()>>> loading_stop_callback;
 };
 
 } // namespace Vulkan
