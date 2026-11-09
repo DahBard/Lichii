@@ -1139,6 +1139,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         size_t built{};
         bool has_loaded{};
         std::unique_ptr<PipelineStatistics> statistics;
+        std::chrono::steady_clock::time_point last_save{std::chrono::steady_clock::now()};
         /// Records the load never chooses: those lacking a value the translator reads (graphics
         /// ones with their key hash), and copies of a compute translation that stays
         std::vector<VideoCommon::PipelineRecord> incomplete;
@@ -1424,6 +1425,14 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
                         if (pipeline && pipeline->Failed()) {
                             return std::unique_ptr<GraphicsPipeline>{};
                         }
+                        // These builds fill the driver cache too, but only GPU thread builds
+                        // queued its writes: a session stopped before its exit save kept none.
+                        if (pipeline) {
+                            std::scoped_lock save_lock{background_save_mutex};
+                            if (VulkanPipelineCacheSaveDue(background_last_save)) {
+                                QueueVulkanPipelineCacheSave(false);
+                            }
+                        }
                         return pipeline;
                     })) {
                 ++deferred_pipelines;
@@ -1452,6 +1461,12 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             }
             if (incomplete) {
                 state.incomplete_graphics.emplace_back(key.Hash(), record);
+            }
+            // A boot that builds tens of thousands of pipelines takes minutes: what it built so
+            // far is written now and then, so a boot that ends early (a crash, the app killed)
+            // does not leave the next one to compile everything again.
+            if (VulkanPipelineCacheSaveDue(state.last_save)) {
+                QueueVulkanPipelineCacheSave(false);
             }
             ++state.built;
             if (state.has_loaded) {
@@ -1569,11 +1584,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     }
 
     if (use_vulkan_pipeline_cache) {
-        SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
-        size_t size = 0;
-        vulkan_pipeline_cache.Read(&size, nullptr);
-        last_cache_size.store(size, std::memory_order_relaxed);
+        // On the serialization thread: for a cache of tens of thousands of pipelines, reading
+        // the driver data (gigabytes) and writing it can hold the boot at 100% long enough to
+        // look frozen. It follows any write the boot build queued.
+        QueueVulkanPipelineCacheSave(true);
         last_flush = std::chrono::steady_clock::now();
     }
 
@@ -1591,6 +1605,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         // compile on until the cache is destroyed, competing with the teardown for the CPU.
         loading_stop_callback.emplace(
             stop_loading, std::function<void()>{[this] { background_pipelines.RequestStop(); }});
+        {
+            std::scoped_lock save_lock{background_save_mutex};
+            background_last_save = std::chrono::steady_clock::now();
+        }
         background_pipelines.Start(std::clamp<size_t>(num_pipeline_workers / 4, 1, 2));
     }
 }
@@ -1734,7 +1752,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
     if (!stop_loading.stop_requested() && total_built != 0) {
         // Without this, the builds reach the file only at the next boot, game change or clean
         // close, and are lost if the app ends otherwise.
-        QueueVulkanPipelineCacheSave();
+        QueueVulkanPipelineCacheSave(true);
     }
     LOG_INFO(Render_Vulkan, "Shader precache: {}, {} built, {} failed, {} not reached, {:.1f} s",
              stop_loading.stop_requested() ? "stopped" : (skipped ? "skipped" : "finished"),
@@ -1756,35 +1774,48 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
     if (last_flush.time_since_epoch().count() != 0 && now - last_flush < interval) {
         return;
     }
-    if (flush_in_flight.exchange(true, std::memory_order_acq_rel)) {
+    if (flush_in_flight.load(std::memory_order_acquire)) {
         return;
     }
     pipelines_since_flush = 0;
     last_flush = now;
-    serialization_thread.QueueWork([this] {
-        SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
-        size_t size = 0;
-        vulkan_pipeline_cache.Read(&size, nullptr);
-        last_cache_size.store(size, std::memory_order_relaxed);
-        flush_in_flight.store(false, std::memory_order_release);
-    });
+    QueueVulkanPipelineCacheSave(false);
 }
 
-void PipelineCache::QueueVulkanPipelineCacheSave() {
+bool PipelineCache::VulkanPipelineCacheSaveDue(std::chrono::steady_clock::time_point& last) const {
+    // As QueueVulkanPipelineCacheFlush: at most once a second per MiB the cache holds, as each
+    // write copies all of it.
+    const auto now = std::chrono::steady_clock::now();
+    const auto megabytes = last_cache_size.load(std::memory_order_relaxed) / (1024 * 1024);
+    const std::chrono::seconds interval{
+        std::max<size_t>(VULKAN_CACHE_FLUSH_MIN_SECONDS, megabytes)};
+    if (now - last < interval) {
+        return false;
+    }
+    last = now;
+    return true;
+}
+
+void PipelineCache::QueueVulkanPipelineCacheSave(bool again_if_busy) {
     if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
         return;
     }
-    // Not skipped when a timed flush is in flight: that one may have read the cache before the
-    // stage's last builds. The serialization thread runs the two one after the other.
+    if (flush_in_flight.exchange(true, std::memory_order_acq_rel)) {
+        // The write under way may have read the driver data already: one more follows it.
+        if (again_if_busy) {
+            save_again.store(true, std::memory_order_release);
+        }
+        return;
+    }
     serialization_thread.QueueWork([this] {
-        SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
-        size_t size = 0;
-        vulkan_pipeline_cache.Read(&size, nullptr);
-        last_cache_size.store(size, std::memory_order_relaxed);
-        LOG_INFO(Render_Vulkan, "Driver pipeline cache saved after the shader precache, {} bytes",
-                 size);
+        do {
+            SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
+                                         CACHE_VERSION);
+            size_t size = 0;
+            vulkan_pipeline_cache.Read(&size, nullptr);
+            last_cache_size.store(size, std::memory_order_relaxed);
+        } while (save_again.exchange(false, std::memory_order_acq_rel));
+        flush_in_flight.store(false, std::memory_order_release);
     });
 }
 
