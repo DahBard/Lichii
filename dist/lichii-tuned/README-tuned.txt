@@ -145,7 +145,9 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    time (#998); the Castle Town guard house fix (#976: a built-in Texture Pool x2 patch,
    on in Add-Ons, and superseded images freed after 4 frames); smaller fixes (#957, #939,
    #1005, #1008). The pgo-train build loads the game again (#1002's part that keeps the
-   game-file decoder out of the profile instrumentation).
+   game-file decoder out of the profile instrumentation). From upstream's main branch: guest
+   memory pages that only hold zeros are taken out of RAM (#961; Ocarina boots with ~7 GB of
+   them), and the texture cache limits are logged only when they change (#951).
  * Round 20, from Fritchii v5.2: core timing waits on a high-resolution timer on Windows
    (ab-21 brings the old wait back), every ASTC decode and unswizzle store is bounds-checked
    (AMD corruption and device loss), staging buffers may go over the memory budget instead of
