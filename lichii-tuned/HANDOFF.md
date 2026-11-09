@@ -660,6 +660,9 @@ Own changes:
   - Display (LICHII_HOST_PACE=2): "present wait unavailable": AMD's driver has no
     VK_KHR_present_wait, so the host pacer can't run on this setup at all.
   - verify-r16: bank check missed 0 in every report; no mixed read differed (none checked).
+- Run #28 (round 18, Windows only; CachyOS skipped) built `pgo`, `pgo-lto` and `pgo-train`
+  (artifacts `lichii-tuned-r28-pgo` 90 MB, `-pgo-lto` 90 MB, `-pgo-train` 97 MB): the first
+  real compile and link of #805, #717's CPU parts and the jitter together. Not tested yet.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
@@ -736,7 +739,7 @@ Own changes:
    (~144,000 slow accesses a second per core; #717's trap fast paths make them cheaper, not
    fewer), parallel command recording if per-draw work still dominates the back, area-load
    stalls (ASTC decode and uploads off the back thread, #166's NUP cache).
-2. Round 18's build: compare the perf log with r27 (guest cores 4/5 26.2/24.8 ms, the back
+2. Round 18's build (run #28): compare the perf log with r27 (guest cores 4/5 26.2/24.8 ms, the back
    22.7, the front's waits ~660 ms/s). #717's codegen should lower the guest cores' "guest
    code" ms/s, #805 the front's waits; verify-r18 must log no difference, ab-15 to ab-18 tell a
    regression from the piece that caused it. Then: the rest of #805 (upload reordering
