@@ -1,9 +1,9 @@
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 000000000..2d3ce6a6d
+index 000000000..a16529884
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,267 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -160,6 +160,15 @@ index 000000000..2d3ce6a6d
 +   stops, the driver's cache is written during long builds, a slow shutdown that still makes
 +   progress is waited for instead of killed, and pipelines other builds stored are counted
 +   instead of logged as errors.
++ * Round 20, Fritchii's shader preparation: with a precompile recipe for the game (Fritchii's
++   Ocarina file is "OoT v131072 (cache v54).nx2recipe") in a "recipes" folder next to
++   lichii.exe, or in the game's shader folder, the "Precache shaders" step before the game
++   builds every pipeline the game is predicted to draw, so the GPU driver has them compiled
++   before they are first drawn: about 15 minutes the first time, asked at launch (Fritchii
++   measured Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). Pipelines
++   recorded on another GPU are converted for this one instead of skipped (Fritchii skips most
++   of them on AMD's Windows driver). Without a recipe nothing changes; EDEN_NX2_PRECOMPILE=0
++   turns it off.
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -3256,10 +3265,19 @@ index e1e50a62d..0d8ad486c 100644
 +
  } // namespace Common::Windows
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
-index 559e7850b..0b2390d1f 100644
+index 559e7850b..ce8f8b032 100644
 --- a/src/core/CMakeLists.txt
 +++ b/src/core/CMakeLists.txt
-@@ -352,6 +352,8 @@ add_library(core STATIC
+@@ -128,6 +128,8 @@ add_library(core STATIC
+     file_sys/kernel_executable.h
+     file_sys/nca_metadata.cpp
+     file_sys/nca_metadata.h
++    file_sys/nx2_shader_extract.cpp
++    file_sys/nx2_shader_extract.h
+     file_sys/partition_filesystem.cpp
+     file_sys/partition_filesystem.h
+     file_sys/patch_manager.cpp
+@@ -352,6 +354,8 @@ add_library(core STATIC
      hle/kernel/kernel.h
      hle/kernel/memory_types.h
      hle/kernel/message_buffer.h
@@ -3268,7 +3286,7 @@ index 559e7850b..0b2390d1f 100644
      hle/kernel/physical_core.cpp
      hle/kernel/physical_core.h
      hle/kernel/slab_helpers.h
-@@ -394,6 +396,10 @@ add_library(core STATIC
+@@ -394,6 +398,10 @@ add_library(core STATIC
      hle/kernel/svc/svc_thread_profiler.cpp
      hle/kernel/svc/svc_tick.cpp
      hle/kernel/svc/svc_transfer_memory.cpp
@@ -3492,7 +3510,7 @@ index b489e7956..3c6baf7e3 100644
  }
  
 diff --git a/src/core/core.cpp b/src/core/core.cpp
-index 951d99cc5..188bf8788 100644
+index 951d99cc5..13ca72954 100644
 --- a/src/core/core.cpp
 +++ b/src/core/core.cpp
 @@ -14,9 +14,11 @@
@@ -3507,7 +3525,62 @@ index 951d99cc5..188bf8788 100644
  #include "common/string_util.h"
  #include "core/arm/exclusive_monitor.h"
  #include "core/core.h"
-@@ -542,15 +544,22 @@ struct System::Impl {
+@@ -51,7 +53,9 @@
+ #include "core/hle/service/am/frontend/applets.h"
+ #include "core/hle/service/am/process_creation.h"
+ #include "core/hle/service/apm/apm_controller.h"
++#include "core/file_sys/romfs.h"
+ #include "core/hle/service/filesystem/filesystem.h"
++#include "core/hle/service/filesystem/romfs_controller.h"
+ #include "core/hle/service/glue/glue_manager.h"
+ #include "core/hle/service/glue/time/static.h"
+ #include "core/hle/service/psc/time/static.h"
+@@ -73,6 +77,7 @@
+ #include "hid_core/hid_core.h"
+ #include "network/network.h"
+ #include "video_core/host1x/host1x.h"
++#include "video_core/nx2_precompile.h"
+ #include "video_core/renderer_base.h"
+ #include "video_core/video_core.h"
+ 
+@@ -484,6 +489,27 @@ struct System::Impl {
+             cheat_engine->Initialize();
+         }
+ 
++        // EDEN_NX2_PRECOMPILE: the game's files, for assembling a precompile recipe (#895) on the
++        // pipeline cache's preparation thread. The RomFS as the process reads it, update included.
++        if (VideoCommon::Nx2Precompile::Mode() != 0) {
++            const u64 process_id = process->GetHandle()->GetProcessId();
++            VideoCommon::Nx2Precompile::SetGameFiles(
++                params.program_id, [this, process_id]() -> std::vector<FileSys::VirtualDir> {
++                    Service::FileSystem::ProgramId program{};
++                    std::shared_ptr<Service::FileSystem::SaveDataController> save;
++                    std::shared_ptr<Service::FileSystem::RomFsController> romfs;
++                    if (fs_controller.OpenProcess(&program, &save, &romfs, process_id).IsError() ||
++                        !romfs) {
++                        return {};
++                    }
++                    auto dir = FileSys::ExtractRomFS(romfs->OpenRomFSCurrentProcess());
++                    if (!dir) {
++                        return {};
++                    }
++                    return {std::move(dir)};
++                });
++        }
++
+         // Register with applet manager
+         // All threads are started, begin main process execution, now that we're in the clear
+         applet_manager.CreateAndInsertByFrontendAppletParameters(std::move(process), params);
+@@ -525,6 +551,8 @@ struct System::Impl {
+ 
+     void ShutdownMainProcess() {
+         debug_service.reset();
++        // Waits for a call in progress (it opens the RomFS, a quick step).
++        VideoCommon::Nx2Precompile::SetGameFiles(0, {});
+         SetShuttingDown(true);
+         Common::ADPF::Shutdown();
+ 
+@@ -542,15 +570,22 @@ struct System::Impl {
          Network::CancelPendingSocketOperations();
          kernel.SuspendEmulation(true);
          kernel.CloseServices();
@@ -3530,7 +3603,7 @@ index 951d99cc5..188bf8788 100644
          host1x_core.reset();
          perf_stats.reset();
          cpu_manager.Shutdown();
-@@ -625,7 +634,8 @@ struct System::Impl {
+@@ -625,7 +660,8 @@ struct System::Impl {
      std::optional<Tools::RenderdocAPI> renderdoc_api;
      std::optional<Tegra::GPU> gpu_core;
  
@@ -3540,7 +3613,7 @@ index 951d99cc5..188bf8788 100644
      std::vector<std::vector<u8>> user_channel;
      std::vector<std::vector<u8>> general_channel;
  
-@@ -693,6 +703,7 @@ bool System::IsPaused() const {
+@@ -693,6 +729,7 @@ bool System::IsPaused() const {
  
  void System::ShutdownMainProcess() {
      impl->ShutdownMainProcess();
@@ -3733,6 +3806,1032 @@ index 40ff9ef5f..1b6ecbc4e 100644
  }
  
  template <typename Traits>
+diff --git a/src/core/file_sys/nx2_shader_extract.cpp b/src/core/file_sys/nx2_shader_extract.cpp
+new file mode 100644
+index 000000000..00dfd46ac
+--- /dev/null
++++ b/src/core/file_sys/nx2_shader_extract.cpp
+@@ -0,0 +1,936 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "core/file_sys/nx2_shader_extract.h"
++
++#include <algorithm>
++#include <array>
++#include <cstring>
++#include <memory>
++#include <mutex>
++#include <optional>
++#include <stdexcept>
++#include <string_view>
++#include <thread>
++#include <tuple>
++#include <unordered_map>
++#include <unordered_set>
++
++#include <fmt/format.h>
++#include <openssl/evp.h>
++#include <zstd.h>
++
++#include "core/file_sys/vfs/vfs.h"
++
++namespace FileSys::Nx2ShaderExtract {
++namespace {
++
++constexpr size_t MaxBlob = size_t{1} << 30;       // largest file or inflated member read whole
++constexpr size_t PeekBytes = 64 * 1024;           // what a compressed file shows before inflating
++constexpr int MaxDepth = 12;
++constexpr std::array<u8, 4> ControlMagic{0x34, 0x12, 0x76, 0x98};
++constexpr std::array<u8, 8> BnshMagic{'B', 'N', 'S', 'H', 0, 0, 0, 0};
++constexpr u32 KeyControl = 0x48;                  // control bytes in a fingerprint
++
++struct Bad : std::runtime_error {
++    using std::runtime_error::runtime_error;
++};
++
++using Bytes = std::span<const u8>;
++
++template <typename T>
++T Load(Bytes data, size_t offset) {
++    if (offset > data.size() || sizeof(T) > data.size() - offset) {
++        throw Bad(fmt::format("read past the end at {:#x}", offset));
++    }
++    T value;
++    std::memcpy(&value, data.data() + offset, sizeof(T));
++    return value;
++}
++
++template <typename T>
++T LoadBE(Bytes data, size_t offset) {
++    T value = Load<T>(data, offset);
++    if constexpr (sizeof(T) == 2) {
++        return static_cast<T>((value >> 8) | (value << 8));
++    } else {
++        u32 v = static_cast<u32>(value);
++        return static_cast<T>((v >> 24) | ((v >> 8) & 0xff00) | ((v << 8) & 0xff0000) | (v << 24));
++    }
++}
++
++Bytes Sub(Bytes data, size_t offset, size_t size) {
++    if (offset > data.size() || size > data.size() - offset) {
++        throw Bad(fmt::format("range {:#x}+{:#x} past the end", offset, size));
++    }
++    return data.subspan(offset, size);
++}
++
++bool Starts(Bytes data, std::string_view magic) {
++    return data.size() >= magic.size() && std::memcmp(data.data(), magic.data(), magic.size()) == 0;
++}
++
++/// An NVN2 control section: the control magic, version 0xc9.
++bool IsNvn2Control(Bytes control) {
++    return control.size() >= KeyControl &&
++           std::memcmp(control.data(), ControlMagic.data(), 4) == 0 && control[4] == 0xc9 &&
++           control[5] == 0 && control[6] == 0 && control[7] == 0;
++}
++
++/// Compute, task and mesh by the control section's stage byte (+0x56), graphics stages by the
++/// program header at the code area's start (bits 10..13 of its first word: 1 vertex .. 5 pixel).
++std::optional<Stage> Nvn2Stage(Bytes control, Bytes code) {
++    if (control.size() > 0x56) {
++        switch (control[0x56]) {
++        case 5:
++            return Stage::Compute;
++        case 6:
++            return Stage::Task;
++        case 7:
++            return Stage::Mesh;
++        default:
++            break;
++        }
++    }
++    if (code.size() < 4) {
++        return std::nullopt;
++    }
++    switch ((Load<u32>(code, 0) >> 10) & 0xF) {
++    case 1:
++        return Stage::Vertex;
++    case 2:
++        return Stage::TessControl;
++    case 3:
++        return Stage::TessEval;
++    case 4:
++        return Stage::Geometry;
++    case 5:
++        return Stage::Fragment;
++    default:
++        return std::nullopt;
++    }
++}
++
++/// The control section names its code area's length at +0x44.
++bool Consistent(Bytes control, Bytes code) {
++    return IsNvn2Control(control) && Load<u32>(control, 0x44) == code.size();
++}
++
++class Zstd {
++public:
++    ~Zstd() {
++        for (auto& [id, dict] : dictionaries) {
++            ZSTD_freeDDict(dict);
++        }
++    }
++
++    /// The game's dictionaries (Pack/ZsDic.pack.zs: a zstd SARC of .zsdic members).
++    void AddDictionary(Bytes dictionary) {
++        const unsigned id = ZSTD_getDictID_fromDict(dictionary.data(), dictionary.size());
++        if (id == 0 || dictionaries.contains(id)) {
++            return;
++        }
++        if (ZSTD_DDict* dict = ZSTD_createDDict(dictionary.data(), dictionary.size())) {
++            dictionaries.emplace(id, dict);
++        }
++    }
++
++    const ZSTD_DDict* Dictionary(Bytes frame) const {
++        const unsigned id = ZSTD_getDictID_fromFrame(frame.data(), frame.size());
++        if (id == 0) {
++            return nullptr;
++        }
++        const auto it = dictionaries.find(id);
++        if (it == dictionaries.end()) {
++            throw Bad(fmt::format("zstd dictionary {} is missing", id));
++        }
++        return it->second;
++    }
++
++    size_t Count() const {
++        return dictionaries.size();
++    }
++
++private:
++    std::unordered_map<unsigned, ZSTD_DDict*> dictionaries;
++};
++
++bool IsZstd(Bytes data) {
++    return data.size() >= 4 && Load<u32>(data, 0) == 0xFD2FB528;
++}
++
++/// Inflates `frame`, or only its first `limit` bytes. Per thread: the context is reused.
++std::vector<u8> Inflate(const Zstd& zstd, ZSTD_DCtx* context, Bytes frame, size_t limit) {
++    ZSTD_DCtx_reset(context, ZSTD_reset_session_and_parameters);
++    if (const ZSTD_DDict* dict = zstd.Dictionary(frame)) {
++        ZSTD_DCtx_refDDict(context, dict);
++    }
++    const unsigned long long declared = ZSTD_getFrameContentSize(frame.data(), frame.size());
++    size_t reserve = limit;
++    if (declared != ZSTD_CONTENTSIZE_UNKNOWN && declared != ZSTD_CONTENTSIZE_ERROR) {
++        if (declared > MaxBlob && limit > MaxBlob) {
++            throw Bad(fmt::format("zstd content of {} bytes is too large", declared));
++        }
++        reserve = std::min<size_t>(limit, static_cast<size_t>(declared));
++    }
++    std::vector<u8> out(std::min(reserve, MaxBlob));
++    ZSTD_inBuffer in{frame.data(), frame.size(), 0};
++    size_t produced = 0;
++    while (produced < limit) {
++        if (produced == out.size()) {
++            if (out.size() >= MaxBlob) {
++                throw Bad("zstd content is too large");
++            }
++            out.resize(std::min({std::max<size_t>(out.size() * 2, 1 << 16), limit, MaxBlob}));
++        }
++        ZSTD_outBuffer o{out.data() + produced, out.size() - produced, 0};
++        const size_t status = ZSTD_decompressStream(context, &o, &in);
++        if (ZSTD_isError(status)) {
++            throw Bad(fmt::format("zstd: {}", ZSTD_getErrorName(status)));
++        }
++        produced += o.pos;
++        if (status == 0 || (in.pos == in.size && o.pos == 0)) {
++            break; // end of frame, or no more input
++        }
++    }
++    out.resize(produced);
++    return out;
++}
++
++std::vector<u8> Yaz0(Bytes data) {
++    const u32 size = LoadBE<u32>(data, 4);
++    if (size > MaxBlob) {
++        throw Bad("Yaz0 content is too large");
++    }
++    std::vector<u8> out(size);
++    size_t in = 16, o = 0;
++    while (o < size) {
++        const u8 group = Load<u8>(data, in++);
++        for (int bit = 7; bit >= 0 && o < size; --bit) {
++            if ((group >> bit) & 1) {
++                out[o++] = Load<u8>(data, in++);
++                continue;
++            }
++            const u8 b1 = Load<u8>(data, in++);
++            const u8 b2 = Load<u8>(data, in++);
++            const size_t distance = (size_t{b1 & 0xFu} << 8 | b2) + 1;
++            size_t count = b1 >> 4;
++            count = count == 0 ? size_t{Load<u8>(data, in++)} + 0x12 : count + 2;
++            if (distance > o) {
++                throw Bad("Yaz0 reference before the start");
++            }
++            for (size_t i = 0; i < count && o < size; ++i, ++o) {
++                out[o] = out[o - distance];
++            }
++        }
++    }
++    return out;
++}
++
++struct Member {
++    std::string name;
++    Bytes data;
++};
++
++std::vector<Member> Sarc(Bytes data) {
++    const bool big = Load<u16>(data, 6) == 0xFFFE; // bytes FE FF
++    const auto u16_at = [&](size_t at) { return big ? LoadBE<u16>(data, at) : Load<u16>(data, at); };
++    const auto u32_at = [&](size_t at) { return big ? LoadBE<u32>(data, at) : Load<u32>(data, at); };
++    const u16 header = u16_at(4);
++    const u32 data_offset = u32_at(12);
++    if (header < 0x14 || data_offset > data.size()) {
++        throw Bad("bad SARC header");
++    }
++    const size_t sfat = header;
++    if (!Starts(Sub(data, sfat, 4), "SFAT")) {
++        throw Bad("bad SFAT");
++    }
++    const u16 count = u16_at(sfat + 6);
++    const size_t nodes = sfat + u16_at(sfat + 4);
++    const size_t sfnt = nodes + size_t{count} * 0x10;
++    if (!Starts(Sub(data, sfnt, 4), "SFNT")) {
++        throw Bad("bad SFNT");
++    }
++    const size_t names = sfnt + u16_at(sfnt + 4);
++    std::vector<Member> members;
++    members.reserve(count);
++    for (u16 i = 0; i < count; ++i) {
++        const size_t node = nodes + size_t{i} * 0x10;
++        const u32 flags = u32_at(node + 4);
++        const u32 start = u32_at(node + 8);
++        const u32 end = u32_at(node + 12);
++        std::string name = fmt::format("{:08x}", u32_at(node));
++        if ((flags >> 24) != 0) {
++            const size_t at = names + size_t{flags & 0xFFFFFF} * 4;
++            const auto tail = Sub(data, at, std::min<size_t>(data_offset, data.size()) - at);
++            const auto zero = std::find(tail.begin(), tail.end(), u8{0});
++            name.assign(tail.begin(), zero);
++        }
++        if (end < start) {
++            throw Bad("bad SARC member range");
++        }
++        members.push_back({std::move(name), Sub(data, size_t{data_offset} + start, end - start)});
++    }
++    return members;
++}
++
++/// One extraction worker: its zstd context and the place it reports to.
++class Walker {
++public:
++    using Found = std::function<void(Stage, Bytes control, Bytes code, std::string origin,
++                                     std::string variation)>;
++
++    Walker(const Zstd& zstd_, Found found_, std::vector<std::string>& errors_, Stats& stats_)
++        : zstd{zstd_}, found{std::move(found_)}, errors{errors_}, stats{stats_},
++          context{ZSTD_createDCtx()} {}
++
++    ~Walker() {
++        ZSTD_freeDCtx(context);
++    }
++
++    void File(const VirtualFile& file, const std::string& path) {
++        const size_t size = file->GetSize();
++        ++stats.files;
++        if (size > MaxBlob) {
++            // Large media and data: only a container at the start would be read whole.
++            const auto head = file->ReadBytes(PeekBytes, 0);
++            stats.file_bytes += head.size();
++            if (!LooksLikeContainer(head)) {
++                return;
++            }
++            errors.push_back(path + ": container larger than 1 GiB was not read");
++            return;
++        }
++        const std::vector<u8> data = file->ReadAllBytes();
++        stats.file_bytes += data.size();
++        Guard(path, [&] { Top(data, path); });
++    }
++
++private:
++    template <typename F>
++    void Guard(const std::string& where, F&& f) {
++        try {
++            f();
++        } catch (const Bad& e) {
++            errors.push_back(where + ": " + e.what());
++        }
++    }
++
++    static bool LooksLikeContainer(Bytes head) {
++        if (head.size() < 8) {
++            return false;
++        }
++        for (const std::string_view magic :
++             {"SARC", "Yaz0", "BNSH", "FSHA", "BAHS", "NDSR", "NDVE", "YB", "BY"}) {
++            if (Starts(head, magic)) {
++                return true;
++            }
++        }
++        return IsZstd(head) ||
++               std::search(head.begin(), head.end(), BnshMagic.begin(), BnshMagic.end()) !=
++                   head.end();
++    }
++
++    /// A RomFS file: a compressed one is inflated only if its start shows a container.
++    void Top(Bytes data, const std::string& label) {
++        if (IsZstd(data)) {
++            const auto head = Inflate(zstd, context, data, PeekBytes);
++            if (!LooksLikeContainer(head) || IsZstd(head)) {
++                ++stats.peeked_only;
++                return;
++            }
++            const auto inner = Inflate(zstd, context, data, MaxBlob);
++            stats.inflated_bytes += inner.size();
++            Walk(inner, label, 1);
++            return;
++        }
++        Walk(data, label, 0);
++    }
++
++    void Walk(Bytes data, const std::string& label, int depth) {
++        if (depth > MaxDepth || data.size() < 8) {
++            return;
++        }
++        if (IsZstd(data)) {
++            const auto inner = Inflate(zstd, context, data, MaxBlob);
++            stats.inflated_bytes += inner.size();
++            Walk(inner, label, depth + 1);
++        } else if (Starts(data, "Yaz0")) {
++            const auto inner = Yaz0(data);
++            stats.inflated_bytes += inner.size();
++            Walk(inner, label, depth + 1);
++        } else if (Starts(data, "SARC")) {
++            ++stats.containers;
++            for (const auto& member : Sarc(data)) {
++                const std::string where = label + "/" + member.name;
++                Guard(where, [&] { Walk(member.data, where, depth + 1); });
++            }
++        } else if (Starts(data, "BAHS")) {
++            ++stats.containers;
++            Bahs(data, label);
++        } else if (Starts(data, "NDSR")) {
++            ++stats.containers;
++            Ndsr(data, label);
++        } else if (Starts(data, "NDVE")) {
++            ++stats.containers;
++            Ndve(data, label);
++        } else {
++            // BNSH files, and BNSH inside other data (BFSHA archives, effect bundles, layouts).
++            if (!EmbeddedBnsh(data, label)) {
++                SeadPrimitive(data, label);
++            }
++        }
++    }
++
++    void Emit(Stage stage, Bytes control, Bytes code, std::string origin, std::string variation) {
++        ++stats.occurrences;
++        found(stage, control, code, std::move(origin), std::move(variation));
++    }
++
++    bool EmbeddedBnsh(Bytes data, const std::string& label) {
++        bool any = false;
++        auto it = data.begin();
++        while ((it = std::search(it, data.end(), BnshMagic.begin(), BnshMagic.end())) !=
++               data.end()) {
++            const size_t base = static_cast<size_t>(it - data.begin());
++            const size_t size =
++                base + 0x20 <= data.size() ? size_t{Load<u32>(data, base + 0x1c)} : 0;
++            const bool bounded = size >= 0x98 && size <= data.size() - base;
++            if (bounded) {
++                Guard(fmt::format("{}#BNSH@{:#x}", label, base), [&] {
++                    Bnsh(Sub(data, base, size), label, base);
++                    any = true;
++                    ++stats.containers;
++                });
++            }
++            it += static_cast<std::ptrdiff_t>(bounded ? size : 8);
++        }
++        return any;
++    }
++
++    // BNSH: +0x60 'grsc', +0x7c variation count, +0x80 variation table; a variation is 0x40
++    // bytes with its program at +0x10; a program has six stage pointers from +0x08 (vertex,
++    // hull, domain, geometry, pixel, compute) and NVN2's task and mesh at +0x40 and +0x48; a
++    // stage record has its control at +0x08, code at +0x10, code length +0x18, control length
++    // +0x1c. All pointers count from the BNSH start.
++    void Bnsh(Bytes d, const std::string& label, size_t base) {
++        if (!Starts(Sub(d, 0x60, 4), "grsc")) {
++            throw Bad("no grsc block");
++        }
++        const u32 count = Load<u32>(d, 0x7c);
++        const u64 table = Load<u64>(d, 0x80);
++        static constexpr std::array slots{Stage::Vertex,   Stage::TessControl, Stage::TessEval,
++                                          Stage::Geometry, Stage::Fragment,    Stage::Compute};
++        for (u32 v = 0; v < count; ++v) {
++            const u64 program = Load<u64>(d, table + 0x40 * u64{v} + 0x10);
++            if (program == 0) {
++                continue;
++            }
++            const std::string variation = fmt::format("{}#BNSH@{:#x}#var{}", label, base, v);
++            const auto stage_at = [&](u64 record, Stage stage, bool optional) {
++                const u64 control_at = Load<u64>(d, record + 0x08);
++                const u64 code_at = Load<u64>(d, record + 0x10);
++                const u32 code_size = Load<u32>(d, record + 0x18);
++                const u32 control_size = Load<u32>(d, record + 0x1c);
++                if (optional && (control_size < KeyControl || control_size >= 0x10000 ||
++                                 control_at + control_size > d.size() ||
++                                 code_at + code_size > d.size())) {
++                    return;
++                }
++                const auto control = Sub(d, control_at, control_size);
++                const auto code = Sub(d, code_at, code_size);
++                if (optional) {
++                    const u8 expected = stage == Stage::Task ? 6 : 7;
++                    if (!IsNvn2Control(control) || control.size() <= 0x56 ||
++                        control[0x56] != expected) {
++                        return;
++                    }
++                }
++                if (!Consistent(control, code)) {
++                    throw Bad(fmt::format("variation {} {}: control +0x44 does not match the code",
++                                          v, StageName(stage)));
++                }
++                Emit(stage, control, code, variation, variation);
++            };
++            for (size_t slot = 0; slot < slots.size(); ++slot) {
++                const u64 record = Load<u64>(d, program + 8 + 8 * slot);
++                if (record != 0) {
++                    stage_at(record, slots[slot], false);
++                }
++            }
++            for (const auto& [offset, stage] :
++                 {std::pair{u64{0x40}, Stage::Task}, std::pair{u64{0x48}, Stage::Mesh}}) {
++                if (program + offset + 8 > d.size()) {
++                    continue;
++                }
++                const u64 record = Load<u64>(d, program + offset);
++                if (record != 0 && record + 0x20 <= d.size()) {
++                    stage_at(record, stage, true);
++                }
++            }
++        }
++    }
++
++    // agl's BAHS (sharcb): +0x18 code region length, +0x1c code region start. A program entry
++    // in the area before it is u32 code offset (multiple of 0x100), u32 0, u32 control length,
++    // i32 distance to the control section. An NVN2 section's +0x38..+0x47 reads as such an
++    // entry, so entries inside a found control section are dropped (nxnative: Ocarina of
++    // Time's agl_common.sharcb@0x357f0).
++    void Bahs(Bytes d, const std::string& label) {
++        const u32 region_size = Load<u32>(d, 0x18);
++        const u32 region = Load<u32>(d, 0x1c);
++        if (size_t{region} + region_size > d.size()) {
++            throw Bad("BAHS code region out of bounds");
++        }
++        struct Entry {
++            size_t at, control_at;
++            Stage stage;
++            Bytes control, code;
++        };
++        std::vector<Entry> entries;
++        for (size_t a = 0; a + 16 < region; a += 4) {
++            const u32 offset = Load<u32>(d, a);
++            const u32 zero = Load<u32>(d, a + 4);
++            const u32 control_size = Load<u32>(d, a + 8);
++            const s32 distance = Load<s32>(d, a + 12);
++            if (zero != 0 || offset % 0x100 != 0 || control_size < KeyControl ||
++                control_size >= 0x10000) {
++                continue;
++            }
++            const s64 control_at = static_cast<s64>(a) + distance;
++            if (control_at < 0 || static_cast<u64>(control_at) + control_size > region) {
++                continue;
++            }
++            const auto control = d.subspan(static_cast<size_t>(control_at), control_size);
++            if (!IsNvn2Control(control)) {
++                continue;
++            }
++            const u32 code_size = Load<u32>(control, 0x44);
++            if (u64{offset} + code_size > region_size) {
++                continue;
++            }
++            const auto code = d.subspan(size_t{region} + offset, code_size);
++            const auto stage = Nvn2Stage(control, code);
++            if (!stage) {
++                continue;
++            }
++            entries.push_back({a, static_cast<size_t>(control_at), *stage, control, code});
++        }
++        std::vector<const Entry*> kept;
++        for (const auto& entry : entries) {
++            const bool inside = std::any_of(entries.begin(), entries.end(), [&](const Entry& e) {
++                return e.control_at <= entry.at && entry.at < e.control_at + KeyControl;
++            });
++            if (!inside) {
++                kept.push_back(&entry);
++            }
++        }
++        std::vector<size_t> taken;
++        for (const Entry* entry : kept) {
++            taken.push_back(entry->at);
++        }
++        const auto variations = BahsVariations(d, label, taken);
++        for (const Entry* entry : kept) {
++            const std::string where = fmt::format("{}#BAHS@{:#x}", label, entry->at);
++            const auto it = variations.find(entry->at);
++            Emit(entry->stage, entry->control, entry->code, where,
++                 it != variations.end() ? it->second : where);
++        }
++    }
++
++    // The variations of a BAHS file's programs. Right before the first entry is a binary array
++    // (u32 byte size, u32 count, then per binary: u32 record size, u32 kind (0 vertex, 1
++    // fragment, 3 compute), two u32, the 16-byte entry), and right after it a program array (u32
++    // byte size, u32 count, then per program: u32 record size, u32 name length, u32 stage mask,
++    // u32 index of its first binary, ...). A program's binaries run to the next program's first;
++    // its n-th vertex and n-th fragment binary are one variation. Arrays that do not read back
++    // give no variations (nxnative: bahs_variations).
++    static std::unordered_map<size_t, std::string> BahsVariations(Bytes d, const std::string& label,
++                                                                  const std::vector<size_t>& taken) {
++        std::unordered_map<size_t, std::string> result;
++        if (taken.empty()) {
++            return result;
++        }
++        const s64 slack = std::max<s64>(1, static_cast<s64>(taken.size()) / 100);
++        const size_t first = *std::min_element(taken.begin(), taken.end());
++        if (first < 0x18 + 0x20) {
++            return result;
++        }
++        const size_t array = first - 0x18;
++        const u32 array_size = Load<u32>(d, array);
++        const u32 array_count = Load<u32>(d, array + 4);
++        if (u64{array} + array_size + 8 > d.size() ||
++            static_cast<s64>(array_count) < static_cast<s64>(taken.size()) - slack) {
++            return result;
++        }
++        struct Record {
++            size_t entry;
++            u32 kind;
++        };
++        std::vector<Record> records;
++        size_t o = array + 8;
++        for (u32 i = 0; i < array_count; ++i) {
++            if (o + 0x20 > array + array_size) {
++                return result;
++            }
++            const u32 size = Load<u32>(d, o);
++            if (size < 0x20) {
++                return result;
++            }
++            records.push_back({o + 0x10, Load<u32>(d, o + 4)});
++            o += size;
++        }
++        const auto in_records = [&](size_t at) {
++            return std::any_of(records.begin(), records.end(),
++                               [&](const Record& r) { return r.entry == at; });
++        };
++        const s64 outside = std::count_if(taken.begin(), taken.end(),
++                                          [&](size_t at) { return !in_records(at); });
++        if (o != array + array_size || outside > slack) {
++            return result;
++        }
++        const u32 programs_size = Load<u32>(d, o);
++        const u32 programs = Load<u32>(d, o + 4);
++        if (u64{o} + programs_size > d.size() || programs == 0) {
++            return result;
++        }
++        std::vector<u32> bases;
++        size_t q = o + 8;
++        for (u32 p = 0; p < programs; ++p) {
++            if (q + 16 > o + programs_size) {
++                return result;
++            }
++            const u32 size = Load<u32>(d, q);
++            const u32 base = Load<u32>(d, q + 12);
++            if (size < 16 || base > array_count || (!bases.empty() && base < bases.back())) {
++                return result;
++            }
++            bases.push_back(base);
++            q += size;
++        }
++        if (q != o + programs_size) {
++            return result;
++        }
++        bases.push_back(array_count);
++        const std::unordered_set<size_t> taken_set(taken.begin(), taken.end());
++        for (u32 p = 0; p < programs; ++p) {
++            std::array<u32, 2> seen{};
++            for (u32 i = bases[p]; i < bases[p + 1]; ++i) {
++                const auto& record = records[i];
++                if (record.kind > 1) {
++                    continue; // compute and the other kinds pair with nothing
++                }
++                if (taken_set.contains(record.entry)) {
++                    result.emplace(record.entry, fmt::format("{}#BAHS#prog{}#var{}", label, p,
++                                                             seen[record.kind]));
++                }
++                ++seen[record.kind];
++            }
++        }
++        return result;
++    }
++
++    // agl's NDSR pack: 16-byte records from +0x10 (or +0x14) up to a zero one: u32 control
++    // offset, u32 control length << 4 | type, u32 code offset, u32. Records not pointing at a
++    // control section hold data and may shift the next by 8. A vertex record is followed by its
++    // pixel record.
++    void Ndsr(Bytes d, const std::string& label) {
++        const auto points_at_control = [&](size_t at) {
++            return u64{at} + KeyControl <= d.size() && IsNvn2Control(d.subspan(at, KeyControl));
++        };
++        const auto score = [&](size_t start) {
++            int n = 0;
++            for (size_t i = 0; i < 16 && start + 16 * i + 16 <= d.size(); ++i) {
++                n += points_at_control(Load<u32>(d, start + 16 * i)) ? 1 : 0;
++            }
++            return n;
++        };
++        size_t o = score(0x14) > score(0x10) ? 0x14 : 0x10;
++        std::string vertex;
++        while (o + 16 <= d.size()) {
++            const u32 control_at = Load<u32>(d, o);
++            const u32 control_word = Load<u32>(d, o + 4);
++            const u32 code_at = Load<u32>(d, o + 8);
++            const u32 last = Load<u32>(d, o + 12);
++            if ((control_at | control_word | code_at | last) == 0) {
++                break;
++            }
++            if (!points_at_control(control_at)) {
++                o += 8;
++                continue;
++            }
++            o += 16;
++            const size_t control_size = std::max<size_t>(control_word >> 4, KeyControl);
++            if (u64{control_at} + control_size > d.size()) {
++                continue;
++            }
++            const auto control = d.subspan(control_at, control_size);
++            const u32 code_size = Load<u32>(control, 0x44);
++            if (u64{code_at} + code_size > d.size()) {
++                continue;
++            }
++            const auto code = d.subspan(code_at, code_size);
++            const auto stage = Nvn2Stage(control, code);
++            if (!stage || !Consistent(control, code)) {
++                continue;
++            }
++            const std::string where = fmt::format("{}#NDSR@{:#x}", label, control_at);
++            std::string variation = where;
++            if (*stage == Stage::Vertex) {
++                vertex = where;
++            } else if (*stage == Stage::Fragment && !vertex.empty()) {
++                variation = vertex; // the pair is labelled by its vertex record
++                vertex.clear();
++            }
++            Emit(*stage, control, code, where, variation);
++        }
++    }
++
++    // nn::ndve's movie enhancement file: +0xc length of its NDSR pack, +0x14 count of 8-byte
++    // model records, then the pack, then the networks: control sections each naming their own
++    // length (+0x30) and their code area's (+0x44), the code area right behind.
++    void Ndve(Bytes d, const std::string& label) {
++        const size_t pack = 0x18 + 8 * size_t{Load<u32>(d, 0x14)};
++        const size_t networks = pack + Load<u32>(d, 0xc);
++        Ndsr(Sub(d, pack, networks - pack), label);
++        for (size_t c = (networks + 3) & ~size_t{3}; c + KeyControl <= d.size(); c += 4) {
++            if (std::memcmp(d.data() + c, ControlMagic.data(), 4) != 0 ||
++                !IsNvn2Control(d.subspan(c, KeyControl))) {
++                continue;
++            }
++            const u32 own = Load<u32>(d, c + 0x30);
++            const u32 code_size = Load<u32>(d, c + 0x44);
++            if (own < KeyControl || c + own + code_size > d.size()) {
++                continue;
++            }
++            const auto control = d.subspan(c, own);
++            const auto code = d.subspan(c + own, code_size);
++            if (const auto stage = Nvn2Stage(control, code)) {
++                const std::string where = fmt::format("{}#NDVE@{:#x}", label, c);
++                Emit(*stage, control, code, where, where);
++            }
++        }
++    }
++
++    // sead's NVN2 primitive drawer: four u32 offsets (vertex control, pixel control, vertex
++    // code, pixel code); each control section names its own length (+0x30) and its code's (+0x44).
++    void SeadPrimitive(Bytes d, const std::string& label) {
++        if (d.size() < 0x10 || d.size() > (1u << 20)) {
++            return;
++        }
++        const u32 vc = Load<u32>(d, 0), pc = Load<u32>(d, 4), vk = Load<u32>(d, 8),
++                  pk = Load<u32>(d, 12);
++        struct Piece {
++            Stage stage;
++            Bytes control, code;
++        };
++        std::vector<Piece> pieces;
++        for (const auto& [stage, c, k] : {std::tuple{Stage::Vertex, vc, vk},
++                                          std::tuple{Stage::Fragment, pc, pk}}) {
++            if (c < 0x10 || u64{c} + KeyControl > d.size() ||
++                !IsNvn2Control(d.subspan(c, KeyControl))) {
++                return;
++            }
++            const u32 own = std::max<u32>(Load<u32>(d, c + 0x30), KeyControl);
++            if (u64{c} + own > d.size()) {
++                return;
++            }
++            const auto control = d.subspan(c, own);
++            const u32 n = Load<u32>(control, 0x44);
++            if (u64{k} + n > d.size()) {
++                return;
++            }
++            const auto code = d.subspan(k, n);
++            if (Nvn2Stage(control, code) != stage) {
++                return;
++            }
++            pieces.push_back({stage, control, code});
++        }
++        ++stats.containers;
++        const std::string variation = fmt::format("{}#SEADPRIM", label);
++        for (const auto& piece : pieces) {
++            Emit(piece.stage, piece.control, piece.code, variation, variation);
++        }
++    }
++
++    const Zstd& zstd;
++    Found found;
++    std::vector<std::string>& errors;
++    Stats& stats;
++    ZSTD_DCtx* context;
++};
++
++struct FileItem {
++    VirtualFile file;
++    std::string path;
++};
++
++void Collect(const VirtualDir& dir, const std::string& path, std::vector<FileItem>& out) {
++    for (const auto& file : dir->GetFiles()) {
++        out.push_back({file, path + "/" + file->GetName()});
++    }
++    for (const auto& sub : dir->GetSubdirectories()) {
++        Collect(sub, path + "/" + sub->GetName(), out);
++    }
++}
++
++void LoadDictionaries(const std::span<const VirtualDir> roots, Zstd& zstd) {
++    ZSTD_DCtx* context = ZSTD_createDCtx();
++    for (const auto& root : roots) {
++        const auto pack = root ? root->GetDirectoryRelative("Pack") : nullptr;
++        const auto file = pack ? pack->GetFile("ZsDic.pack.zs") : nullptr;
++        if (!file) {
++            continue;
++        }
++        try {
++            const auto bytes = file->ReadAllBytes();
++            const auto sarc = Inflate(zstd, context, bytes, MaxBlob);
++            for (const auto& member : Sarc(sarc)) {
++                if (member.data.size() >= 4 && Load<u32>(member.data, 0) == 0xEC30A437) {
++                    zstd.AddDictionary(member.data);
++                }
++            }
++        } catch (const Bad&) {
++        }
++    }
++    ZSTD_freeDCtx(context);
++}
++
++} // Anonymous namespace
++
++const char* StageName(Stage stage) noexcept {
++    switch (stage) {
++    case Stage::Vertex:
++        return "vertex";
++    case Stage::TessControl:
++        return "hull";
++    case Stage::TessEval:
++        return "domain";
++    case Stage::Geometry:
++        return "geometry";
++    case Stage::Fragment:
++        return "pixel";
++    case Stage::Compute:
++        return "compute";
++    case Stage::Task:
++        return "task";
++    case Stage::Mesh:
++        return "mesh";
++    }
++    return "unknown";
++}
++
++u64 Fingerprint(std::span<const u8> control, std::span<const u8> code) {
++    std::array<u8, KeyControl> key{};
++    std::memcpy(key.data(), control.data(), std::min<size_t>(control.size(), KeyControl));
++    std::memset(key.data() + 0x30, 0, 4);
++    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
++    std::array<u8, 32> digest{};
++    unsigned length = 0;
++    if (!ctx || EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr) != 1 ||
++        EVP_DigestUpdate(ctx.get(), key.data(), key.size()) != 1 ||
++        EVP_DigestUpdate(ctx.get(), code.data(), code.size()) != 1 ||
++        EVP_DigestFinal_ex(ctx.get(), digest.data(), &length) != 1) {
++        throw std::runtime_error("SHA-256 failed");
++    }
++    u64 value = 0;
++    for (int i = 0; i < 8; ++i) {
++        value = value << 8 | digest[i]; // the first 16 hex digits, as nxnative prints them
++    }
++    return value;
++}
++
++Result Extract(std::span<const VirtualDir> roots, unsigned threads, Progress* progress,
++               std::stop_token stop) {
++    Zstd zstd;
++    LoadDictionaries(roots, zstd);
++    std::vector<FileItem> files;
++    for (const auto& root : roots) {
++        if (root) {
++            Collect(root, "", files);
++        }
++    }
++    if (progress) {
++        progress->files_total = files.size();
++    }
++
++    Result result;
++    std::mutex mutex;
++    struct Seen {
++        u32 index;
++        size_t file; ///< the earliest file it was found in decides its origin
++    };
++    std::unordered_map<u64, Seen> seen;
++    std::unordered_map<std::string, size_t> variation_index;
++
++    const unsigned count =
++        threads ? threads : std::max(1u, std::thread::hardware_concurrency());
++    std::atomic<size_t> next{0};
++    std::vector<std::vector<std::string>> errors(count);
++    std::vector<Stats> stats(count);
++    const auto work = [&](unsigned worker) {
++        size_t current = 0;
++        Walker walker(
++            zstd,
++            [&](Stage stage, Bytes control, Bytes code, std::string origin, std::string variation) {
++                // Only the control bytes a fingerprint covers matter to the program; keep them all
++                // (the translator reads up to the section's own length).
++                const u64 fp = Fingerprint(control, code);
++                std::scoped_lock lock{mutex};
++                auto [it, inserted] = seen.try_emplace(fp, Seen{0, current});
++                if (inserted) {
++                    it->second.index = static_cast<u32>(result.programs.size());
++                    result.programs.push_back({stage, fp, {control.begin(), control.end()},
++                                               {code.begin(), code.end()}, origin});
++                } else if (current < it->second.file) {
++                    it->second.file = current;
++                    result.programs[it->second.index].origin = origin;
++                }
++                auto [v, added] = variation_index.try_emplace(variation, result.variations.size());
++                if (added) {
++                    result.variations.push_back({std::move(variation), {}});
++                }
++                auto& members = result.variations[v->second].programs;
++                if (std::find(members.begin(), members.end(), it->second.index) == members.end()) {
++                    members.push_back(it->second.index);
++                }
++            },
++            errors[worker], stats[worker]);
++        while (!stop.stop_requested()) {
++            current = next.fetch_add(1);
++            if (current >= files.size()) {
++                break;
++            }
++            try {
++                walker.File(files[current].file, files[current].path);
++            } catch (const std::exception& e) {
++                errors[worker].push_back(files[current].path + ": " + e.what());
++            }
++            if (progress) {
++                progress->files_done.fetch_add(1, std::memory_order_relaxed);
++            }
++        }
++    };
++    {
++        std::vector<std::jthread> pool;
++        for (unsigned i = 0; i < count; ++i) {
++            pool.emplace_back(work, i);
++        }
++    }
++    for (unsigned i = 0; i < count; ++i) {
++        result.errors.insert(result.errors.end(), errors[i].begin(), errors[i].end());
++        result.stats.files += stats[i].files;
++        result.stats.file_bytes += stats[i].file_bytes;
++        result.stats.inflated_bytes += stats[i].inflated_bytes;
++        result.stats.peeked_only += stats[i].peeked_only;
++        result.stats.containers += stats[i].containers;
++        result.stats.occurrences += stats[i].occurrences;
++    }
++    if (zstd.Count() == 0) {
++        result.errors.push_back("Pack/ZsDic.pack.zs: no zstd dictionaries (files that need one "
++                                "are reported as missing their dictionary)");
++    }
++    return result;
++}
++
++} // namespace FileSys::Nx2ShaderExtract
+diff --git a/src/core/file_sys/nx2_shader_extract.h b/src/core/file_sys/nx2_shader_extract.h
+new file mode 100644
+index 000000000..aa1d0b366
+--- /dev/null
++++ b/src/core/file_sys/nx2_shader_extract.h
+@@ -0,0 +1,78 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Finds the NVN2 (Switch 2) shader programs a game ships, by their content: every RomFS file is
++// read, zstd (with the game's dictionaries) and Yaz0 are undone, SARC archives are expanded, and
++// BNSH (shader archives, effect bundles, layouts), agl BAHS packs, agl NDSR packs, nn::ndve movie
++// files and sead's primitive drawer are parsed; other data is searched for embedded BNSH.
++//
++// Programs are cut as the game's GPU reads them (control section, then code area of the length
++// the control section names at +0x44) and fingerprinted like nxnative's shader_split.py
++// (github.com/seedds/nxnative, MIT): SHA-256 of the first 0x48 control bytes with +0x30..+0x33
++// zeroed, then the code area; the first 8 bytes. Format notes are from that script and from
++// tools/nx2/shader_archive.py.
++
++#pragma once
++
++#include <atomic>
++#include <functional>
++#include <span>
++#include <stop_token>
++#include <string>
++#include <vector>
++
++#include "common/common_types.h"
++#include "core/file_sys/vfs/vfs_types.h"
++
++namespace FileSys::Nx2ShaderExtract {
++
++enum class Stage : u8 { Vertex, TessControl, TessEval, Geometry, Fragment, Compute, Task, Mesh };
++
++[[nodiscard]] const char* StageName(Stage stage) noexcept;
++
++struct Program {
++    Stage stage{};
++    u64 fingerprint{};
++    std::vector<u8> control;
++    std::vector<u8> code;
++    /// Where it was first found: "/RomFS/path[/member]#KIND@offset[#varN]".
++    std::string origin;
++};
++
++/// The programs one variation of a shader program draws together (a BNSH variation, a
++/// vertex/pixel pair of an NDSR pack): indices into Result::programs.
++struct Variation {
++    std::string label;
++    std::vector<u32> programs;
++};
++
++struct Stats {
++    u64 files{};
++    u64 file_bytes{};          ///< bytes of RomFS files read
++    u64 inflated_bytes{};      ///< bytes produced by zstd and Yaz0
++    u64 peeked_only{};         ///< compressed files whose content held no container
++    u64 containers{};          ///< SARC, BNSH, BAHS, NDSR, NDVE, sead files parsed
++    u64 occurrences{};         ///< programs found, before removing duplicates
++};
++
++struct Result {
++    std::vector<Program> programs;   ///< one per fingerprint
++    std::vector<Variation> variations;
++    std::vector<std::string> errors; ///< "origin: reason", for data that looked like a container
++    Stats stats;
++};
++
++struct Progress {
++    std::atomic<u64> files_done{};
++    u64 files_total{};
++};
++
++/// Directories are scanned in order (base game first, then updates and add-ons); a program found
++/// in several keeps its first origin. `threads` 0 uses the hardware's.
++[[nodiscard]] Result Extract(std::span<const VirtualDir> roots, unsigned threads = 0,
++                             Progress* progress = nullptr, std::stop_token stop = {});
++
++/// The fingerprint of one program (see the file comment).
++[[nodiscard]] u64 Fingerprint(std::span<const u8> control, std::span<const u8> code);
++
++} // namespace FileSys::Nx2ShaderExtract
 diff --git a/src/core/file_sys/patch_manager.cpp b/src/core/file_sys/patch_manager.cpp
 index 84643b1fe..3ad39fce1 100644
 --- a/src/core/file_sys/patch_manager.cpp
@@ -11908,7 +13007,7 @@ index 6059b70ee..e6f9bc49e 100644
 +          "the reads did not take both the gathered and the in-place path");
  }
 diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
-index 95e646640..6b0010bdf 100644
+index 95e646640..91de63d43 100644
 --- a/src/video_core/CMakeLists.txt
 +++ b/src/video_core/CMakeLists.txt
 @@ -62,6 +62,9 @@ add_library(video_core STATIC
@@ -11937,9 +13036,14 @@ index 95e646640..6b0010bdf 100644
      guest_memory.h
      invalidation_accumulator.h
      memory_manager.cpp
-@@ -117,8 +122,13 @@ add_library(video_core STATIC
+@@ -116,9 +121,18 @@ add_library(video_core STATIC
+     nx2.h
      nx2_cmdpage_diag.h
      nx2_debug_control.cpp
++    nx2_precompile.cpp
++    nx2_precompile.h
++    nx2_recipe.cpp
++    nx2_recipe.h
      nx2_debug_control.h
 +    nx2_drain_check.h
 +    nx2_entry_check.h
@@ -11951,7 +13055,7 @@ index 95e646640..6b0010bdf 100644
      nx2_profile.h
      nx2_perf.h
      nx2_download_trace.h
-@@ -126,6 +136,7 @@ add_library(video_core STATIC
+@@ -126,6 +140,7 @@ add_library(video_core STATIC
      present.h
      pte_kind.h
      query_cache/bank_base.h
@@ -11959,7 +13063,7 @@ index 95e646640..6b0010bdf 100644
      query_cache/query_base.h
      query_cache/query_cache_base.h
      query_cache/query_cache.h
-@@ -172,7 +183,10 @@ add_library(video_core STATIC
+@@ -172,7 +187,10 @@ add_library(video_core STATIC
      renderer_vulkan/framebuffer_limits.h
      renderer_vulkan/maxwell_to_vk.cpp
      renderer_vulkan/maxwell_to_vk.h
@@ -11970,7 +13074,7 @@ index 95e646640..6b0010bdf 100644
      renderer_vulkan/pipeline_build_trace.h
      renderer_vulkan/pipeline_helper.h
      renderer_vulkan/pipeline_optimization.h
-@@ -192,6 +206,8 @@ add_library(video_core STATIC
+@@ -192,6 +210,8 @@ add_library(video_core STATIC
      renderer_vulkan/vk_compute_pass.h
      renderer_vulkan/vk_fsr3_upscaler.cpp
      renderer_vulkan/vk_fsr3_upscaler.h
@@ -11979,7 +13083,7 @@ index 95e646640..6b0010bdf 100644
      renderer_vulkan/vk_dlss_network_probe.cpp
      renderer_vulkan/vk_dlss_network_probe.h
      renderer_vulkan/vk_ocarina_camera_motion.cpp
-@@ -220,11 +236,14 @@ add_library(video_core STATIC
+@@ -220,11 +240,14 @@ add_library(video_core STATIC
      renderer_vulkan/vk_pipeline_cache_records.h
      renderer_vulkan/vk_present_manager.cpp
      renderer_vulkan/vk_present_manager.h
@@ -11994,7 +13098,7 @@ index 95e646640..6b0010bdf 100644
      renderer_vulkan/vk_render_pass_cache.cpp
      renderer_vulkan/vk_render_pass_cache.h
      renderer_vulkan/vk_resource_pool.cpp
-@@ -471,7 +490,8 @@ endif()
+@@ -471,7 +494,8 @@ endif()
  
  target_link_libraries(video_core PUBLIC common core)
  if(WIN32)
@@ -12004,7 +13108,7 @@ index 95e646640..6b0010bdf 100644
  endif()
  
  # Shader precache builder: game archives use zstd (also with dictionaries) and zlib.
-@@ -492,6 +512,8 @@ target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
+@@ -492,6 +516,8 @@ target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
  
  add_dependencies(video_core host_shaders)
  target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
@@ -25956,6 +27060,458 @@ index 0fe16cfb8..b71250cf8 100644
 +inline std::atomic<long long> g_host_phase_ns{-1};
 +
  } // namespace VideoCommon::Nx2Perf
+diff --git a/src/video_core/nx2_precompile.cpp b/src/video_core/nx2_precompile.cpp
+new file mode 100644
+index 000000000..6c6140926
+--- /dev/null
++++ b/src/video_core/nx2_precompile.cpp
+@@ -0,0 +1,356 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "video_core/nx2_precompile.h"
++
++#include <algorithm>
++#include <chrono>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <mutex>
++#include <span>
++#include <string>
++#include <system_error>
++#include <thread>
++
++#include <fmt/format.h>
++
++#include "common/cityhash.h"
++#include "common/fs/path_util.h"
++#include "common/logging.h"
++#include "core/file_sys/nx2_shader_extract.h"
++
++namespace VideoCommon::Nx2Precompile {
++namespace {
++
++/// The executable's folder (Common::FS::GetExeDirectory is Windows-only).
++std::filesystem::path ExeDirectory() {
++#ifdef _WIN32
++    return Common::FS::GetExeDirectory();
++#else
++    std::error_code error;
++    const auto exe = std::filesystem::read_symlink("/proc/self/exe", error);
++    return error ? std::filesystem::current_path(error) : exe.parent_path();
++#endif
++}
++
++std::mutex g_game_files_mutex;
++u64 g_game_files_title{};
++GameFiles g_game_files;
++
++/// Size and last write time of a file, as text, or empty when it cannot be read.
++std::string FileStamp(const std::filesystem::path& path) {
++    std::error_code error;
++    const auto size = std::filesystem::file_size(path, error);
++    if (error) {
++        return {};
++    }
++    const auto time = std::filesystem::last_write_time(path, error);
++    if (error) {
++        return {};
++    }
++    return fmt::format("{} {}", size, time.time_since_epoch().count());
++}
++
++/// <file>.recipe.txt: the recipe a precompiled file was assembled from, by its size and the
++/// hash of its bytes. Not its path nor its time: a recipe beside the exe moves with every build
++/// folder, and a rewritten file there would change the precompiled file's time, which the
++/// prepared stamp holds (the whole preparation would run again for the same pipelines).
++std::filesystem::path SourcePath(const std::filesystem::path& precompiled) {
++    auto path = precompiled;
++    path += ".recipe.txt";
++    return path;
++}
++
++std::string SourceText(const Recipe& recipe) {
++    return fmt::format("recipe {} {:016x}\n", recipe.size, recipe.content_hash);
++}
++
++/// The note as builds before 2026-11-09 wrote it: the recipe's path and its size and time.
++std::string LegacySourceText(const std::filesystem::path& recipe) {
++    return fmt::format("{}\n{}\n", Common::FS::PathToUTF8String(recipe), FileStamp(recipe));
++}
++
++/// Whether the file at `path` holds exactly `bytes`.
++bool SameBytes(const std::filesystem::path& path, std::span<const u8> bytes) {
++    std::error_code error;
++    if (std::filesystem::file_size(path, error) != bytes.size() || error) {
++        return false;
++    }
++    std::ifstream file(path, std::ios::binary);
++    std::vector<char> chunk(size_t{1} << 20);
++    size_t at = 0;
++    while (at < bytes.size()) {
++        const size_t wanted = std::min(chunk.size(), bytes.size() - at);
++        if (!file.read(chunk.data(), static_cast<std::streamsize>(wanted)) ||
++            std::memcmp(chunk.data(), bytes.data() + at, wanted) != 0) {
++            return false;
++        }
++        at += wanted;
++    }
++    return true;
++}
++
++std::optional<std::vector<u8>> ReadWholeFile(const std::filesystem::path& path) {
++    std::ifstream file(path, std::ios::binary);
++    if (!file) {
++        return std::nullopt;
++    }
++    std::vector<u8> bytes{std::istreambuf_iterator<char>(file), {}};
++    if (file.bad()) {
++        return std::nullopt;
++    }
++    return bytes;
++}
++
++} // Anonymous namespace
++
++int Mode() {
++    static const int mode = [] {
++        const char* value = std::getenv("EDEN_NX2_PRECOMPILE");
++        if (value == nullptr || *value == '\0') {
++            // On by default since 2026-11-09 (owner, with the Fritchii "Preparing shaders" screen):
++            // OoT first visit with an empty cache, prepared vs cold driver cache: worst walking
++            // freezes ~700-850 ms -> 40-70 ms, 35 -> 43 fps. Only runs when a recipe exists.
++            // EDEN_NX2_PRECOMPILE=0 turns it off.
++            return 1;
++        }
++        return std::clamp(std::atoi(value), 0, 2);
++    }();
++    return mode;
++}
++
++bool Forced() {
++    const char* value = std::getenv("EDEN_NX2_PRECOMPILED_FORCE");
++    return value != nullptr && value[0] == '1';
++}
++
++unsigned Threads() {
++    static const unsigned threads = [] {
++        if (const char* value = std::getenv("EDEN_NX2_PRECOMPILE_THREADS")) {
++            return static_cast<unsigned>(std::clamp(std::atoi(value), 1, 16));
++        }
++        return std::clamp(std::thread::hardware_concurrency() / 4, 1U, 6U);
++    }();
++    return threads;
++}
++
++void SetGameFiles(u64 title_id, GameFiles files) {
++    std::scoped_lock lock{g_game_files_mutex};
++    g_game_files_title = files ? title_id : 0;
++    g_game_files = std::move(files);
++}
++
++std::vector<FileSys::VirtualDir> OpenGameFiles(u64 title_id) {
++    std::scoped_lock lock{g_game_files_mutex};
++    if (!g_game_files || g_game_files_title != title_id) {
++        return {};
++    }
++    return g_game_files();
++}
++
++std::filesystem::path PrecompiledPath(const std::filesystem::path& title_dir, u32 cache_version) {
++    return title_dir / fmt::format("precompiled.fork-v{}.nx2prep", cache_version);
++}
++
++std::filesystem::path PreparedStampPath(const std::filesystem::path& title_dir,
++                                        u32 cache_version) {
++    return title_dir / fmt::format("precompiled_prepared.fork-v{}.txt", cache_version);
++}
++
++bool PreparationPending(u64 title_id, u32 cache_version) {
++    if (Mode() == 0 || title_id == 0) {
++        return false;
++    }
++    const auto title_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
++                           fmt::format("{:016x}", title_id);
++    std::error_code error;
++    if (std::filesystem::exists(PreparedStampPath(title_dir, cache_version), error)) {
++        return false;
++    }
++    return std::filesystem::exists(PrecompiledPath(title_dir, cache_version), error) ||
++           FindRecipe(title_id, title_dir, cache_version).has_value();
++}
++
++std::optional<Recipe> FindRecipe(u64 title_id, const std::filesystem::path& title_dir,
++                                 u32 cache_version) {
++    std::vector<std::filesystem::path> candidates;
++    if (const char* forced = std::getenv("EDEN_NX2_PRECOMPILE_RECIPE");
++        forced != nullptr && *forced != '\0') {
++        candidates.emplace_back(forced);
++    }
++    for (const auto& folder : {title_dir, ExeDirectory() / "recipes"}) {
++        std::error_code error;
++        std::vector<std::filesystem::path> found;
++        for (std::filesystem::directory_iterator it{folder, error}, end; !error && it != end;
++             it.increment(error)) {
++            if (it->path().extension() == ".nx2recipe") {
++                found.push_back(it->path());
++            }
++        }
++        // The same order on every boot, whatever the directory listing gives.
++        std::ranges::sort(found);
++        candidates.insert(candidates.end(), found.begin(), found.end());
++    }
++    for (const auto& path : candidates) {
++        const auto bytes = ReadWholeFile(path);
++        if (!bytes) {
++            LOG_WARNING(Render_Vulkan, "Precompile recipe {} cannot be read",
++                        Common::FS::PathToUTF8String(path));
++            continue;
++        }
++        const auto header = Nx2Recipe::ReadHeader(*bytes);
++        if (!header || header->title_id != title_id) {
++            continue;
++        }
++        if (header->cache_version != cache_version) {
++            LOG_WARNING(Render_Vulkan,
++                        "Precompile recipe {} is for pipeline cache version {}, this build uses "
++                        "{}: it needs a recipe made for this build",
++                        Common::FS::PathToUTF8String(path), header->cache_version, cache_version);
++            continue;
++        }
++        return Recipe{path, *header, bytes->size(),
++                      Common::CityHash64(reinterpret_cast<const char*>(bytes->data()),
++                                         bytes->size())};
++    }
++    return std::nullopt;
++}
++
++std::filesystem::path EnsurePrecompiledFile(u64 title_id, const std::filesystem::path& title_dir,
++                                            u32 cache_version, std::stop_token stop) {
++    const auto precompiled = PrecompiledPath(title_dir, cache_version);
++    std::error_code error;
++    const bool have_file = std::filesystem::exists(precompiled, error);
++    const auto recipe = FindRecipe(title_id, title_dir, cache_version);
++    if (!recipe) {
++        if (!have_file) {
++            LOG_INFO(Render_Vulkan,
++                     "Precompiled pipelines: no {} and no recipe for {:016X} (looked in {} and {})",
++                     precompiled.filename().string(), title_id,
++                     Common::FS::PathToUTF8String(title_dir),
++                     Common::FS::PathToUTF8String(ExeDirectory() / "recipes"));
++            return {};
++        }
++        return precompiled;
++    }
++    if (have_file) {
++        // A file without the note was put there by hand (or by tools/nx2-precompile): it is the
++        // player's, and wins. One assembled from this very recipe is current.
++        std::ifstream note(SourcePath(precompiled), std::ios::binary);
++        if (!note) {
++            return precompiled;
++        }
++        const std::string previous{std::istreambuf_iterator<char>(note), {}};
++        if (previous == SourceText(*recipe)) {
++            return precompiled;
++        }
++        if (previous == LegacySourceText(recipe->path)) {
++            // The same recipe, noted the old way: noted again, the file stays.
++            note.close();
++            std::ofstream rewritten(SourcePath(precompiled), std::ios::binary | std::ios::trunc);
++            rewritten << SourceText(*recipe);
++            return precompiled;
++        }
++        LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} changed, assembling it again",
++                 Common::FS::PathToUTF8String(recipe->path));
++    }
++
++    const auto begin = std::chrono::steady_clock::now();
++    const auto seconds = [&begin] {
++        return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
++    };
++    const auto roots = OpenGameFiles(title_id);
++    if (roots.empty()) {
++        LOG_WARNING(Render_Vulkan, "Precompiled pipelines: the game's files cannot be read, "
++                                   "the recipe is not assembled");
++        return have_file ? precompiled : std::filesystem::path{};
++    }
++    const auto recipe_bytes = ReadWholeFile(recipe->path);
++    if (!recipe_bytes) {
++        return have_file ? precompiled : std::filesystem::path{};
++    }
++    LOG_INFO(Render_Vulkan,
++             "Precompiled pipelines: assembling {} (game version {}) with this copy of the game "
++             "on {} threads",
++             Common::FS::PathToUTF8String(recipe->path), recipe->header.game_version, Threads());
++    std::vector<u8> assembled;
++    Nx2Recipe::Report report;
++    try {
++        const auto programs = FileSys::Nx2ShaderExtract::Extract(roots, Threads(), nullptr, stop);
++        if (stop.stop_requested()) {
++            return {};
++        }
++        LOG_INFO(Render_Vulkan,
++                 "Precompiled pipelines: {} shader programs found in {} files ({} MB) in {:.1f} s",
++                 programs.programs.size(), programs.stats.files,
++                 programs.stats.file_bytes >> 20, seconds());
++        assembled = Nx2Recipe::Assemble(*recipe_bytes, programs, cache_version, report, Threads());
++    } catch (const std::exception& e) {
++        LOG_ERROR(Render_Vulkan, "Precompiled pipelines: assembling the recipe failed: {}",
++                  e.what());
++        return have_file ? precompiled : std::filesystem::path{};
++    }
++    if (stop.stop_requested() || assembled.empty()) {
++        return {};
++    }
++    if (have_file && SameBytes(precompiled, assembled)) {
++        // The same file again (the recipe was copied or moved, not changed): it is left as it
++        // is, so its time and the preparation made for it stay valid.
++        std::ofstream note(SourcePath(precompiled), std::ios::binary | std::ios::trunc);
++        note << SourceText(*recipe);
++        LOG_INFO(Render_Vulkan,
++                 "Precompiled pipelines: {} assembled again in {:.1f} s, the same as before: kept",
++                 precompiled.filename().string(), seconds());
++        return precompiled;
++    }
++    // The file is large (Ocarina of Time: 1.17 GB); a full disk must not end with half of one.
++    const auto space = std::filesystem::space(title_dir, error);
++    if (!error && space.available < assembled.size() + (u64{512} << 20)) {
++        LOG_WARNING(Render_Vulkan,
++                    "Precompiled pipelines: {} MB needed and {} MB free in {}, not written",
++                    assembled.size() >> 20, space.available >> 20,
++                    Common::FS::PathToUTF8String(title_dir));
++        return have_file ? precompiled : std::filesystem::path{};
++    }
++    auto temporary = precompiled;
++    temporary += ".tmp";
++    {
++        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
++        file.write(reinterpret_cast<const char*>(assembled.data()),
++                   static_cast<std::streamsize>(assembled.size()));
++        file.close();
++        if (!file) {
++            std::filesystem::remove(temporary, error);
++            LOG_ERROR(Render_Vulkan, "Precompiled pipelines: {} cannot be written",
++                      Common::FS::PathToUTF8String(temporary));
++            return have_file ? precompiled : std::filesystem::path{};
++        }
++    }
++    std::filesystem::rename(temporary, precompiled, error);
++    if (error) {
++        std::filesystem::remove(temporary, error);
++        LOG_ERROR(Render_Vulkan, "Precompiled pipelines: {} cannot be renamed",
++                  Common::FS::PathToUTF8String(temporary));
++        return have_file ? precompiled : std::filesystem::path{};
++    }
++    {
++        std::ofstream note(SourcePath(precompiled), std::ios::binary | std::ios::trunc);
++        note << SourceText(*recipe);
++    }
++    LOG_INFO(Render_Vulkan,
++             "Precompiled pipelines: assembled {} ({} MB) in {:.1f} s: {} pipelines, {} programs "
++             "({} not in this copy of the game, {} not lowered), {} environments, {} render "
++             "states, {} records dropped",
++             precompiled.filename().string(), assembled.size() >> 20, seconds(), report.records,
++             report.programs, report.programs_missing, report.programs_failed,
++             report.environments, report.states, report.records_dropped);
++    for (size_t i = 0; i < std::min<size_t>(report.errors.size(), 8); ++i) {
++        LOG_DEBUG(Render_Vulkan, "Precompiled pipelines: {}", report.errors[i]);
++    }
++    return precompiled;
++}
++
++} // namespace VideoCommon::Nx2Precompile
+diff --git a/src/video_core/nx2_precompile.h b/src/video_core/nx2_precompile.h
+new file mode 100644
+index 000000000..5267010ae
+--- /dev/null
++++ b/src/video_core/nx2_precompile.h
+@@ -0,0 +1,84 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Fritchii's automatic side of zortos293/Lichii#895: finds a title's precompiled pipeline file
++// (precompiled.fork-v<N>.nx2prep, as #895 places it) or a precompile recipe for it, and assembles
++// the recipe with the running game's own files when the file is missing or older than the recipe.
++// PipelineCache::PreparePrecompiled then builds the file's pipelines in the background.
++//
++// Recipes are looked for, in order:
++//   1. EDEN_NX2_PRECOMPILE_RECIPE=<file>
++//   2. the title's shader folder, <data>/shader/<title id>/*.nx2recipe (where the file goes)
++//   3. a recipes folder next to the executable, <exe dir>/recipes/*.nx2recipe
++// A recipe is used when its header names this title and this build's pipeline cache version.
++
++#pragma once
++
++#include <filesystem>
++#include <functional>
++#include <optional>
++#include <stop_token>
++#include <vector>
++
++#include "common/common_types.h"
++#include "core/file_sys/vfs/vfs_types.h"
++#include "video_core/nx2_recipe.h"
++
++namespace VideoCommon::Nx2Precompile {
++
++/// EDEN_NX2_PRECOMPILE: 0 (the default) off; 1 prepares a title's precompiled pipelines in the
++/// background where the driver keeps a pipeline cache of its own (NVIDIA, AMD's proprietary
++/// driver); 2 also on other drivers. Read when first asked, after nx2_switches.txt is applied.
++[[nodiscard]] int Mode();
++
++/// EDEN_NX2_PRECOMPILED_FORCE=1 (#895's switch): prepare again although the stamp says it is done.
++[[nodiscard]] bool Forced();
++
++/// Threads that extract, assemble and prepare: EDEN_NX2_PRECOMPILE_THREADS (1 to 16), else a
++/// quarter of the host's, 1 to 6, like the background pipeline builds.
++[[nodiscard]] unsigned Threads();
++
++/// The game's RomFS as the running process reads it (a NUP's update laid over its base, or the
++/// patched RomFS). Set by core when an application loads, cleared when it shuts down.
++using GameFiles = std::function<std::vector<FileSys::VirtualDir>()>;
++void SetGameFiles(u64 title_id, GameFiles files);
++
++/// The running title's files, empty when another title (or none) is running. The call holds the
++/// lock core's shutdown clears the provider under, so it never runs into a teardown.
++[[nodiscard]] std::vector<FileSys::VirtualDir> OpenGameFiles(u64 title_id);
++
++/// <title_dir>/precompiled.fork-v<cache_version>.nx2prep
++[[nodiscard]] std::filesystem::path PrecompiledPath(const std::filesystem::path& title_dir,
++                                                    u32 cache_version);
++
++/// <title_dir>/precompiled_prepared.fork-v<cache_version>.txt: the file, driver, GPU and release
++/// a preparation built every record for (PipelineCache::AddPrecompiledJobs).
++[[nodiscard]] std::filesystem::path PreparedStampPath(const std::filesystem::path& title_dir,
++                                                      u32 cache_version);
++
++/// A recipe or precompiled file for this title that no preparation finished yet: the desktop app
++/// asks before the game starts, as for a title never precached.
++[[nodiscard]] bool PreparationPending(u64 title_id, u32 cache_version);
++
++struct Recipe {
++    std::filesystem::path path;
++    Nx2Recipe::Header header;
++    /// Its size and a hash of its bytes: what the precompiled file's note remembers, so the same
++    /// recipe found elsewhere (a new build's folder) or copied again is not assembled again.
++    u64 size{};
++    u64 content_hash{};
++};
++
++/// The recipe for this title and cache version, searched as the file comment lists.
++[[nodiscard]] std::optional<Recipe> FindRecipe(u64 title_id, const std::filesystem::path& title_dir,
++                                               u32 cache_version);
++
++/// The precompiled file to prepare: the title's own file when it is there and was not assembled
++/// from an older recipe, else one assembled now from the recipe and the running game's files
++/// (written through a temporary file). Empty when there is neither. Takes tens of seconds and
++/// about the file's size in memory while it assembles: call it off the UI and GPU threads.
++[[nodiscard]] std::filesystem::path EnsurePrecompiledFile(u64 title_id,
++                                                          const std::filesystem::path& title_dir,
++                                                          u32 cache_version, std::stop_token stop);
++
++} // namespace VideoCommon::Nx2Precompile
 diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
 index 8d3c1e3d9..8456d5573 100644
 --- a/src/video_core/nx2_profile.h
@@ -26312,6 +27868,943 @@ index 8d3c1e3d9..8456d5573 100644
      data.window_start = now;
      data.window_start_ticks = now_ticks;
      data.cpu_start_ns = cpu_now;
+diff --git a/src/video_core/nx2_recipe.cpp b/src/video_core/nx2_recipe.cpp
+new file mode 100644
+index 000000000..5360fa1be
+--- /dev/null
++++ b/src/video_core/nx2_recipe.cpp
+@@ -0,0 +1,824 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "video_core/nx2_recipe.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cstring>
++#include <map>
++#include <stdexcept>
++#include <thread>
++#include <unordered_map>
++#include <unordered_set>
++
++#include <fmt/format.h>
++
++#include "common/cityhash.h"
++#include "common/zstd_compression.h"
++#include "shader_recompiler/frontend/ampere/instruction.h"
++#include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
++#include "shader_recompiler/frontend/ampere/program_address_map.h"
++#include "shader_recompiler/frontend/ampere/program_capture.h"
++#include "shader_recompiler/frontend/ampere/program_override.h"
++#include "shader_recompiler/program_header.h"
++
++namespace VideoCommon::Nx2Recipe {
++namespace {
++
++namespace X = FileSys::Nx2ShaderExtract;
++using Shader::Stage;
++using Shader::Ampere::Instruction;
++
++constexpr u64 NativeHashTag = 0x4f554e4345000002ULL; // shader_environment.cpp NativeShaderHash
++constexpr size_t SphSize = sizeof(Shader::ProgramHeader);
++constexpr size_t NativeHeaderSize = 128;
++constexpr size_t EnvHeaderSize = 76;    // GenericEnvironment::Serialize up to the code
++constexpr size_t GraphicsKeySize = 1056;
++constexpr size_t KeyHashesSize = 48;    // six u64 shader hashes at the start of a graphics key
++constexpr size_t StateSize = GraphicsKeySize - KeyHashesSize;
++constexpr size_t ComputeKeySize = 24;
++constexpr u32 Format = 1;
++constexpr std::string_view RecipeMagic{"NX2RCP01"};
++constexpr std::string_view PrecompiledMagic{"NX2PREP1"};
++
++using Bytes = std::span<const u8>;
++
++template <typename T>
++T Load(Bytes bytes, size_t offset) {
++    if (offset > bytes.size() || sizeof(T) > bytes.size() - offset) {
++        throw std::runtime_error(fmt::format("truncated input at {:#x}", offset));
++    }
++    T value;
++    std::memcpy(&value, bytes.data() + offset, sizeof(T));
++    return value;
++}
++
++struct Writer {
++    std::vector<u8> bytes;
++    template <typename T>
++    void Put(const T& value) {
++        const auto* p = reinterpret_cast<const u8*>(&value);
++        bytes.insert(bytes.end(), p, p + sizeof(T));
++    }
++    void Put(Bytes data) {
++        bytes.insert(bytes.end(), data.begin(), data.end());
++    }
++    void Put(const std::vector<u8>& data) {
++        bytes.insert(bytes.end(), data.begin(), data.end());
++    }
++    void Put(const char* data, size_t n) {
++        bytes.insert(bytes.end(), reinterpret_cast<const u8*>(data),
++                     reinterpret_cast<const u8*>(data) + n);
++    }
++    void Zeros(size_t n) {
++        bytes.insert(bytes.end(), n, u8{0});
++    }
++};
++
++struct Reader {
++    Bytes bytes;
++    size_t at = 0;
++    template <typename T>
++    T Get() {
++        const T value = Load<T>(bytes, at);
++        at += sizeof(T);
++        return value;
++    }
++    Bytes Take(size_t n) {
++        if (n > bytes.size() - at) {
++            throw std::runtime_error("truncated input");
++        }
++        const auto part = bytes.subspan(at, n);
++        at += n;
++        return part;
++    }
++};
++
++template <typename F>
++void ParallelFor(size_t count, unsigned threads, F&& body) {
++    const unsigned n = threads ? threads : std::max(1u, std::thread::hardware_concurrency());
++    std::atomic<size_t> next{0};
++    std::vector<std::jthread> pool;
++    for (unsigned t = 0; t < n; ++t) {
++        pool.emplace_back([&] {
++            for (size_t i; (i = next.fetch_add(1)) < count;) {
++                body(i);
++            }
++        });
++    }
++}
++
++/// Where a serialized environment's parts are (GenericEnvironment::Serialize).
++struct EnvParts {
++    Stage stage{};
++    size_t code_end{};   ///< the code is [EnvHeaderSize, code_end)
++    size_t tables_end{}; ///< then the fact tables
++    size_t end{};        ///< then compute's workgroup and shared size, or the program header and
++                         ///< what follows it (geometry pass-through mask, mesh registers)
++};
++
++EnvParts Parse(Bytes env, bool has_code) {
++    EnvParts parts;
++    const u64 code_size = has_code ? Load<u64>(env, 0) : 0;
++    const u64 types = Load<u64>(env, 8), formats = Load<u64>(env, 16), cbufs = Load<u64>(env, 24),
++              pointers = Load<u64>(env, 32), replacements = Load<u64>(env, 40);
++    parts.stage = static_cast<Stage>(Load<u32>(env, 72));
++    parts.code_end = EnvHeaderSize + code_size;
++    parts.tables_end = parts.code_end + types * 8 + formats * 8 + cbufs * 12 + pointers * 9 +
++                       replacements * 12;
++    parts.end = env.size();
++    if (code_size % 8 != 0 || parts.tables_end > parts.end) {
++        throw std::runtime_error("bad shader environment");
++    }
++    return parts;
++}
++
++/// The pass-through geometry header a mesh program's code area holds (control +0x68 bit 7, at the
++/// offset +0x64 gives), as a mesh draw's environment records it.
++std::optional<std::array<u8, SphSize>> MeshHeader(const X::Program& mesh) {
++    const auto& control = mesh.control;
++    if (control.size() <= 0x68 || !(control[0x68] & 0x80)) {
++        return std::nullopt;
++    }
++    const u32 at = Load<u32>(control, 0x64);
++    if (u64{at} + SphSize > mesh.code.size()) {
++        return std::nullopt;
++    }
++    std::array<u8, SphSize> header;
++    std::memcpy(header.data(), mesh.code.data() + at, SphSize);
++    return header;
++}
++
++// Fact set flags. Bit 0 is not used: a recipe never carries a program header.
++constexpr u8 MeshHeaderFromCode = 2; ///< a mesh environment's geometry header, taken from the code
++constexpr size_t PassthroughMaskSize = 32; // GenericEnvironment gp_passthrough_mask
++constexpr size_t MeshRegistersSize = 12;   // GenericEnvironment mesh_registers
++constexpr size_t ComputeTailSize = 16;     // workgroup size and shared memory size
++constexpr size_t CodeWindow = 32;
++
++bool Dense(Bytes window) {
++    return std::count_if(window.begin(), window.end(), [](u8 b) { return b != 0; }) >=
++           static_cast<std::ptrdiff_t>(window.size() / 2);
++}
++
++u64 WindowHash(const u8* data) {
++    return Common::CityHash64(reinterpret_cast<const char*>(data), CodeWindow);
++}
++
++/// Whether `facts` hold any 32 bytes of `code` (at an 8-byte step of the code, and dense: at least
++/// half its bytes not zero, as instructions are, where mostly zero header fields can match the
++/// facts' small numbers by chance).
++bool HoldsCode(Bytes facts, Bytes code) {
++    std::unordered_set<u64> windows;
++    for (size_t at = 0; at + CodeWindow <= code.size(); at += 8) {
++        if (Dense(code.subspan(at, CodeWindow))) {
++            windows.insert(WindowHash(code.data() + at));
++        }
++    }
++    for (size_t at = 0; at + CodeWindow <= facts.size(); at += 4) {
++        if (windows.contains(WindowHash(facts.data() + at))) {
++            return true;
++        }
++    }
++    return false;
++}
++
++bool AllZero(Bytes bytes) {
++    return std::all_of(bytes.begin(), bytes.end(), [](u8 b) { return b == 0; });
++}
++
++struct Program {
++    const X::Program* source{};
++    std::optional<Lowered> lowered;
++    std::string error;
++};
++
++std::vector<u8> Compress(Bytes body) {
++    Writer out;
++    out.Put(RecipeMagic.data(), RecipeMagic.size());
++    out.Put(static_cast<u32>(body.size()));
++    out.Put(u32{0});
++    out.Put(Common::Compression::CompressDataZSTD(body.data(), body.size(), 19));
++    return std::move(out.bytes);
++}
++
++std::vector<u8> Decompress(Bytes recipe) {
++    if (recipe.size() < 16 || std::memcmp(recipe.data(), RecipeMagic.data(), 8) != 0) {
++        throw std::runtime_error("not a precompile recipe");
++    }
++    const u32 size = Load<u32>(recipe, 8);
++    auto body = Common::Compression::DecompressDataZSTD(recipe.subspan(16));
++    if (body.size() != size) {
++        throw std::runtime_error("damaged precompile recipe");
++    }
++    return body;
++}
++
++std::vector<CodeMatch> FindCodeInBody(Bytes body, const X::Result& extracted, unsigned threads) {
++    std::unordered_map<u64, size_t> windows;
++    for (size_t at = 0; at + CodeWindow <= body.size(); ++at) {
++        if (Dense(body.subspan(at, CodeWindow))) {
++            windows.try_emplace(WindowHash(body.data() + at), at);
++        }
++    }
++    std::vector<std::vector<CodeMatch>> found(extracted.programs.size());
++    ParallelFor(extracted.programs.size(), threads, [&](size_t i) {
++        const auto& p = extracted.programs[i];
++        for (const Bytes part : {Bytes{p.control}, Bytes{p.code}}) {
++            for (size_t at = 0; at + CodeWindow <= part.size(); at += 4) {
++                const auto it = windows.find(WindowHash(part.data() + at));
++                if (it != windows.end() &&
++                    std::memcmp(body.data() + it->second, part.data() + at, CodeWindow) == 0 &&
++                    Dense(part.subspan(at, CodeWindow))) {
++                    found[i].push_back({p.fingerprint, at, it->second});
++                }
++            }
++        }
++    });
++    std::vector<CodeMatch> matches;
++    for (auto& f : found) {
++        matches.insert(matches.end(), f.begin(), f.end());
++    }
++    return matches;
++}
++
++} // Anonymous namespace
++
++std::vector<CodeMatch> FindGameCode(std::span<const u8> recipe, const X::Result& programs,
++                                    unsigned threads) {
++    return FindCodeInBody(Decompress(recipe), programs, threads);
++}
++
++template <typename T>
++static void PutRaw(Writer& w, const T* data, size_t n) {
++    w.Put(Bytes{reinterpret_cast<const u8*>(data), n});
++}
++
++u64 NativeShaderHash(std::span<const u64> code) {
++    return Common::CityHash64(reinterpret_cast<const char*>(code.data()),
++                              code.size() * sizeof(u64)) ^
++           NativeHashTag;
++}
++
++Shader::Stage StageOf(X::Stage stage) noexcept {
++    switch (stage) {
++    case X::Stage::Vertex:
++        return Stage::VertexB;
++    case X::Stage::TessControl:
++        return Stage::TessellationControl;
++    case X::Stage::TessEval:
++        return Stage::TessellationEval;
++    case X::Stage::Geometry:
++        return Stage::Geometry;
++    case X::Stage::Fragment:
++        return Stage::Fragment;
++    case X::Stage::Compute:
++        return Stage::Compute;
++    case X::Stage::Task:
++        return Stage::Task;
++    case X::Stage::Mesh:
++        return Stage::Mesh;
++    }
++    return Stage::VertexB;
++}
++
++std::optional<Lowered> Lower(Stage stage, std::span<const u8> control, std::span<const u8> code_area,
++                             std::string& error) {
++    const bool compute = stage == Stage::Compute;
++    Shader::ProgramHeader sph{};
++    size_t start = 0;
++    size_t available = 0;
++    if (compute) {
++        if (control.size() < 0x3c) {
++            error = "short control section";
++            return std::nullopt;
++        }
++        available = std::min<size_t>(Load<u32>(control, 56), code_area.size());
++    } else {
++        if (code_area.size() <= NativeHeaderSize) {
++            error = "short code area";
++            return std::nullopt;
++        }
++        std::memcpy(&sph, code_area.data(), SphSize);
++        start = NativeHeaderSize;
++        available = code_area.size() - NativeHeaderSize;
++    }
++    std::vector<Instruction> native;
++    Shader::Ampere::ProgramCaptureState capture;
++    bool complete = false;
++    const size_t count = available / sizeof(Instruction);
++    for (u32 index = 0; index < Shader::Ampere::ProgramCaptureState::MaximumInstructions; ++index) {
++        if (index >= count) {
++            break; // the runtime reads on past the code area; the game file holds only the area
++        }
++        Instruction instruction;
++        std::memcpy(&instruction, code_area.data() + start + index * sizeof(Instruction),
++                    sizeof(Instruction));
++        native.push_back(instruction);
++        const auto status = capture.Observe(instruction, index);
++        if (status == Shader::Ampere::ProgramCaptureState::Result::InvalidTarget) {
++            error = "branch outside capture bounds";
++            return std::nullopt;
++        }
++        if (status == Shader::Ampere::ProgramCaptureState::Result::Complete) {
++            complete = true;
++            break;
++        }
++    }
++    if (!complete) {
++        error = "capture incomplete inside the code area";
++        return std::nullopt;
++    }
++    std::vector<u32> traps;
++    for (u32 i = 0; i < native.size(); ++i) {
++        if (native[i].Bits(0, 12) == 0x95c) {
++            traps.push_back(i * sizeof(Instruction));
++        }
++    }
++    if (!traps.empty()) {
++        error = "trap guards"; // checked against live constants; never serialized
++        return std::nullopt;
++    }
++    const auto lowered = Shader::Ampere::LowerToMaxwell(
++        native, {.geometry = false,
++                 .tensor = true,
++                 .native_code_address = 0x100000000ULL + start,
++                 .verified_traps = traps,
++                 .tessellation_stage = Shader::Ampere::TessellationStage::None});
++    if (!lowered) {
++        error = fmt::format("lowering failed at {:#x}: {}", lowered.error_offset, lowered.error);
++        return std::nullopt;
++    }
++    Lowered result;
++    result.native_key = Shader::Ampere::NativeProgramKey(native);
++    result.texture_bound = lowered.required_texture_buffer;
++    auto& code = result.code;
++    code.resize(SphSize / sizeof(u64));
++    std::memcpy(code.data(), &sph, SphSize);
++    for (const u64 instruction : lowered.instructions) {
++        if ((code.size() * sizeof(u64)) % 32 == 0) {
++            code.push_back(0);
++        }
++        code.push_back(instruction);
++    }
++    code.push_back(0);
++    Shader::Ampere::AppendNativeAddressMap(code, lowered.source_instruction_offsets);
++    result.hash = NativeShaderHash(code);
++    return result;
++}
++
++std::optional<Header> ReadHeader(std::span<const u8> recipe) {
++    try {
++        const auto body = Decompress(recipe);
++        Reader r{body};
++        if (r.Get<u32>() != Format) {
++            return std::nullopt;
++        }
++        Header header;
++        header.title_id = r.Get<u64>();
++        header.game_version = r.Get<u32>();
++        header.cache_version = r.Get<u32>();
++        return header;
++    } catch (const std::exception&) {
++        return std::nullopt;
++    }
++}
++
++std::vector<u8> MakeRecipe(std::span<const u8> precompiled, const X::Result& extracted,
++                           const Header& header, Report& report, unsigned threads) {
++    if (precompiled.size() < 24 ||
++        std::memcmp(precompiled.data(), PrecompiledMagic.data(), 8) != 0) {
++        throw std::runtime_error("not a precompiled pipeline file");
++    }
++    const u32 env_count = Load<u32>(precompiled, 12);
++    const u32 record_count = Load<u32>(precompiled, 16);
++
++    // Every extracted program lowered once: the shader hash finds an environment's program.
++    std::vector<Program> programs(extracted.programs.size());
++    ParallelFor(programs.size(), threads, [&](size_t i) {
++        const auto& p = extracted.programs[i];
++        programs[i].source = &p;
++        programs[i].lowered = Lower(StageOf(p.stage), p.control, p.code, programs[i].error);
++    });
++    std::unordered_map<u64, u32> by_hash;
++    for (u32 i = 0; i < programs.size(); ++i) {
++        if (programs[i].lowered) {
++            // Programs lowering to the same code: the lowest fingerprint, so the recipe does not
++            // depend on the order the extraction found them in.
++            const auto [it, added] = by_hash.try_emplace(programs[i].lowered->hash, i);
++            if (!added && programs[i].source->fingerprint < programs[it->second].source->fingerprint) {
++                it->second = i;
++            }
++        }
++    }
++
++    // Environments: their program and their facts.
++    struct Env {
++        s64 program = -1;
++        u64 hash{};
++        u8 flags{};
++        std::vector<u8> facts;
++        Stage stage{};
++    };
++    std::vector<Env> envs(env_count);
++    size_t offset = 24;
++    std::vector<std::pair<u64, u64>> index(env_count);
++    for (auto& [at, size] : index) {
++        at = Load<u64>(precompiled, offset);
++        size = Load<u64>(precompiled, offset + 8);
++        offset += 16;
++    }
++    for (u32 e = 0; e < env_count; ++e) {
++        auto& env = envs[e];
++        const auto blob = precompiled.subspan(index[e].first, index[e].second);
++        const auto parts = Parse(blob, true);
++        env.stage = parts.stage;
++        std::vector<u64> code((parts.code_end - EnvHeaderSize) / 8);
++        std::memcpy(code.data(), blob.data() + EnvHeaderSize, code.size() * 8);
++        env.hash = NativeShaderHash(code);
++        const auto found = by_hash.find(env.hash);
++        if (found == by_hash.end()) {
++            report.errors.push_back(fmt::format("environment {}: no program of the game has its "
++                                                "code ({:016x})", e, env.hash));
++            continue;
++        }
++        if (programs[found->second].lowered->code != code) {
++            report.errors.push_back(fmt::format("environment {}: same hash, other code", e));
++            continue;
++        }
++        // The facts are the environment without its code and program header. Anything else that
++        // could be the game's (a program header other than the code's, a mesh geometry header not
++        // derivable from the code, a layout this does not know) withholds the environment and the
++        // records using it.
++        const auto withhold = [&](std::string_view why) {
++            ++report.environments_withheld;
++            report.errors.push_back(fmt::format("environment {} ({:016x}) withheld: {}", e,
++                                                env.hash, why));
++        };
++        const auto& source = *programs[found->second].source;
++        Writer facts;
++        facts.Put(blob.subspan(0, EnvHeaderSize));
++        facts.Put(blob.subspan(parts.code_end, parts.tables_end - parts.code_end));
++        auto tail = blob.subspan(parts.tables_end);
++        u8 flags = 0;
++        if (parts.stage == Stage::Compute) {
++            if (tail.size() != ComputeTailSize) {
++                withhold("unknown compute layout");
++                continue;
++            }
++        } else {
++            const bool task_mesh = parts.stage == Stage::Task || parts.stage == Stage::Mesh;
++            const size_t extra = parts.stage == Stage::Geometry ? PassthroughMaskSize
++                                 : task_mesh                    ? MeshRegistersSize + SphSize
++                                                                : 0;
++            if (tail.size() != SphSize + extra) {
++                withhold("unknown graphics layout");
++                continue;
++            }
++            if (std::memcmp(tail.data(), code.data(), SphSize) != 0) {
++                withhold("its program header is not the code's");
++                continue;
++            }
++            tail = tail.subspan(SphSize);
++            if (task_mesh) {
++                const auto recorded = tail.last(SphSize);
++                const auto derived =
++                    parts.stage == Stage::Mesh ? MeshHeader(source) : std::nullopt;
++                if (derived && std::memcmp(derived->data(), recorded.data(), SphSize) == 0) {
++                    tail = tail.first(tail.size() - SphSize);
++                    flags |= MeshHeaderFromCode;
++                } else if (!AllZero(recorded)) {
++                    withhold("its mesh geometry header is not derivable from the code");
++                    continue;
++                }
++            }
++        }
++        facts.Put(tail);
++        if (HoldsCode(facts.bytes, source.code) || HoldsCode(facts.bytes, source.control) ||
++            HoldsCode(facts.bytes, Bytes{reinterpret_cast<const u8*>(code.data()),
++                                         code.size() * sizeof(u64)})) {
++            withhold("its facts hold some of the program's code");
++            continue;
++        }
++        env.program = found->second;
++        env.flags = flags;
++        env.facts = std::move(facts.bytes);
++    }
++
++    // Records.
++    struct Record {
++        u8 kind{};
++        std::vector<u32> envs;
++        u32 state{};
++        std::array<u8, 6> slots{};
++        std::array<u64, 6> xors{};
++    };
++    std::vector<Record> records;
++    std::map<std::vector<u8>, u32> states;
++    for (u32 i = 0; i < record_count; ++i) {
++        Record record;
++        record.kind = Load<u8>(precompiled, offset);
++        const u8 count = Load<u8>(precompiled, offset + 1);
++        offset += 4;
++        bool ok = true;
++        for (u8 k = 0; k < count; ++k) {
++            const u32 id = Load<u32>(precompiled, offset);
++            offset += 4;
++            ok &= id < env_count && envs[id].program >= 0;
++            record.envs.push_back(id);
++        }
++        if (record.kind == 1) {
++            offset += ComputeKeySize;
++        } else {
++            const auto key = precompiled.subspan(offset, GraphicsKeySize);
++            offset += GraphicsKeySize;
++            record.slots.fill(0xff);
++            size_t next = 0;
++            for (size_t slot = 0; slot < 6 && ok; ++slot) {
++                const u64 hash = Load<u64>(key, slot * 8);
++                if (hash == 0) {
++                    continue;
++                }
++                if (next >= record.envs.size()) {
++                    ok = false;
++                    break;
++                }
++                record.slots[slot] = static_cast<u8>(next);
++                record.xors[slot] = hash ^ envs[record.envs[next]].hash;
++                ++next;
++            }
++            const std::vector<u8> state(key.begin() + KeyHashesSize, key.end());
++            record.state = states.try_emplace(state, static_cast<u32>(states.size())).first->second;
++        }
++        if (!ok) {
++            ++report.records_dropped;
++            continue;
++        }
++        records.push_back(std::move(record));
++    }
++
++    // Programs and fact sets that records use, renumbered.
++    std::vector<s64> fact_of(env_count, -1);
++    std::vector<s64> program_slot(programs.size(), -1);
++    std::vector<u32> program_list, fact_list;
++    for (auto& record : records) {
++        for (u32& id : record.envs) {
++            if (fact_of[id] < 0) {
++                const u32 program = static_cast<u32>(envs[id].program);
++                if (program_slot[program] < 0) {
++                    program_slot[program] = static_cast<s64>(program_list.size());
++                    program_list.push_back(program);
++                }
++                fact_of[id] = static_cast<s64>(fact_list.size());
++                fact_list.push_back(id);
++            }
++            id = static_cast<u32>(fact_of[id]);
++        }
++    }
++
++    Writer body;
++    body.Put(Format);
++    body.Put(header.title_id);
++    body.Put(header.game_version);
++    body.Put(header.cache_version);
++    body.Put(static_cast<u32>(program_list.size()));
++    for (const u32 p : program_list) {
++        body.Put(programs[p].source->fingerprint);
++        body.Put(static_cast<u8>(StageOf(programs[p].source->stage)));
++        body.Zeros(3);
++    }
++    body.Put(static_cast<u32>(fact_list.size()));
++    for (const u32 id : fact_list) {
++        const auto& env = envs[id];
++        body.Put(static_cast<u32>(program_slot[env.program]));
++        body.Put(env.flags);
++        body.Zeros(3);
++        body.Put(static_cast<u32>(env.facts.size()));
++        body.Put(env.facts);
++    }
++    std::vector<const std::vector<u8>*> state_list(states.size());
++    for (const auto& [state, id] : states) {
++        state_list[id] = &state;
++    }
++    body.Put(static_cast<u32>(state_list.size()));
++    for (const auto* state : state_list) {
++        body.Put(*state);
++    }
++    body.Put(static_cast<u32>(records.size()));
++    for (const auto& record : records) {
++        body.Put(record.kind);
++        body.Put(static_cast<u8>(record.envs.size()));
++        body.Zeros(2);
++        for (const u32 id : record.envs) {
++            body.Put(id);
++        }
++        if (record.kind == 0) {
++            body.Put(record.state);
++            body.Put(record.slots);
++            const bool has_xor =
++                std::any_of(record.xors.begin(), record.xors.end(), [](u64 x) { return x != 0; });
++            body.Put(static_cast<u8>(has_xor));
++            body.Zeros(1);
++            if (has_xor) {
++                body.Put(record.xors);
++            }
++        }
++    }
++    report.programs = static_cast<u32>(program_list.size());
++    report.environments = static_cast<u32>(fact_list.size());
++    report.records = static_cast<u32>(records.size());
++    report.states = static_cast<u32>(state_list.size());
++
++    // The last gate: no 32 bytes of any of the game's programs anywhere in the recipe.
++    const auto matches = FindCodeInBody(body.bytes, extracted, threads);
++    if (!matches.empty()) {
++        throw std::runtime_error(fmt::format(
++            "the recipe would hold {} pieces of the game's code (program {:016x} +{:#x}); not "
++            "written",
++            matches.size(), matches[0].fingerprint, matches[0].program_offset));
++    }
++    return Compress(body.bytes);
++}
++
++std::vector<u8> Assemble(std::span<const u8> recipe, const X::Result& extracted, u32 cache_version,
++                         Report& report, unsigned threads) {
++    const auto body = Decompress(recipe);
++    Reader r{body};
++    if (r.Get<u32>() != Format) {
++        throw std::runtime_error("precompile recipe of another format");
++    }
++    r.Get<u64>();
++    r.Get<u32>();
++    r.Get<u32>();
++
++    std::unordered_map<u64, const X::Program*> by_fingerprint;
++    for (const auto& p : extracted.programs) {
++        by_fingerprint.try_emplace(p.fingerprint, &p);
++    }
++    const u32 program_count = r.Get<u32>();
++    std::vector<Program> programs(program_count);
++    std::vector<Stage> stages(program_count);
++    for (u32 i = 0; i < program_count; ++i) {
++        const u64 fingerprint = r.Get<u64>();
++        stages[i] = static_cast<Stage>(r.Get<u8>());
++        r.Take(3);
++        const auto it = by_fingerprint.find(fingerprint);
++        if (it == by_fingerprint.end()) {
++            ++report.programs_missing;
++            programs[i].error = fmt::format("{:016x} is not in the game", fingerprint);
++        } else {
++            programs[i].source = it->second;
++        }
++    }
++    ParallelFor(program_count, threads, [&](size_t i) {
++        if (programs[i].source) {
++            programs[i].lowered =
++                Lower(stages[i], programs[i].source->control, programs[i].source->code,
++                      programs[i].error);
++        }
++    });
++    for (const auto& p : programs) {
++        report.programs_failed += p.source && !p.lowered ? 1 : 0;
++    }
++
++    // Environments: the facts with the program's code and header put back.
++    const u32 fact_count = r.Get<u32>();
++    struct Env {
++        s64 program = -1;
++        std::vector<u8> bytes;
++        u64 hash{};
++        u32 shared{};
++        std::array<u32, 3> workgroup{};
++    };
++    std::vector<Env> envs(fact_count);
++    for (u32 i = 0; i < fact_count; ++i) {
++        const u32 program = r.Get<u32>();
++        const u8 flags = r.Get<u8>();
++        r.Take(3);
++        const auto facts = r.Take(r.Get<u32>());
++        if (program >= program_count || !programs[program].lowered ||
++            (flags & ~MeshHeaderFromCode) != 0) {
++            continue;
++        }
++        const auto& lowered = *programs[program].lowered;
++        const auto parts = Parse(facts, false);
++        Writer env;
++        env.Put(static_cast<u64>(lowered.code.size() * sizeof(u64)));
++        env.Put(facts.subspan(8, EnvHeaderSize - 8));
++        PutRaw(env, lowered.code.data(), lowered.code.size() * sizeof(u64));
++        env.Put(facts.subspan(EnvHeaderSize, parts.tables_end - EnvHeaderSize));
++        const auto tail = facts.subspan(parts.tables_end);
++        if (parts.stage == Stage::Compute) {
++            envs[i].workgroup = Load<std::array<u32, 3>>(tail, 0);
++            envs[i].shared = Load<u32>(tail, 12);
++        } else {
++            PutRaw(env, lowered.code.data(), SphSize);
++        }
++        env.Put(tail);
++        if (flags & MeshHeaderFromCode) {
++            const auto header = MeshHeader(*programs[program].source);
++            if (!header) {
++                continue;
++            }
++            env.Put(Bytes{header->data(), header->size()});
++        }
++        envs[i].program = program;
++        envs[i].hash = lowered.hash;
++        envs[i].bytes = std::move(env.bytes);
++    }
++
++    const u32 state_count = r.Get<u32>();
++    std::vector<Bytes> states(state_count);
++    for (auto& state : states) {
++        state = r.Take(StateSize);
++    }
++
++    // Records, and the environments they use, renumbered.
++    const u32 record_count = r.Get<u32>();
++    Writer records;
++    std::vector<s64> env_slot(fact_count, -1);
++    std::vector<u32> env_list;
++    u32 written = 0;
++    for (u32 i = 0; i < record_count; ++i) {
++        const u8 kind = r.Get<u8>();
++        const u8 count = r.Get<u8>();
++        r.Take(2);
++        std::vector<u32> ids(count);
++        bool ok = true;
++        for (auto& id : ids) {
++            id = r.Get<u32>();
++            ok &= id < fact_count && envs[id].program >= 0;
++        }
++        u32 state = 0;
++        std::array<u8, 6> slots{};
++        std::array<u64, 6> xors{};
++        if (kind == 0) {
++            state = r.Get<u32>();
++            slots = r.Get<std::array<u8, 6>>();
++            const bool has_xor = r.Get<u8>() != 0;
++            r.Take(1);
++            if (has_xor) {
++                xors = r.Get<std::array<u64, 6>>();
++            }
++            ok &= state < state_count;
++        }
++        if (!ok) {
++            ++report.records_dropped;
++            continue;
++        }
++        records.Put(kind);
++        records.Put(count);
++        records.Zeros(2);
++        for (const u32 id : ids) {
++            if (env_slot[id] < 0) {
++                env_slot[id] = static_cast<s64>(env_list.size());
++                env_list.push_back(id);
++            }
++            records.Put(static_cast<u32>(env_slot[id]));
++        }
++        if (kind == 1) {
++            const auto& env = envs[ids[0]];
++            records.Put(env.hash);
++            records.Put(env.shared);
++            records.Put(env.workgroup);
++        } else {
++            for (size_t slot = 0; slot < 6; ++slot) {
++                records.Put(slots[slot] < ids.size() ? envs[ids[slots[slot]]].hash ^ xors[slot]
++                                                     : u64{0});
++            }
++            records.Put(states[state]);
++        }
++        ++written;
++    }
++
++    // NX2PREP1: header, environment index, records, environments.
++    Writer out;
++    out.Put(PrecompiledMagic.data(), PrecompiledMagic.size());
++    out.Put(cache_version);
++    out.Put(static_cast<u32>(env_list.size()));
++    out.Put(written);
++    out.Put(u32{0});
++    u64 at = 24 + 16 * u64{env_list.size()} + records.bytes.size();
++    for (const u32 id : env_list) {
++        out.Put(at);
++        out.Put(static_cast<u64>(envs[id].bytes.size()));
++        at += envs[id].bytes.size();
++    }
++    out.Put(records.bytes);
++    for (const u32 id : env_list) {
++        out.Put(envs[id].bytes);
++    }
++    report.programs = program_count;
++    report.environments = static_cast<u32>(env_list.size());
++    report.records = written;
++    report.states = state_count;
++    for (const auto& p : programs) {
++        if (!p.error.empty() && report.errors.size() < 64) {
++            report.errors.push_back(p.error);
++        }
++    }
++    return std::move(out.bytes);
++}
++
++} // namespace VideoCommon::Nx2Recipe
+diff --git a/src/video_core/nx2_recipe.h b/src/video_core/nx2_recipe.h
+new file mode 100644
+index 000000000..13200ec0d
+--- /dev/null
++++ b/src/video_core/nx2_recipe.h
+@@ -0,0 +1,101 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Precompile recipes: a game's precompiled pipeline file (tools/nx2-precompile) without the game's
++// code, so it can be shared. A recipe holds, for every pipeline the file prepares, its render state
++// and, for each of its shaders, the program's fingerprint (FileSys::Nx2ShaderExtract) and the facts
++// its translation asked for (constant buffer values, texture types, storage buffer pointers, ...):
++// the shader environment of GenericEnvironment::Serialize without its code and program header.
++// Assembling it with the programs extracted from a player's own copy of the game puts the code back,
++// lowered as GenericEnvironment::LowerNativeCode lowers it, and gives that player's precompiled file.
++//
++// Recipe layout: "NX2RCP01", u32 body size, u32 0, then the body as one zstd frame:
++//   u32 format (1), u64 title id, u32 game version, u32 cache version of the facts
++//   u32 n, then n programs: u64 fingerprint, u8 stage (Shader::Stage), 3 bytes 0
++//   u32 n, then n fact sets: u32 program, u8 flags (2: a mesh environment's geometry header is the
++//     one in the code; no other flag is valid), 3 bytes 0, u32 size, the facts
++//
++// A recipe carries none of the game's code or program headers: an environment whose program header
++// is not its code's, whose mesh geometry header is neither the code's nor zero, whose layout is
++// unknown, or whose facts hold any 32 bytes of its program's code is withheld, with its records.
++//   u32 n, then n render states: the graphics key without its six shader hashes (1008 bytes)
++//   u32 n, then n records: u8 kind (0 graphics, 1 compute), u8 shader count, u16 0, u32 fact set
++//     per shader; graphics: u32 render state, u8 shader of each of the six key slots (0xff none),
++//     u8 has_xor, u8 0, then if has_xor six u64 that the slots' hashes are xored with (task and
++//     mesh keys add their mesh state)
++
++#pragma once
++
++#include <optional>
++#include <span>
++#include <string>
++#include <vector>
++
++#include "common/common_types.h"
++#include "core/file_sys/nx2_shader_extract.h"
++#include "shader_recompiler/stage.h"
++
++namespace VideoCommon::Nx2Recipe {
++
++/// A native program as the runtime lowers it: program header, lowered words with scheduling slots,
++/// padding and the native address map (GenericEnvironment::LowerNativeCode).
++struct Lowered {
++    std::vector<u64> code;
++    u32 texture_bound{~0U};
++    u64 hash{};       ///< the shader hash pipeline keys use
++    u64 native_key{};
++};
++
++[[nodiscard]] std::optional<Lowered> Lower(Shader::Stage stage, std::span<const u8> control,
++                                           std::span<const u8> code, std::string& error);
++
++[[nodiscard]] u64 NativeShaderHash(std::span<const u64> code);
++
++[[nodiscard]] Shader::Stage StageOf(FileSys::Nx2ShaderExtract::Stage stage) noexcept;
++
++struct Report {
++    u32 programs{};          ///< distinct programs the recipe names
++    u32 programs_missing{};  ///< of them not in the game (another version of it)
++    u32 programs_failed{};   ///< found but not lowered
++    u32 environments{};
++    u32 environments_withheld{}; ///< left out of a recipe as they would carry game data
++    u32 records{};
++    u32 records_dropped{};   ///< records with a missing or failed program
++    u32 states{};
++    std::vector<std::string> errors;
++};
++
++struct Header {
++    u64 title_id{};
++    u32 game_version{};
++    u32 cache_version{};
++};
++
++/// A recipe from a precompiled file and the programs it was built from.
++[[nodiscard]] std::vector<u8> MakeRecipe(std::span<const u8> precompiled,
++                                         const FileSys::Nx2ShaderExtract::Result& programs,
++                                         const Header& header, Report& report,
++                                         unsigned threads = 0);
++
++/// The recipe's header, without reading the rest.
++[[nodiscard]] std::optional<Header> ReadHeader(std::span<const u8> recipe);
++
++/// 32 bytes of a game's program (dense: at least half not zero) found in a recipe.
++struct CodeMatch {
++    u64 fingerprint{};
++    size_t program_offset{}; ///< into the program's control section, then its code
++    size_t recipe_offset{};  ///< into the recipe's uncompressed body
++};
++
++/// Any of the game's code a recipe holds. MakeRecipe refuses to make one that holds some; this
++/// checks a recipe from elsewhere against a copy of the game before it is shared.
++[[nodiscard]] std::vector<CodeMatch> FindGameCode(std::span<const u8> recipe,
++                                                  const FileSys::Nx2ShaderExtract::Result& programs,
++                                                  unsigned threads = 0);
++
++/// A precompiled file of `cache_version` from a recipe and the programs of the player's game.
++[[nodiscard]] std::vector<u8> Assemble(std::span<const u8> recipe,
++                                       const FileSys::Nx2ShaderExtract::Result& programs,
++                                       u32 cache_version, Report& report, unsigned threads = 0);
++
++} // namespace VideoCommon::Nx2Recipe
 diff --git a/src/video_core/ocarina_upscale.h b/src/video_core/ocarina_upscale.h
 new file mode 100644
 index 000000000..363f521ee
@@ -30604,7 +33097,7 @@ index 697f39f3c..53ccb5ae4 100644
  
  } // namespace Vulkan
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
-index 0e42e8e25..1aaa616e2 100644
+index 0e42e8e25..d44916948 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 @@ -8,6 +8,7 @@
@@ -30615,23 +33108,26 @@ index 0e42e8e25..1aaa616e2 100644
  #include <fstream>
  #include <functional>
  #include <iostream>
-@@ -24,6 +25,7 @@
+@@ -24,6 +25,8 @@
  #include "common/scope_exit.h"
  #include "common/fs/fs.h"
  #include "common/fs/path_util.h"
++#include "common/scm_rev.h"
 +#include "common/shutdown_progress.h"
  #include "common/thread.h"
  #include "common/thread_worker.h"
  #include "core/core.h"
-@@ -39,6 +41,7 @@
+@@ -38,7 +41,9 @@
+ #include "video_core/engines/maxwell_3d.h"
  #include "video_core/memory_manager.h"
  #include "video_core/nx2_perf.h"
++#include "video_core/nx2_precompile.h"
  #include "video_core/pipeline_cache_files.h"
 +#include "video_core/pipeline_cache_policy.h"
  #include "video_core/renderer_vulkan/async_draw_policy.h"
  #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
  #include "video_core/renderer_vulkan/mesh_fallback_limits.h"
-@@ -83,8 +86,11 @@ using VideoCommon::GuessMissing;
+@@ -83,8 +88,11 @@ using VideoCommon::GuessMissing;
  using VideoCommon::GraphicsEnvironment;
  
  constexpr u32 CACHE_VERSION = VideoCommon::VulkanPipelineCacheVersion;
@@ -30645,7 +33141,7 @@ index 0e42e8e25..1aaa616e2 100644
  constexpr auto& VULKAN_CACHE_MAGIC_NUMBER = VideoCommon::VulkanDriverPipelineCacheMagic;
  
  template <typename Container>
-@@ -376,6 +382,38 @@ void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point be
+@@ -376,6 +384,38 @@ void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point be
          std::memory_order::relaxed);
  }
  
@@ -30684,7 +33180,7 @@ index 0e42e8e25..1aaa616e2 100644
  vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& profile,
                                   const Shader::RuntimeInfo& runtime_info,
                                   Shader::IR::Program& program, Shader::Backend::Bindings& binding,
-@@ -496,6 +534,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+@@ -496,6 +536,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                                                       : GetTotalPipelineWorkers()},
        emission_budget{num_pipeline_workers},
        workers(num_pipeline_workers, "VkPipelineBuilder", {}, Common::ThreadPlacement::Background),
@@ -30692,7 +33188,7 @@ index 0e42e8e25..1aaa616e2 100644
        serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background),
        background_pipelines{64, 16 * 1024 * 1024, device.HasBrokenParallelShaderCompiling()} {
      const auto& float_control{device.FloatControlProperties()};
-@@ -625,6 +664,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+@@ -625,6 +666,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
          .min_ssbo_alignment = device.GetStorageBufferAlignment(),
          .max_per_stage_descriptor_sampled_images = device.GetMaxPerStageDescriptorSampledImages(),
          .max_per_stage_resources = device.GetMaxPerStageResources(),
@@ -30700,7 +33196,7 @@ index 0e42e8e25..1aaa616e2 100644
          .max_per_stage_descriptor_storage_buffers = device.GetMaxPerStageDescriptorStorageBuffers(),
          .max_descriptor_set_samplers = device.GetMaxDescriptorSetSamplers(),
          .max_descriptor_set_uniform_buffers = device.GetMaxDescriptorSetUniformBuffers(),
-@@ -647,9 +687,23 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+@@ -647,9 +689,23 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
          .support_conditional_barrier = device.SupportsConditionalBarriers(),
          .single_lane_geometry_subgroups = !profile.SupportsSubgroupStage(Shader::Stage::Geometry),
          .support_byte_addressed_r16 = true,
@@ -30724,7 +33220,7 @@ index 0e42e8e25..1aaa616e2 100644
      if (device.GetMaxVertexInputAttributes() < Maxwell::NumVertexAttributes) {
          LOG_WARNING(Render_Vulkan, "maxVertexInputAttributes is too low: {} < {}",
                      device.GetMaxVertexInputAttributes(), Maxwell::NumVertexAttributes);
-@@ -769,6 +823,16 @@ constexpr size_t MaxPipelinesWithoutUsedList = 3000;
+@@ -769,6 +825,16 @@ constexpr size_t MaxPipelinesWithoutUsedList = 3000;
  // for a later precache.
  constexpr size_t PrecacheCaptureLimit = size_t{1} << 30;
  
@@ -30741,7 +33237,7 @@ index 0e42e8e25..1aaa616e2 100644
  // EDEN_NX2_PRELOAD_ALL_PIPELINES=1 builds every cached pipeline at boot, as before.
  bool PreloadAllPipelines() {
      static const bool all = [] {
-@@ -777,20 +841,95 @@ bool PreloadAllPipelines() {
+@@ -777,20 +843,95 @@ bool PreloadAllPipelines() {
      }();
      return all;
  }
@@ -30839,7 +33335,7 @@ index 0e42e8e25..1aaa616e2 100644
  }
  
  void PipelineCache::SaveUsedPipelines() {
-@@ -826,13 +965,30 @@ void PipelineCache::SaveUsedPipelines() {
+@@ -826,13 +967,30 @@ void PipelineCache::SaveUsedPipelines() {
      }
  }
  
@@ -30871,7 +33367,7 @@ index 0e42e8e25..1aaa616e2 100644
  
      if (current_pipeline) {
          GraphicsPipeline* const next{current_pipeline->Next(graphics_key)};
-@@ -862,8 +1018,9 @@ namespace {
+@@ -862,8 +1020,9 @@ namespace {
  /// Which pointer slots a native program's arguments fill depends on the area (Ocarina of Time's
  /// foliage culling fills different list slots in Hyrule Field and Castle Town), so a translation
  /// rebuilt in one area may lack pointers the first cached one binds. Try first the translations
@@ -30883,7 +33379,7 @@ index 0e42e8e25..1aaa616e2 100644
  void OrderComputeTranslations(std::vector<CachedComputeTranslation>& candidates) {
      if (candidates.size() < 2) {
          return;
-@@ -883,7 +1040,13 @@ void OrderComputeTranslations(std::vector<CachedComputeTranslation>& candidates)
+@@ -883,7 +1042,13 @@ void OrderComputeTranslations(std::vector<CachedComputeTranslation>& candidates)
          if (lhs_keeps != keeps_first(rhs)) {
              return lhs_keeps;
          }
@@ -30898,7 +33394,7 @@ index 0e42e8e25..1aaa616e2 100644
      });
      std::vector<CachedComputeTranslation> ordered;
      ordered.reserve(candidates.size());
-@@ -939,6 +1102,23 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
+@@ -939,6 +1104,23 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
      auto& entry{pair->second};
      if (is_new) {
          entry = CreateComputePipeline(key, shader);
@@ -30922,7 +33418,7 @@ index 0e42e8e25..1aaa616e2 100644
      } else if (!entry.null_pointer_slots.empty() && entry.rebuilds < MaxComputeRebuilds &&
                 StaleNullPointerSlot(entry)) {
          // The translation dropped accesses through a pointer that was null back then. Which slots
-@@ -946,12 +1126,12 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
+@@ -946,12 +1128,12 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
          // binds, null now or not: a null pointer binds nothing.
          auto rebuilt{CreateComputePipeline(key, shader, entry.mapped_pointers)};
          if (rebuilt.pipeline) {
@@ -30939,7 +33435,7 @@ index 0e42e8e25..1aaa616e2 100644
          } else {
              // Keep the working translation when the new one cannot be built (for example a
              // narrow access that now stays global across two buffers), and stop retrying.
-@@ -1050,6 +1230,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1050,6 +1232,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
          size_t built{};
          bool has_loaded{};
          std::unique_ptr<PipelineStatistics> statistics;
@@ -30947,7 +33443,7 @@ index 0e42e8e25..1aaa616e2 100644
          /// Records the load never chooses: those lacking a value the translator reads (graphics
          /// ones with their key hash), and copies of a compute translation that stays
          std::vector<VideoCommon::PipelineRecord> incomplete;
-@@ -1110,58 +1291,209 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1110,58 +1293,209 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
          });
          ++state.total;
      }};
@@ -31176,7 +33672,7 @@ index 0e42e8e25..1aaa616e2 100644
              ++skipped_pipelines;
              size_t capture_bytes = (envs.capacity() - envs.size()) * sizeof(FileEnvironment);
              for (const auto& env : envs) {
-@@ -1198,6 +1530,14 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1198,6 +1532,14 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
                          if (pipeline && pipeline->Failed()) {
                              return std::unique_ptr<GraphicsPipeline>{};
                          }
@@ -31191,7 +33687,7 @@ index 0e42e8e25..1aaa616e2 100644
                          return pipeline;
                      })) {
                  ++deferred_pipelines;
-@@ -1227,6 +1567,12 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1227,6 +1569,12 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
              if (incomplete) {
                  state.incomplete_graphics.emplace_back(key.Hash(), record);
              }
@@ -31204,7 +33700,7 @@ index 0e42e8e25..1aaa616e2 100644
              ++state.built;
              if (state.has_loaded) {
                  callback(VideoCore::LoadCallbackStage::Build, state.built, state.total);
-@@ -1243,12 +1589,71 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1243,12 +1591,71 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
      compute_envs.clear();
  
      LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
@@ -31276,7 +33772,7 @@ index 0e42e8e25..1aaa616e2 100644
  
      std::unique_lock lock{state.mutex};
      callback(VideoCore::LoadCallbackStage::Build, 0, state.total);
-@@ -1256,6 +1661,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1256,6 +1663,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
      lock.unlock();
  
      workers.WaitForRequests(stop_loading);
@@ -31284,7 +33780,7 @@ index 0e42e8e25..1aaa616e2 100644
  
      AddIncompleteGraphics(state.incomplete_graphics, graphics_duplicates, disk_pipelines,
                            state.incomplete);
-@@ -1292,11 +1698,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1292,11 +1700,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
      }
  
      if (use_vulkan_pipeline_cache) {
@@ -31300,7 +33796,7 @@ index 0e42e8e25..1aaa616e2 100644
          last_flush = std::chrono::steady_clock::now();
      }
  
-@@ -1306,10 +1711,19 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+@@ -1306,10 +1713,19 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
      if (precache && !stop_loading.stop_requested()) {
          PrecacheShaders(title_id, std::move(precache_graphics), std::move(precached_pipelines),
                          stop_loading, callback);
@@ -31320,7 +33816,49 @@ index 0e42e8e25..1aaa616e2 100644
          background_pipelines.Start(std::clamp<size_t>(num_pipeline_workers / 4, 1, 2));
      }
  }
-@@ -1453,7 +1867,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
+@@ -1383,6 +1799,9 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
+             file_entries = 0;
+         }
+     }
++    // Fritchii's precompiled pipelines (a recipe for this title): built with the rest, here.
++    const size_t precompiled_first = jobs.size();
++    const auto precompiled = AddPrecompiledJobs(title_id, jobs, stop_loading);
+     if (jobs.empty() && !compute_pending) {
+         LOG_INFO(Render_Vulkan, "Shader precache: nothing to precache");
+         return;
+@@ -1396,9 +1815,10 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
+     std::atomic<bool> cancel{false};
+     bool skipped = false;
+     LOG_INFO(Render_Vulkan,
+-             "Shader precache: {} cached graphics pipelines and {} of {} compute programs to "
+-             "build on {} threads",
+-             graphics_jobs, jobs.size() - graphics_jobs, file_entries, num_threads);
++             "Shader precache: {} cached graphics pipelines, {} of {} compute programs and {} "
++             "precompiled pipelines to build on {} threads",
++             graphics_jobs, precompiled_first - graphics_jobs, file_entries,
++             jobs.size() - precompiled_first, num_threads);
+     if (!jobs.empty()) {
+         std::vector<std::jthread> threads;
+         for (size_t thread = 0; thread < num_threads; ++thread) {
+@@ -1439,6 +1859,17 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
+             ShaderWarm::WriteWarmMarker(warm_file, *stamp_done);
+         }
+     }
++    if (precompiled && !skipped && !stop_loading.stop_requested()) {
++        const size_t precompiled_built = static_cast<size_t>(
++            std::count(built.begin() + static_cast<std::ptrdiff_t>(precompiled_first), built.end(),
++                       u8{1}));
++        LOG_INFO(Render_Vulkan,
++                 "Precompiled pipelines: {} of {} prepared (the others failed or can't be built "
++                 "on this device)",
++                 precompiled_built, jobs.size() - precompiled_first);
++        std::ofstream stamp_file(precompiled->first, std::ios::binary | std::ios::trunc);
++        stamp_file << precompiled->second;
++    }
+     const size_t precached_before = precached.size();
+     for (size_t index = 0; index < graphics_jobs; ++index) {
+         if (built[index]) {
+@@ -1453,7 +1884,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
      if (!stop_loading.stop_requested() && total_built != 0) {
          // Without this, the builds reach the file only at the next boot, game change or clean
          // close, and are lost if the app ends otherwise.
@@ -31329,7 +33867,266 @@ index 0e42e8e25..1aaa616e2 100644
      }
      LOG_INFO(Render_Vulkan, "Shader precache: {}, {} built, {} failed, {} not reached, {:.1f} s",
               stop_loading.stop_requested() ? "stopped" : (skipped ? "skipped" : "finished"),
-@@ -1475,35 +1889,48 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
+@@ -1461,6 +1892,258 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
+ }
+ 
++bool PipelineCache::ConvertRecordedKey(GraphicsPipelineCacheKey& key,
++                                       std::span<FileEnvironment> envs) const {
++    // As LoadDiskResources converts the disk cache's records (keep the two alike): this driver,
++    // and the form this device gives the states it sets dynamically. Fritchii skips a record made
++    // for another device instead: 116,036 of 120,124 on AMD's Windows driver (zortos293/Lichii
++    // #1012).
++    auto& fixed = key.state;
++    fixed.driver_id = dynamic_features.driver_id;
++    fixed.driver_version = dynamic_features.driver_version;
++    if (fixed.dynamic_vertex_input == 0 && dynamic_features.has_dynamic_vertex_input) {
++        static constexpr std::array<u32, 8> type_classes{0, 1, 1, 2, 3, 1, 1, 1};
++        u64 types = 0;
++        for (size_t index = 0; index < fixed.attributes.size(); ++index) {
++            const auto& attribute = fixed.attributes[index];
++            if (attribute.enabled != 0) {
++                types |= u64{type_classes[attribute.type.Value()]} << (index * 2);
++            }
++        }
++        fixed.dynamic_vertex_input.Assign(1);
++        fixed.attribute_types = types;
++        fixed.attributes = {};
++        fixed.binding_divisors = {};
++        if (fixed.extended_dynamic_state != 0) {
++            fixed.vertex_strides = {};
++        }
++    }
++    if ((fixed.color_write_enable_dynamic != 0) != dynamic_features.has_color_write_enable &&
++        fixed.extended_dynamic_state_3_blend == 0) {
++        if (dynamic_features.has_color_write_enable) {
++            for (auto& attachment : fixed.attachments) {
++                if (attachment.mask_r == 0 && attachment.mask_g == 0 && attachment.mask_b == 0 &&
++                    attachment.mask_a == 0) {
++                    attachment.mask_r.Assign(1);
++                    attachment.mask_g.Assign(1);
++                    attachment.mask_b.Assign(1);
++                    attachment.mask_a.Assign(1);
++                }
++            }
++        }
++        fixed.color_write_enable_dynamic.Assign(dynamic_features.has_color_write_enable ? 1 : 0);
++    }
++    if ((fixed.extended_dynamic_state_2_logic_op != 0) !=
++        dynamic_features.has_extended_dynamic_state_2_logic_op) {
++        if (dynamic_features.has_extended_dynamic_state_2_logic_op) {
++            fixed.dynamic_state.logic_op.Assign(0);
++            fixed.extended_dynamic_state_2_logic_op.Assign(1);
++        } else if (fixed.dynamic_state.logic_op_enable == 0 &&
++                   !dynamic_features.has_dynamic_state3_logic_op_enable) {
++            fixed.extended_dynamic_state_2_logic_op.Assign(0);
++        }
++    }
++    if (fixed.extended_dynamic_state_2_logic_op == 0 &&
++        !dynamic_features.has_dynamic_state3_logic_op_enable &&
++        fixed.dynamic_state.logic_op_enable == 0) {
++        fixed.dynamic_state.logic_op.Assign(0);
++    }
++    const std::array<std::pair<bool, bool>, 7> features{{
++        {fixed.extended_dynamic_state != 0, dynamic_features.has_extended_dynamic_state},
++        {fixed.extended_dynamic_state_2 != 0, dynamic_features.has_extended_dynamic_state_2},
++        {fixed.extended_dynamic_state_2_logic_op != 0,
++         dynamic_features.has_extended_dynamic_state_2_logic_op},
++        {fixed.extended_dynamic_state_3_blend != 0,
++         dynamic_features.has_extended_dynamic_state_3_blend},
++        {fixed.extended_dynamic_state_3_enables != 0,
++         dynamic_features.has_extended_dynamic_state_3_enables},
++        {fixed.color_write_enable_dynamic != 0, dynamic_features.has_color_write_enable},
++        {fixed.dynamic_vertex_input != 0, dynamic_features.has_dynamic_vertex_input},
++    }};
++    if (std::ranges::any_of(features, [](const auto& feature) {
++            return feature.first != feature.second;
++        })) {
++        return false;
++    }
++    if (fixed.dynamic_vertex_input != 0) {
++        std::array<u64, Maxwell::MaxShaderProgram> attribute_masks;
++        attribute_masks.fill(~u64{0});
++        size_t env_index = 0;
++        for (size_t stage = 0; stage < Maxwell::MaxShaderProgram; ++stage) {
++            if (key.unique_hashes[stage] != 0 && env_index < envs.size()) {
++                attribute_masks[stage] = VideoCommon::VertexAttributeMaskOf(envs[env_index++]);
++            }
++        }
++        fixed.attribute_types = VideoCommon::KeyedAttributeTypes(
++            fixed.attribute_types, key.unique_hashes, attribute_masks);
++    }
++    if (fixed.provoking_vertex_last != 0 && !dynamic_features.has_provoking_vertex_last_mode) {
++        return false;
++    }
++    return fixed.xfb_enabled == 0 || fixed.provoking_vertex_last == 0 ||
++           dynamic_features.has_provoking_vertex_tf_preserve;
++}
++
++std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddPrecompiledJobs(
++    u64 title_id, std::vector<PrecacheJob>& jobs, std::stop_token stop_loading) {
++    namespace Precompile = VideoCommon::Nx2Precompile;
++    if (Precompile::Mode() == 0) {
++        return std::nullopt;
++    }
++    const auto base_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
++                          fmt::format("{:016x}", title_id);
++    // Assembled from the recipe and the game's files when missing or older than the recipe
++    // (tens of seconds, about the file's size in memory).
++    const auto path =
++        Precompile::EnsurePrecompiledFile(title_id, base_dir, CACHE_VERSION, stop_loading);
++    if (path.empty() || stop_loading.stop_requested()) {
++        return std::nullopt;
++    }
++    const std::string path_text = Common::FS::PathToUTF8String(path);
++    std::error_code error;
++    const u64 file_size = std::filesystem::file_size(path, error);
++    if (error) {
++        return std::nullopt;
++    }
++    const auto modified = std::filesystem::last_write_time(path, error).time_since_epoch().count();
++    // Prepared once per file, driver, GPU and release: the driver's cache keeps the pipelines.
++    const auto stamp_path = Precompile::PreparedStampPath(base_dir, CACHE_VERSION);
++    const std::string stamp =
++        fmt::format("{} {} {:#x} {} {}\n", file_size, modified, device.GetDriverVersion(),
++                    Common::g_build_version, device.GetModelName());
++    if (!Precompile::Forced()) {
++        std::ifstream stamp_file(stamp_path, std::ios::binary);
++        std::string line;
++        if (std::getline(stamp_file, line) && line + '\n' == stamp) {
++            LOG_INFO(Render_Vulkan,
++                     "Precompiled pipelines: {} was prepared for this driver and build already",
++                     path_text);
++            return std::nullopt;
++        }
++    }
++    // Layout (Nx2Recipe): "NX2PREP1", u32 cache version, u32 environment count, u32 record count,
++    // u32 reserved; per environment u64 offset and u64 size of a serialized environment; per
++    // record u8 kind (0 graphics, 1 compute), u8 environment count, u16 reserved, u32 environment
++    // indices in stage order, then the key. Records are read again when built.
++    auto env_index = std::make_shared<std::vector<std::pair<u64, u64>>>();
++    std::vector<u64> record_offsets;
++    try {
++        std::ifstream in(path, std::ios::binary);
++        in.exceptions(std::ifstream::failbit);
++        std::array<char, 8> magic{};
++        u32 version{}, env_count{}, record_count{}, reserved{};
++        in.read(magic.data(), magic.size())
++            .read(reinterpret_cast<char*>(&version), sizeof(version))
++            .read(reinterpret_cast<char*>(&env_count), sizeof(env_count))
++            .read(reinterpret_cast<char*>(&record_count), sizeof(record_count))
++            .read(reinterpret_cast<char*>(&reserved), sizeof(reserved));
++        if (std::string_view{magic.data(), magic.size()} != "NX2PREP1" ||
++            version != CACHE_VERSION) {
++            LOG_WARNING(Render_Vulkan, "Precompiled pipeline file {} has another format or version",
++                        path_text);
++            return std::nullopt;
++        }
++        if (u64{env_count} * 16 > file_size || u64{record_count} * 8 > file_size) {
++            LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
++            return std::nullopt;
++        }
++        env_index->resize(env_count);
++        in.read(reinterpret_cast<char*>(env_index->data()),
++                static_cast<std::streamsize>(env_count * sizeof((*env_index)[0])));
++        if (std::ranges::any_of(*env_index, [&](const auto& entry) {
++                return entry.first > file_size || entry.second > file_size - entry.first;
++            })) {
++            LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
++            return std::nullopt;
++        }
++        record_offsets.reserve(record_count);
++        std::array<u32, Maxwell::MaxShaderProgram> ids{};
++        for (u32 i = 0; i < record_count; ++i) {
++            record_offsets.push_back(static_cast<u64>(in.tellg()));
++            u8 kind{}, count{};
++            u16 pad{};
++            in.read(reinterpret_cast<char*>(&kind), 1)
++                .read(reinterpret_cast<char*>(&count), 1)
++                .read(reinterpret_cast<char*>(&pad), 2);
++            const bool compute = kind == 1;
++            if (count == 0 || count > ids.size() || kind > 1 || (compute && count != 1)) {
++                LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
++                return std::nullopt;
++            }
++            in.read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
++            if (std::any_of(ids.begin(), ids.begin() + count,
++                            [&](u32 id) { return id >= env_count; })) {
++                LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
++                return std::nullopt;
++            }
++            in.seekg(compute ? sizeof(ComputePipelineCacheKey) : sizeof(GraphicsPipelineCacheKey),
++                     std::ios::cur);
++        }
++    } catch (const std::ios_base::failure& e) {
++        LOG_ERROR(Render_Vulkan, "Cannot read precompiled pipelines from {}: {}", path_text,
++                  e.what());
++        return std::nullopt;
++    }
++    // Graphics pipelines the disk cache holds were built at boot already.
++    const auto known = std::make_shared<const std::unordered_set<u64>>(disk_pipelines);
++    for (const u64 offset : record_offsets) {
++        jobs.push_back({0, [this, path, env_index, known, offset]() -> bool {
++                            std::ifstream in(path, std::ios::binary);
++                            in.exceptions(std::ifstream::failbit);
++                            in.seekg(static_cast<std::streamoff>(offset));
++                            u8 kind{}, count{};
++                            u16 pad{};
++                            std::array<u32, Maxwell::MaxShaderProgram> ids{};
++                            in.read(reinterpret_cast<char*>(&kind), 1)
++                                .read(reinterpret_cast<char*>(&count), 1)
++                                .read(reinterpret_cast<char*>(&pad), 2)
++                                .read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
++                            const bool compute = kind == 1;
++                            ComputePipelineCacheKey compute_key{};
++                            GraphicsPipelineCacheKey record_key{};
++                            if (compute) {
++                                in.read(reinterpret_cast<char*>(&compute_key),
++                                        sizeof(compute_key));
++                            } else {
++                                in.read(reinterpret_cast<char*>(&record_key),
++                                        sizeof(record_key));
++                            }
++                            std::vector<FileEnvironment> envs(count);
++                            for (size_t i = 0; i < count; ++i) {
++                                const auto [env_offset, env_size] = (*env_index)[ids[i]];
++                                in.clear();
++                                in.seekg(static_cast<std::streamoff>(env_offset));
++                                envs[i].Deserialize(
++                                    in, static_cast<std::streamoff>(env_offset + env_size));
++                            }
++                            ShaderPools pools;
++                            if (compute) {
++                                return CreateComputePipeline(pools, compute_key, envs.front(),
++                                                             nullptr, false)
++                                           .pipeline != nullptr;
++                            }
++                            if (!ConvertRecordedKey(record_key, envs)) {
++                                return false;
++                            }
++                            if (known->contains(record_key.Hash())) {
++                                return true;
++                            }
++                            boost::container::static_vector<Shader::Environment*,
++                                                            Maxwell::MaxShaderProgram>
++                                env_ptrs;
++                            for (auto& env : envs) {
++                                env_ptrs.push_back(&env);
++                            }
++                            const auto pipeline = CreateGraphicsPipeline(
++                                pools, record_key, MakeSpan(env_ptrs), nullptr, false);
++                            return pipeline != nullptr && !pipeline->Failed();
++                        }});
++    }
++    LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} records of {} to prepare",
++             record_offsets.size(), path_text);
++    return std::make_pair(stamp_path, stamp);
++}
++
+ void PipelineCache::QueueVulkanPipelineCacheFlush() {
+     if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
+         return;
+@@ -1475,35 +2158,48 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
      if (last_flush.time_since_epoch().count() != 0 && now - last_flush < interval) {
          return;
      }
@@ -31348,9 +34145,8 @@ index 0e42e8e25..1aaa616e2 100644
 -        flush_in_flight.store(false, std::memory_order_release);
 -    });
 +    QueueVulkanPipelineCacheSave(false);
- }
- 
--void PipelineCache::QueueVulkanPipelineCacheSave() {
++}
++
 +bool PipelineCache::VulkanPipelineCacheSaveDue(std::chrono::steady_clock::time_point& last) const {
 +    // As QueueVulkanPipelineCacheFlush: at most once a second per MiB the cache holds, as each
 +    // write copies all of it.
@@ -31363,8 +34159,9 @@ index 0e42e8e25..1aaa616e2 100644
 +    }
 +    last = now;
 +    return true;
-+}
-+
+ }
+ 
+-void PipelineCache::QueueVulkanPipelineCacheSave() {
 +void PipelineCache::QueueVulkanPipelineCacheSave(bool again_if_busy) {
      if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
          return;
@@ -31397,7 +34194,7 @@ index 0e42e8e25..1aaa616e2 100644
      });
  }
  
-@@ -1643,7 +2070,7 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
+@@ -1643,7 +2339,7 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
      if (!pipeline) {
          return nullptr;
      }
@@ -31406,7 +34203,7 @@ index 0e42e8e25..1aaa616e2 100644
      if (used_this_session.insert(pipeline.get()).second &&
          std::chrono::steady_clock::now() - used_pipelines_saved > save_interval) {
          SaveUsedPipelines();
-@@ -1656,8 +2083,80 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
+@@ -1656,8 +2352,80 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
      return BuiltPipeline(current_pipeline);
  }
  
@@ -31487,7 +34284,7 @@ index 0e42e8e25..1aaa616e2 100644
      native_wait_budget_us =
          static_cast<s64>(Settings::values.native_pipeline_wait_ms.GetValue()) * 1000;
      while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first)) {
-@@ -1691,7 +2190,7 @@ void PipelineCache::EvictUnusedPipelines() {
+@@ -1691,7 +2459,7 @@ void PipelineCache::EvictUnusedPipelines() {
      // this long is destroyed; rebuilding it later requires a full GPU-thread shader translation
      // (~8.5 ms each) plus a driver pipeline cache hit.
      constexpr u64 EvictAfterFrames = 9000;
@@ -31496,7 +34293,7 @@ index 0e42e8e25..1aaa616e2 100644
          return;
      }
      const u64 cutoff = frame_count - EvictAfterFrames;
-@@ -1817,12 +2316,11 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
+@@ -1817,12 +2585,11 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
          }
      }
      if (discard) {
@@ -31511,7 +34308,7 @@ index 0e42e8e25..1aaa616e2 100644
          }
      }
      return discard ? nullptr : pipeline;
-@@ -1885,6 +2383,8 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+@@ -1885,6 +2652,8 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
              mesh_unsupported = true;
          }
  
@@ -31520,7 +34317,7 @@ index 0e42e8e25..1aaa616e2 100644
          const u32 cfg_offset{static_cast<u32>(env.StartAddress() + sizeof(Shader::ProgramHeader))};
          Shader::Maxwell::Flow::CFG cfg(env, pools.flow_block, cfg_offset, index == 0);
          if (!uses_vertex_a || index != 1) {
-@@ -1895,6 +2395,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+@@ -1895,6 +2664,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
              auto& program_va{programs[0]};
              auto program_vb{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
              programs[index] = MergeDualVertexPrograms(program_va, program_vb, env, host_info);
@@ -31533,7 +34330,7 @@ index 0e42e8e25..1aaa616e2 100644
          }
  
          if (device.GetDriverID() != VK_DRIVER_ID_NVIDIA_PROPRIETARY && Shader::Optimization::HasBrokenPattern(programs[index])) {
-@@ -2061,6 +2567,21 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+@@ -2061,6 +2836,21 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
              }
          }
      }
@@ -31555,7 +34352,7 @@ index 0e42e8e25..1aaa616e2 100644
      // Each stage stays within the limit on its own; together they share one descriptor set.
      if (const u32 set_limit = host_info.max_descriptor_set_storage_buffers; set_limit != 0) {
          size_t storage_buffers{};
-@@ -2194,6 +2715,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+@@ -2194,6 +2984,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
  
  } catch (const Shader::Exception& exception) {
      auto hash = key.Hash();
@@ -31570,7 +34367,7 @@ index 0e42e8e25..1aaa616e2 100644
      size_t env_index{0};
      for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
          if (key.unique_hashes[index] == 0) {
-@@ -2221,53 +2750,70 @@ namespace {
+@@ -2221,53 +3019,70 @@ namespace {
  // are logged, and the totals every 10 s, to tell how much of the stutter on new content is
  // translation.
  void ReportRuntimePipeline(const char* kind, std::chrono::steady_clock::time_point begin,
@@ -31653,7 +34450,7 @@ index 0e42e8e25..1aaa616e2 100644
  
      std::shared_ptr<ShaderPools> emit_pools;
      auto reservation = emission_budget.TryAcquire(maxwell3d->GetNativeMacroEngine().native_turing);
-@@ -2411,7 +2957,11 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+@@ -2411,7 +3226,11 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
          const auto name{fmt::format("Shader {:016x}", key.unique_hash)};
          spv_module.SetObjectNameEXT(name.c_str());
      }
@@ -31666,7 +34463,7 @@ index 0e42e8e25..1aaa616e2 100644
      const Shader::Info info{std::move(program.info)};
      if (!thread_worker) {
          // The driver compiles on this thread. Precache and boot workers would otherwise hold their
-@@ -2424,15 +2974,22 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+@@ -2424,15 +3243,22 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
      return {.pipeline = std::make_unique<ComputePipeline>(
                  device, scheduler, vulkan_pipeline_cache, descriptor_pool, guest_descriptor_queue,
                  descriptor_buffer_ring, thread_worker, statistics, &shader_notify, info,
@@ -31692,7 +34489,7 @@ index 0e42e8e25..1aaa616e2 100644
      return {.failure = exception.what()};
  }
  
-@@ -2461,7 +3018,15 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
+@@ -2461,7 +3287,15 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
              cache_data.resize(cache_size);
              pipeline_cache.Read(&cache_size, cache_data.data());
          }
@@ -31710,10 +34507,10 @@ index 0e42e8e25..1aaa616e2 100644
      } catch (const std::ios_base::failure& e) {
          // The cache stays as it was: only the file being written goes.
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.h b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
-index 601369a81..0a81aaf28 100644
+index 601369a81..f182fc727 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.h
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
-@@ -12,11 +12,14 @@
+@@ -12,12 +12,17 @@
  #include <cstddef>
  #include <deque>
  #include <filesystem>
@@ -31723,12 +34520,15 @@ index 601369a81..0a81aaf28 100644
  #include <memory>
  #include <mutex>
 +#include <optional>
++#include <span>
  #include <string>
 +#include <string_view>
  #include <type_traits>
++#include <utility>
  #include "common/container/unordered_map.h"
  #include <vector>
-@@ -116,6 +119,8 @@ struct ComputePipelineCacheEntry {
+ 
+@@ -116,6 +121,8 @@ struct ComputePipelineCacheEntry {
      /// Constant buffer slots bound as storage buffer pointers (see MappedStoragePointerKeys)
      std::vector<u64> mapped_pointers;
      u32 rebuilds{};
@@ -31737,7 +34537,7 @@ index 601369a81..0a81aaf28 100644
  
      [[nodiscard]] ComputePipeline* Get(bool native, GPUVAddr address,
                                         const ComputePipelineCacheKey& key) const;
-@@ -149,6 +154,10 @@ private:
+@@ -149,6 +156,10 @@ private:
  
      std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline();
  
@@ -31748,7 +34548,7 @@ index 601369a81..0a81aaf28 100644
      std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
          ShaderPools& pools, const GraphicsPipelineCacheKey& key,
          std::span<Shader::Environment* const> envs, PipelineStatistics* statistics,
-@@ -177,10 +186,13 @@ private:
+@@ -177,10 +188,13 @@ private:
  
      void QueueVulkanPipelineCacheFlush();
  
@@ -31766,7 +34566,25 @@ index 601369a81..0a81aaf28 100644
  
      /// One build of the shader precache: builds a pipeline and destroys it, true when it built.
      struct PrecacheJob {
-@@ -214,6 +226,7 @@ private:
+@@ -199,6 +213,17 @@ private:
+                          std::unordered_set<u64> precached, std::stop_token stop_loading,
+                          const VideoCore::DiskResourceLoadCallback& callback);
+ 
++    /// Fritchii's precompiled pipelines (zortos293/Lichii#895, VideoCommon::Nx2Precompile): the
++    /// records of the title's precompiled file, assembled from its recipe and the game's own files,
++    /// as precache jobs. Returns the stamp file and the stamp PrecacheShaders writes once every
++    /// one of them ran; nothing when there is nothing to prepare.
++    std::optional<std::pair<std::filesystem::path, std::string>> AddPrecompiledJobs(
++        u64 title_id, std::vector<PrecacheJob>& jobs, std::stop_token stop_loading);
++    /// A recorded graphics key in this device's form, converted as LoadDiskResources converts the
++    /// disk cache's records. False when this device can't build it.
++    [[nodiscard]] bool ConvertRecordedKey(GraphicsPipelineCacheKey& key,
++                                          std::span<VideoCommon::FileEnvironment> envs) const;
++
+     const Device& device;
+     Scheduler& scheduler;
+     DescriptorPool& descriptor_pool;
+@@ -214,6 +239,7 @@ private:
      EmissionBudget emission_budget;
  
      GraphicsPipelineCacheKey graphics_key{};
@@ -31774,7 +34592,7 @@ index 601369a81..0a81aaf28 100644
      GraphicsPipeline* current_pipeline{};
  
      /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
-@@ -245,6 +258,12 @@ private:
+@@ -245,6 +271,12 @@ private:
      /// (used_pipelines) are built at boot; the rest are built when first needed, and not stored
      /// again. Each built pipeline holds driver memory (title 1: 6.5k cached, a quarter used).
      std::unordered_set<u64> disk_pipelines;
@@ -31787,7 +34605,7 @@ index 601369a81..0a81aaf28 100644
      std::unordered_map<u64, u8> used_pipelines; ///< Key hash -> sessions since it was last used
      std::unordered_set<const GraphicsPipeline*> used_this_session;
      std::filesystem::path used_pipelines_filename;
-@@ -257,14 +276,24 @@ private:
+@@ -257,14 +289,24 @@ private:
      std::chrono::steady_clock::time_point last_flush{};
      std::atomic<size_t> last_cache_size{};
      std::atomic_bool flush_in_flight{};
@@ -36288,7 +39106,7 @@ index 7b94bb97f..85594aa94 100644
                             VkDeviceSize count_offset, u32 draw_count, u32 stride) const noexcept {
          dld->vkCmdDrawIndirectCount(handle, src_buffer, src_offset, count_buffer, count_offset,
 diff --git a/src/yuzu/main_window.cpp b/src/yuzu/main_window.cpp
-index 27691e4fa..ff9ac8b87 100644
+index 27691e4fa..01fc01ab5 100644
 --- a/src/yuzu/main_window.cpp
 +++ b/src/yuzu/main_window.cpp
 @@ -12,6 +12,7 @@
@@ -36299,7 +39117,16 @@ index 27691e4fa..ff9ac8b87 100644
  #include "common/settings.h"
  #include "common/settings_enums.h"
  #include "frontend_common/settings_generator.h"
-@@ -326,6 +327,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+@@ -46,6 +47,8 @@
+ #include "yuzu/game/game_list.h"
+ #include "yuzu/nup_dialogs.h"
+ #include "yuzu/shader_warm_dialog.h"
++#include "video_core/nx2_precompile.h"
++#include "video_core/pipeline_cache_files.h"
+ #include "video_core/shader_warm/shader_warm_builder.h"
+ 
+ #include "applets/qt_amiibo_settings.h"
+@@ -326,6 +329,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
  constexpr int default_mouse_hide_timeout = 2500;
  constexpr int default_input_update_timeout = 1;
  constexpr int EmuThreadStopTimeoutMs = 10'000;
@@ -36309,7 +39136,7 @@ index 27691e4fa..ff9ac8b87 100644
  
  constexpr size_t CopyBufferSize = 1_MiB;
  
-@@ -2430,6 +2434,8 @@ void MainWindow::OnShutdownBeginDialog() {
+@@ -2430,6 +2436,8 @@ void MainWindow::OnShutdownBeginDialog() {
  void MainWindow::OnEmulationStopTimeExpired() {
      if (QtCommon::emu_thread) {
          QtCommon::emu_thread->ForceStop();
@@ -36318,7 +39145,7 @@ index 27691e4fa..ff9ac8b87 100644
          emu_terminate_timer.setSingleShot(true);
          emu_terminate_timer.start(EmuThreadStopTimeoutMs);
          connect(&emu_terminate_timer, &QTimer::timeout, this, &MainWindow::OnEmulationStopTimeout,
-@@ -2437,7 +2443,25 @@ void MainWindow::OnEmulationStopTimeExpired() {
+@@ -2437,7 +2445,25 @@ void MainWindow::OnEmulationStopTimeExpired() {
      }
  }
  
@@ -36344,7 +39171,7 @@ index 27691e4fa..ff9ac8b87 100644
      TerminateEmulationThread();
      OnEmulationStopped();
  }
-@@ -2445,6 +2469,10 @@ void MainWindow::OnEmulationStopTimeout() {
+@@ -2445,6 +2471,10 @@ void MainWindow::OnEmulationStopTimeout() {
  void MainWindow::TerminateEmulationThread() {
      if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning()) {
          LOG_ERROR(Frontend, "Emulation thread failed to stop, terminating it");
@@ -36355,7 +39182,7 @@ index 27691e4fa..ff9ac8b87 100644
          QtCommon::emu_thread->terminate();
          QtCommon::emu_thread->wait();
      }
-@@ -2558,8 +2586,13 @@ void MainWindow::ShutdownGame() {
+@@ -2558,8 +2588,13 @@ void MainWindow::ShutdownGame() {
          timeout.setSingleShot(true);
          connect(QtCommon::emu_thread.get(), &QThread::finished, &loop, &QEventLoop::quit);
          connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
@@ -36371,6 +39198,34 @@ index 27691e4fa..ff9ac8b87 100644
      }
      TerminateEmulationThread();
      OnEmulationStopped();
+@@ -4477,7 +4512,10 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
+         !Settings::values.use_disk_shader_cache.GetValue()) {
+         return;
+     }
+-    if (!ShaderWarm::WarmPending(title_id)) {
++    // A precompile recipe for this title (Fritchii's precompiled pipelines) not prepared yet.
++    const bool precompile_pending = VideoCommon::Nx2Precompile::PreparationPending(
++        title_id, VideoCommon::VulkanPipelineCacheVersion);
++    if (!ShaderWarm::WarmPending(title_id) && !precompile_pending) {
+         // Precached before: the renderer runs it again only when the driver or the file changed.
+         ShaderWarm::RequestWarmBeforeStart(true);
+         return;
+@@ -4489,8 +4527,13 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
+                            "are read and their shaders are built on every CPU thread, with the "
+                            "shaders earlier play sessions saved, which takes a few minutes. Later "
+                            "launches only build what is new, until the GPU driver changes. The "
+-                           "loading screen has a Skip button.\n\n"
+-                           "You can change this in Configure, Graphics, Advanced."),
++                           "loading screen has a Skip button.\n\n%1"
++                           "You can change this in Configure, Graphics, Advanced.")
++                            .arg(precompile_pending
++                                     ? tr("A precompile recipe was found for this game: every "
++                                          "pipeline the game is predicted to draw is prepared "
++                                          "too, about 15 minutes the first time.\n\n")
++                                     : QString{}),
+                         QMessageBox::NoButton, this);
+         QPushButton* const precache = box.addButton(tr("Precache now"), QMessageBox::AcceptRole);
+         box.addButton(tr("Start without"), QMessageBox::RejectRole);
 diff --git a/src/yuzu/main_window.h b/src/yuzu/main_window.h
 index 2dda29991..42cf151f9 100644
 --- a/src/yuzu/main_window.h

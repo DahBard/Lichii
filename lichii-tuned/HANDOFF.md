@@ -75,12 +75,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (289 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (293 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (266 files,
-  1.73 MB); check it
+  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (272 files,
+  1.85 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -142,6 +142,18 @@ is the next test.
   and device loss), `22d96360d` (5e8db75aa: core timing on a high-resolution waitable timer,
   `EDEN_HIRES_CLOCK=0` and ab-21 restore the old wait), `cd0d323cb` (464fbb45b: staging buffers
   may go over the memory budget instead of aborting).
+- Fritchii's shader preparation (owner's request, `fac2c0a4d`, `2ea4a0790`, `c70881e42`):
+  `nx2_shader_extract`, `nx2_recipe` and `nx2_precompile` as Fritchii v5.2 has them. A recipe for
+  the title (`EDEN_NX2_PRECOMPILE_RECIPE`, the title's shader folder or `<exe dir>/recipes`;
+  Fritchii's Ocarina file is `OoT v131072 (cache v54).nx2recipe`) is assembled with the game's
+  files into `precompiled.fork-v54.nx2prep`, and its records run as jobs of the loading-screen
+  precache, on every CPU thread (Ask asks at launch; ~15 minutes the first time; then the stamp
+  `precompiled_prepared.fork-v54.txt` skips it for that file, driver, GPU and release). Records
+  made on another device go through `ConvertRecordedKey`, the disk cache loader's conversion,
+  where Fritchii skips them (zortos293/Lichii#1012: 116,036 of 120,124 on AMD's Windows driver).
+  Fritchii: Ocarina's worst walking freezes on a first visit ~700-850 ms -> 40-70 ms. Not taken:
+  #896's fast path (kept infos and SPIR-V) and canonical keys (they would re-key the disk cache);
+  no checkpoint, so a skipped preparation starts over (the driver's cache answers what was built).
 - Not ported yet: the three porting agents stopped at the weekly usage limit (resets
   2026-11-14 02:00 UTC). Their finished commits are in (branches `r20-fritchii-core`,
   `r20-fritchii-shaders`); EXP35 was half done and dropped. Still to port: EXP35=2 with EXP36,
@@ -152,15 +164,13 @@ is the next test.
   166f173ab, fc6d4cab4 (prebuild streaming); #896's cheaper SSA reads.
 - Left out by choice: Fritchii's revert of #820 (its white fog was on an RTX 4080; r28 on the
   RX 9070 XT, with #820, showed none), graphics pipeline libraries (Fritchii turns them off on
-  AMD's Windows driver), the shader warm-up (#579, needs them), precompile and the precompiled
-  fast path (#895/#896: they need a `.nx2recipe` that nobody ships, and canonical keys would
-  re-key the disk cache), UI, branding and settings revisions.
+  AMD's Windows driver), the shader warm-up (#579, needs them), #896's precompiled fast path and
+  canonical keys (they would re-key the disk cache), UI, branding and settings revisions.
 - Shader precompile (the owner: under a minute after deleting the shaders, expected ~15): r18's
   "Precache shaders" (#781, Ask) builds the compute programs found in the game files plus the
-  cached graphics pipelines the boot left for later, and preload-all builds every cached pipeline
-  at boot. With the shader cache deleted there is little to build, so under a minute is what it
-  does. Preparing every graphics pipeline ahead needs a pipeline cache, Fritchii's recipe or
-  #579's warm-up.
+  cached graphics pipelines the boot left for later, so with the shader cache deleted it had
+  little to build. The 15 minutes are Fritchii's recipe preparation, ported above; it needs the
+  recipe file next to lichii.exe (`recipes/`) or in the title's shader folder.
 
 Round 19 (2026-11-09), after r28's water artifact:
 - `4f2e4a70f`: the effects mask Ocarina's temporal upscale builds (pixels changed after the fog
@@ -762,8 +772,10 @@ Own changes:
     `common/pgo_training.cpp` only writes profiles), so asked for its log and the dialog's code.
 - Run #29 (round 19, Windows only) built `pgo`, `pgo-lto` and `pgo-train` (artifacts
   `lichii-tuned-r29-*`, 90/90/97 MB). Not tested yet.
-- Run #30 (round 20, Windows only): `pgo`, `pgo-lto` and `pgo-train` from tuned4 `cfe4481f0`.
-  Round 19 was skipped in testing; this is the next test.
+- Run #30 (round 20, Windows only) built `pgo`, `pgo-lto` and `pgo-train` from tuned4 `cfe4481f0`
+  (success, 16 minutes). Superseded by run #31 before testing.
+- Run #31 (round 20 with Fritchii's shader preparation, Windows only): tuned4 `bd3ce79e8`. Round 19
+  was skipped in testing; this is the next test.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
