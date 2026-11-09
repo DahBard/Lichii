@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <utility>
 #include <vector>
 
@@ -15,14 +16,24 @@ namespace VideoCommon {
 
 class InvalidationAccumulator {
 public:
-    InvalidationAccumulator() = default;
+    /// `whole_blocks_`: a range runs to the end of the last 32-byte block a write touches
+    /// (upstream #700), otherwise as before it (see Add).
+    explicit InvalidationAccumulator(bool whole_blocks_ = WholeBlocksSwitch()) noexcept
+        : whole_blocks{whole_blocks_} {}
     ~InvalidationAccumulator() = default;
 
     void Add(GPUVAddr address, size_t size) noexcept {
         auto const end_address = start_address + accumulated_size;
         if (!(address >= start_address && address + size <= end_address)) {
+            // A range starts at the first 32-byte block a write touches. Its size is taken before
+            // that alignment, as before upstream #700 (Fritchii v5.1 c2d2f50d1): #700's whole
+            // blocks reach bytes the guest didn't write, and where the GPU wrote those and guest
+            // memory doesn't hold them yet (preflush, EDEN_NX2_EXP35's collected writes), the
+            // invalidation loaded stale guest bytes over them (stale vertices in the graveyard).
+            // A range can then end short of its write: a lone word at 0x54 gives [0x40, 0x4c).
             const GPUVAddr first_block = address & atomicity_mask;
-            size = ((address + size + atomicity_size_mask) & atomicity_mask) - first_block;
+            size = ((address + size + atomicity_size_mask) & atomicity_mask) -
+                   (whole_blocks ? first_block : address);
             address = first_block;
             if (start_address == 0) {
                 start_address = address;
@@ -53,9 +64,12 @@ public:
     }
 
 private:
-    // A range runs from the start of the first 32-byte block a write touches to the end of the
-    // last one. The size used to be taken before the address was aligned down, so a write past
-    // its block's start got a range ending short of it (a lone word at 0x54 gave [0x40, 0x4c)).
+    /// EDEN_NX2_INVALIDATE_BLOCKS=1: upstream #700's whole blocks.
+    [[nodiscard]] static bool WholeBlocksSwitch() noexcept {
+        const char* value = std::getenv("EDEN_NX2_INVALIDATE_BLOCKS");
+        return value != nullptr && value[0] == '1';
+    }
+
     static constexpr size_t atomicity_bits = 5;
     static constexpr size_t atomicity_size = 1ULL << atomicity_bits;
     static constexpr size_t atomicity_size_mask = atomicity_size - 1;
@@ -63,6 +77,7 @@ private:
     std::vector<std::pair<VAddr, size_t>> buffer;
     GPUVAddr start_address = 0;
     size_t accumulated_size = 0;
+    bool whole_blocks;
 };
 
 } // namespace VideoCommon
