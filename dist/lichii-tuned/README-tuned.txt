@@ -110,6 +110,15 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    stay the same). The run also has a "pgo-train" download again: 10-15 minutes of Ocarina
    with it records a profile that makes the next builds' own code faster on this CPU (see the
    end of this file).
+ * Round 18, for the emulated CPU cores that now hold the frame back (upstream pull request
+   #717): the code generated for the game's CPU code is tighter (fewer flag reloads, smaller
+   jump tables and exits, folded addresses, fewer register spills), reads and writes of
+   memory the GPU caches take a faster path, the emulated kernel's locks and waits spin
+   briefly before sleeping, and Ocarina gets three patches that do game work on the host:
+   decompressing its zstd data, comparing strings 8 bytes at a time, and backing off its
+   resource polling. Each can be switched off: ab-15 turns all of it off, ab-16 only the code
+   generation, ab-17 only the Ocarina patches (also in the game's Add-Ons). Left out: #717's
+   atomic instructions (a reported crash at boot) and its thread pinning.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -147,6 +156,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               perf-trace.bat
  ab-14-no-fsr-jitter.bat      FSR 4 without round 18's camera jitter (LICHII_FSR_JITTER=0),
                               logged like perf-trace.bat: compare edges and fine detail
+ ab-15-round17-cpu.bat        round 18's CPU work from #717 all off (code generation, memory,
+                              kernel, Ocarina patches), logged like perf-trace.bat
+ ab-16-round17-jit.bat        only #717's code generation off, logged like perf-trace.bat
+ ab-17-no-oot-patches.bat     only the Ocarina patches off (zstd, string compares, poll
+                              backoff, wider core masks), logged like perf-trace.bat
  verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
                               way on every use and logs differences ("missed" and "differed"
                               should stay 0); slower
