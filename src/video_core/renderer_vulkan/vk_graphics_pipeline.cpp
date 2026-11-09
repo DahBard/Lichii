@@ -289,6 +289,7 @@ ConfigureFuncPtr ConfigureFunc(const std::array<bool, NUM_STAGES>& stages,
 }
 
 std::atomic<std::chrono::nanoseconds::rep> hold_time_ns{};
+std::atomic<std::chrono::nanoseconds::rep> hold_time_total_ns{};
 // EDEN_NX2_TEXTURE_MEMO_VERIFY=1, read once: draws resolved from a memo are also resolved in full
 // and compared.
 bool TextureMemoVerify() {
@@ -334,6 +335,10 @@ void ReportTextureMemo() {
 
 std::chrono::nanoseconds GraphicsPipeline::TakeHoldTime() noexcept {
     return std::chrono::nanoseconds{hold_time_ns.exchange(0, std::memory_order::relaxed)};
+}
+
+std::chrono::nanoseconds GraphicsPipeline::HoldTimeTotal() noexcept {
+    return std::chrono::nanoseconds{hold_time_total_ns.load(std::memory_order::relaxed)};
 }
 
 // TODO(crueter): This is the worst-formatted code I have EVER seen
@@ -1331,10 +1336,11 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             // Claim the build here even for worker-only builds: the queue is FIFO, so a held
             // draw otherwise waits behind every pipeline queued before it (title 1: 1-2 s).
             build->Wait(true);
-            hold_time_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                       std::chrono::steady_clock::now() - begin)
-                                       .count(),
-                                   std::memory_order::relaxed);
+            const auto held_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - begin)
+                                     .count();
+            hold_time_ns.fetch_add(held_ns, std::memory_order::relaxed);
+            hold_time_total_ns.fetch_add(held_ns, std::memory_order::relaxed);
         });
     }
     const bool is_rescaling{texture_cache.IsRescaling()};
