@@ -855,6 +855,7 @@ PipelineCache::~PipelineCache() {
     Common::NoteShutdownProgress();
     workers.WaitForRequests();
     serialization_thread.WaitForRequests();
+    ReportDiskRecordFailures(); // the background prebuild's
     Common::NoteShutdownProgress();
     // The caches are written before anything slow is torn down, so a teardown cut short still
     // leaves them on disk.
@@ -866,6 +867,30 @@ PipelineCache::~PipelineCache() {
     Common::NoteShutdownProgress();
     DestroyPipelinesWithProgress(graphics_cache);
     DestroyPipelinesWithProgress(evicted_pipelines);
+}
+
+void PipelineCache::NoteDiskRecordFailure(std::string_view kind, u64 hash, const char* reason) {
+    constexpr size_t Shown = 4;
+    if (disk_record_failures.fetch_add(1, std::memory_order_relaxed) < Shown) {
+        LOG_INFO(Render_Vulkan,
+                 "{} pipeline {:016x}: a cached record this build cannot translate ({}), built "
+                 "when first needed instead",
+                 kind, hash, reason);
+    } else {
+        LOG_DEBUG(Render_Vulkan, "{} pipeline {:016x}: cached record not translated: {}", kind,
+                  hash, reason);
+    }
+}
+
+void PipelineCache::ReportDiskRecordFailures() {
+    const size_t failures = disk_record_failures.exchange(0, std::memory_order_relaxed);
+    if (failures != 0) {
+        LOG_INFO(Render_Vulkan,
+                 "{} cached pipeline records could not be translated by this build (stored by "
+                 "another or an older build, or guessed by the shader precache); their pipelines "
+                 "are built when first needed",
+                 failures);
+    }
 }
 
 void PipelineCache::SaveUsedPipelines() {
@@ -1580,6 +1605,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     lock.unlock();
 
     workers.WaitForRequests(stop_loading);
+    ReportDiskRecordFailures();
 
     AddIncompleteGraphics(state.incomplete_graphics, graphics_duplicates, disk_pipelines,
                           state.incomplete);
@@ -1629,6 +1655,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (precache && !stop_loading.stop_requested()) {
         PrecacheShaders(title_id, std::move(precache_graphics), std::move(precached_pipelines),
                         stop_loading, callback);
+        ReportDiskRecordFailures();
     }
     if (stop_loading.stop_requested()) {
         background_pipelines.Stop();
@@ -2556,6 +2583,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
 
 } catch (const Shader::Exception& exception) {
     auto hash = key.Hash();
+    if (!build_in_parallel) {
+        // A disk cache record: one another (or an older) build stored can lack what this
+        // translator asks for (merged packs: "Uncached storage pointer classification", 144
+        // errors and dumps for 108 pipelines). Not an error: the GPU thread builds the pipeline
+        // from the game when a draw needs it, and stores that record.
+        NoteDiskRecordFailure("Graphics", hash, exception.what());
+        return nullptr;
+    }
     size_t env_index{0};
     for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
         if (key.unique_hashes[index] == 0) {
@@ -2797,8 +2832,15 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
                 env.IsNativeProgram() ? env.MappedStoragePointerKeys() : std::vector<u64>{}};
 
 } catch (const Shader::Exception& exception) {
-    LOG_ERROR(Render_Vulkan, "Compute pipeline compilation failed shader={:#016x} pipeline={:#016x}: {}",
-              key.unique_hash, key.Hash(), exception.what());
+    if (!build_in_parallel) {
+        // A disk cache record this build cannot translate, as for graphics: built from the game
+        // when first dispatched.
+        NoteDiskRecordFailure("Compute", key.Hash(), exception.what());
+    } else {
+        LOG_ERROR(Render_Vulkan,
+                  "Compute pipeline compilation failed shader={:#016x} pipeline={:#016x}: {}",
+                  key.unique_hash, key.Hash(), exception.what());
+    }
     return {.failure = exception.what()};
 }
 

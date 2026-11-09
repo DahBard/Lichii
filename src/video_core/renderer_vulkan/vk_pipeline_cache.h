@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include "common/container/unordered_map.h"
 #include <vector>
@@ -255,6 +256,12 @@ private:
     /// (used_pipelines) are built at boot; the rest are built when first needed, and not stored
     /// again. Each built pipeline holds driver memory (title 1: 6.5k cached, a quarter used).
     std::unordered_set<u64> disk_pipelines;
+    /// Disk cache records the translation rejected since the last report: the first few are
+    /// logged, the rest counted (ReportDiskRecordFailures, after the boot build, the precache
+    /// and, for the background prebuild, at exit).
+    std::atomic<size_t> disk_record_failures{};
+    void NoteDiskRecordFailure(std::string_view kind, u64 hash, const char* reason);
+    void ReportDiskRecordFailures();
     std::unordered_map<u64, u8> used_pipelines; ///< Key hash -> sessions since it was last used
     std::unordered_set<const GraphicsPipeline*> used_this_session;
     std::filesystem::path used_pipelines_filename;
