@@ -1484,6 +1484,12 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     compute_envs.clear();
 
     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
+    if (PreloadAllPipelines() && queued_graphics > 10000) {
+        LOG_WARNING(Render_Vulkan,
+                    "EDEN_NX2_PRELOAD_ALL_PIPELINES: building and keeping all {} cached graphics "
+                    "pipelines holds ~{} GB of driver memory all session",
+                    queued_graphics, queued_graphics * 460 / (1024 * 1024));
+    }
     if (const size_t total_dropped = std::accumulate(dropped.begin(), dropped.end(), size_t{});
         total_dropped != 0) {
         static constexpr std::array<const char*, DropCount> reasons{
