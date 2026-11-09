@@ -47,16 +47,30 @@ TEST_CASE("A write spanning blocks covers each block it touches", "[invalidation
     CHECK(ranges[0].second == 0x60);
 }
 
-TEST_CASE("Without whole blocks a range keeps its write's size from the block's start",
-          "[invalidation_accumulator]") {
+TEST_CASE("A range is the bytes written", "[invalidation_accumulator]") {
     VideoCommon::InvalidationAccumulator accumulator{false};
     accumulator.Add(0x1054, 4);
-    accumulator.Add(0x3000, 0x20);
-    accumulator.Add(0x3020, 0x10);
+    // A constant buffer vec4 written word by word, as WriteWordsCached adds it.
+    for (GPUVAddr address = 0x3030; address < 0x3040; address += 4) {
+        accumulator.Add(address, 4);
+    }
+    // Inside the range already: nothing new.
+    accumulator.Add(0x3034, 4);
     const auto ranges = Ranges(accumulator);
     REQUIRE(ranges.size() == 2);
-    CHECK(ranges[0].first == 0x1040);
-    CHECK(ranges[0].second == 0xc);
-    CHECK(ranges[1].first == 0x3000);
-    CHECK(ranges[1].second == 0x40);
+    CHECK(ranges[0].first == 0x1054);
+    CHECK(ranges[0].second == 4);
+    CHECK(ranges[1].first == 0x3030);
+    CHECK(ranges[1].second == 0x10);
+}
+
+TEST_CASE("Words written from mid-block on merge into one range", "[invalidation_accumulator]") {
+    VideoCommon::InvalidationAccumulator accumulator{false};
+    for (GPUVAddr address = 0x2054; address < 0x2084; address += 4) {
+        accumulator.Add(address, 4);
+    }
+    const auto ranges = Ranges(accumulator);
+    REQUIRE(ranges.size() == 1);
+    CHECK(ranges[0].first == 0x2054);
+    CHECK(ranges[0].second == 0x30);
 }
