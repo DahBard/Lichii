@@ -791,6 +791,16 @@ constexpr size_t MaxPipelinesWithoutUsedList = 3000;
 // for a later precache.
 constexpr size_t PrecacheCaptureLimit = size_t{1} << 30;
 
+// EDEN_NX2_REKEY_FOREIGN_PIPELINES=0: cached graphics pipelines another GPU driver (or driver
+// version) stored are skipped at boot instead of loaded under this driver (see load_graphics).
+bool RekeyForeignPipelines() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_REKEY_FOREIGN_PIPELINES");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 // EDEN_NX2_PRELOAD_ALL_PIPELINES=1 builds every cached pipeline at boot, as before.
 bool PreloadAllPipelines() {
     static const bool all = [] {
@@ -1229,6 +1239,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
         VideoCommon::CheckGraphicsRecord(key.unique_hashes, envs.size());
         const auto record{read_record(file)};
+        const u64 stored_key_hash = key.Hash();
         u64 stages{};
         for (const FileEnvironment& env : envs) {
             stages = (stages << 8) | static_cast<u32>(env.ShaderStage());
@@ -1253,6 +1264,9 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         if (fixed.driver_id != dynamic_features.driver_id ||
             fixed.driver_version != dynamic_features.driver_version) {
             ++other_driver;
+            if (!RekeyForeignPipelines()) {
+                return;
+            }
             fixed.driver_id = dynamic_features.driver_id;
             fixed.driver_version = dynamic_features.driver_version;
         }
@@ -1380,6 +1394,16 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
 
         const u64 hash = key.Hash();
+        // A key the conversions above changed (another driver's, another dynamic state form)
+        // takes the used-list age of the key as stored (Fritchii v5 ececc0bbd).
+        if (hash != stored_key_hash) {
+            if (const auto used = used_pipelines.find(stored_key_hash);
+                used != used_pipelines.end()) {
+                const u8 age = used->second;
+                const auto [entry, inserted] = used_pipelines.try_emplace(hash, age);
+                entry->second = (std::min)(entry->second, age);
+            }
+        }
         if (!disk_pipelines.insert(hash).second) {
             ++extra_records;
             return;
@@ -1528,11 +1552,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         logic_op_flips != 0 || logic_op_in_use != 0) {
         LOG_INFO(Render_Vulkan,
                  "Pipeline cache: {} of {} cached graphics pipelines from another driver or driver "
-                 "version, {} turned into dynamic vertex input, {} into this device's color write "
-                 "enable form, {} into its logic op form ({} left out: the logic op is on and its "
-                 "op not recorded)",
-                 other_driver, graphics_records, to_vertex_input, color_write_flips,
-                 logic_op_flips, logic_op_in_use);
+                 "version ({}), {} turned into dynamic vertex input, {} into this device's color "
+                 "write enable form, {} into its logic op form ({} left out: the logic op is on "
+                 "and its op not recorded)",
+                 other_driver, graphics_records,
+                 RekeyForeignPipelines() ? "loaded under this one"
+                                         : "skipped: EDEN_NX2_REKEY_FOREIGN_PIPELINES=0",
+                 to_vertex_input, color_write_flips, logic_op_flips, logic_op_in_use);
     }
     if (skipped_pipelines != 0) {
         LOG_INFO(
