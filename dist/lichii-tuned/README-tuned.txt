@@ -161,14 +161,14 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    first launch asks to precache shaders: say yes, and before the game starts every pipeline
    the game is predicted to draw is built once, so the GPU driver has them compiled before
    they are first drawn (about 15 minutes, once per GPU driver and build; Fritchii measured
-   Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). Pipelines recorded on
-   another GPU are converted for this one instead of skipped (Fritchii skips most of them on
-   AMD's Windows driver). Keep the recipes folder next to lichii.exe; other games' recipes
-   can go there too. EDEN_NX2_PRECOMPILE=0 turns it off. If a GPU driver crash ends the
-   preparation, the next launch skips the pipeline it was building (upstream #999), and r35
-   no longer crashes AMD's driver on the recipe's tessellation pipelines: upstream #820's
-   emulation of noperspective varyings is reverted, as in Fritchii (it also caused white fog at
-   the Hyrule Field drawbridge there).
+   Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). As in Fritchii, a
+   pipeline recorded for a GPU with other features is skipped, not converted (r34 and r35
+   converted them). Keep the recipes folder next to lichii.exe; other games' recipes can go
+   there too. EDEN_NX2_PRECOMPILE=0 turns it off. If a crash ends the preparation, the next
+   launch skips the pipelines it was building (upstream #999). Upstream #820's emulation of
+   noperspective varyings is reverted, as in Fritchii (it also caused white fog at the Hyrule
+   Field drawbridge there); r35's preparation still crashed near its end, which is being
+   looked into.
  * Round 20, more of Fritchii v5.2, each group with an A/B launcher that brings round 19 back:
    - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
      thread, so a new effect stalls the frame less; a draw whose pipeline is still building is

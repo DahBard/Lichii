@@ -1675,12 +1675,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     std::array<size_t, DropCount> dropped{};
     std::array<size_t, DropCount> dropped_with_feature{}; ///< records that had the feature on
     size_t graphics_records = 0;
-    size_t other_driver = 0;      ///< records from another driver or driver version
-    size_t to_vertex_input = 0;   ///< records turned into the dynamic vertex input form
-    size_t color_write_flips = 0; ///< records whose color write enable form was changed
-    size_t logic_op_flips = 0;    ///< records whose logic op form was changed
-    size_t logic_op_in_use = 0;   ///< recorded with a dynamic logic op, the logic op on
-    size_t extra_records = 0;     ///< records whose (masked) key an earlier record has
+    size_t other_driver = 0;  ///< records from another driver or driver version
+    size_t extra_records = 0; ///< records whose (masked) key an earlier record has
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
@@ -1701,12 +1697,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         ++graphics_records;
 
-        // A record holds guest code and the pipeline state, translated and built for this device
-        // whatever recorded it, but its key also holds the recording driver and the states that
-        // device set dynamically. A key with another driver never met a runtime key, so every
-        // such pipeline was built again in game (a shared 22,000-pipeline Ocarina cache from
-        // Lichii build 86 on an RX 9070 XT). Take this driver's, and give state this device sets
-        // dynamically the form its runtime keys have.
+        // A key holds the driver that stored it, which never met a runtime key after a driver
+        // update (or in a cache shared from another driver), so every such pipeline was built
+        // again in game. Nothing builds from those fields: take this driver's. A record whose
+        // dynamic states differ from this device's is left out below, as Fritchii leaves it.
         auto& fixed = key.state;
         if (fixed.driver_id != dynamic_features.driver_id ||
             fixed.driver_version != dynamic_features.driver_version) {
@@ -1716,63 +1710,6 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             }
             fixed.driver_id = dynamic_features.driver_id;
             fixed.driver_version = dynamic_features.driver_version;
-        }
-        if (fixed.dynamic_vertex_input == 0 && dynamic_features.has_dynamic_vertex_input) {
-            // As Refresh: the attribute types alone (from VK_EXT_vertex_input_dynamic_state off,
-            // e.g. NVIDIA drivers before 580.119.02); the rest of the vertex input is dynamic.
-            static constexpr std::array<u32, 8> type_classes{0, 1, 1, 2, 3, 1, 1, 1};
-            u64 types = 0;
-            for (size_t index = 0; index < fixed.attributes.size(); ++index) {
-                const auto& attribute = fixed.attributes[index];
-                if (attribute.enabled != 0) {
-                    types |= u64{type_classes[attribute.type.Value()]} << (index * 2);
-                }
-            }
-            fixed.dynamic_vertex_input.Assign(1);
-            fixed.attribute_types = types;
-            fixed.attributes = {};
-            fixed.binding_divisors = {};
-            if (fixed.extended_dynamic_state != 0) {
-                fixed.vertex_strides = {};
-            }
-            ++to_vertex_input;
-        }
-        if ((fixed.color_write_enable_dynamic != 0) != dynamic_features.has_color_write_enable &&
-            fixed.extended_dynamic_state_3_blend == 0) {
-            // With dynamic color write enable, an attachment that writes no channel keeps all
-            // four in the key. The other way can't tell such an attachment from one that writes
-            // all four; most do.
-            if (dynamic_features.has_color_write_enable) {
-                for (auto& attachment : fixed.attachments) {
-                    if (attachment.mask_r == 0 && attachment.mask_g == 0 &&
-                        attachment.mask_b == 0 && attachment.mask_a == 0) {
-                        attachment.mask_r.Assign(1);
-                        attachment.mask_g.Assign(1);
-                        attachment.mask_b.Assign(1);
-                        attachment.mask_a.Assign(1);
-                    }
-                }
-            }
-            fixed.color_write_enable_dynamic.Assign(dynamic_features.has_color_write_enable ? 1
-                                                                                             : 0);
-            ++color_write_flips;
-        }
-        if ((fixed.extended_dynamic_state_2_logic_op != 0) !=
-            dynamic_features.has_extended_dynamic_state_2_logic_op) {
-            if (dynamic_features.has_extended_dynamic_state_2_logic_op) {
-                // The op leaves the key (Refresh2 isn't run).
-                fixed.dynamic_state.logic_op.Assign(0);
-                fixed.extended_dynamic_state_2_logic_op.Assign(1);
-                ++logic_op_flips;
-            } else if (fixed.dynamic_state.logic_op_enable == 0 &&
-                       !dynamic_features.has_dynamic_state3_logic_op_enable) {
-                // The key holds no op, which matters only while the logic op is on (all of a
-                // shared Ocarina cache recorded on another GPU: 21,062 records).
-                fixed.extended_dynamic_state_2_logic_op.Assign(0);
-                ++logic_op_flips;
-            } else {
-                ++logic_op_in_use;
-            }
         }
         // One key for every op while the logic op is off, as Refresh makes them.
         if (fixed.extended_dynamic_state_2_logic_op == 0 &&
@@ -2018,17 +1955,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         LOG_WARNING(Render_Vulkan, "Pipeline cache: {} of {} cached graphics pipelines left out{}",
                     total_dropped, graphics_records, detail);
     }
-    if (other_driver != 0 || to_vertex_input != 0 || color_write_flips != 0 ||
-        logic_op_flips != 0 || logic_op_in_use != 0) {
+    if (other_driver != 0) {
         LOG_INFO(Render_Vulkan,
                  "Pipeline cache: {} of {} cached graphics pipelines from another driver or driver "
-                 "version ({}), {} turned into dynamic vertex input, {} into this device's color "
-                 "write enable form, {} into its logic op form ({} left out: the logic op is on "
-                 "and its op not recorded)",
+                 "version ({})",
                  other_driver, graphics_records,
                  RekeyForeignPipelines() ? "loaded under this one"
-                                         : "skipped: EDEN_NX2_REKEY_FOREIGN_PIPELINES=0",
-                 to_vertex_input, color_write_flips, logic_op_flips, logic_op_in_use);
+                                         : "skipped: EDEN_NX2_REKEY_FOREIGN_PIPELINES=0");
     }
     if (skipped_pipelines != 0) {
         LOG_INFO(
@@ -2315,62 +2248,30 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
              std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
 }
 
-bool PipelineCache::ConvertRecordedKey(GraphicsPipelineCacheKey& key,
-                                       std::span<FileEnvironment> envs, size_t* reason) const {
-    // As LoadDiskResources converts the disk cache's records (keep the two alike): this driver,
-    // and the form this device gives the states it sets dynamically. Fritchii skips a record made
-    // for another device instead: 116,036 of 120,124 on AMD's Windows driver (zortos293/Lichii
-    // #1012).
+bool PipelineCache::RecordedKeyForThisDevice(GraphicsPipelineCacheKey& key,
+                                             std::span<FileEnvironment> envs,
+                                             size_t* reason) const {
+    // As Fritchii v5.5's RecordedKeyForThisDevice. The driver fields only tell cache generations
+    // apart; the pipeline does not use them, so the record is built for this driver.
     auto& fixed = key.state;
     fixed.driver_id = dynamic_features.driver_id;
     fixed.driver_version = dynamic_features.driver_version;
-    if (fixed.dynamic_vertex_input == 0 && dynamic_features.has_dynamic_vertex_input) {
-        static constexpr std::array<u32, 8> type_classes{0, 1, 1, 2, 3, 1, 1, 1};
-        u64 types = 0;
-        for (size_t index = 0; index < fixed.attributes.size(); ++index) {
-            const auto& attribute = fixed.attributes[index];
-            if (attribute.enabled != 0) {
-                types |= u64{type_classes[attribute.type.Value()]} << (index * 2);
-            }
-        }
-        fixed.dynamic_vertex_input.Assign(1);
-        fixed.attribute_types = types;
-        fixed.attributes = {};
-        fixed.binding_divisors = {};
-        if (fixed.extended_dynamic_state != 0) {
-            fixed.vertex_strides = {};
-        }
+    // Recorded with a dynamic logic op (NVIDIA: the Ocarina recipe), built where it is static
+    // (AMD's Windows driver; Fritchii 9ea66c827): with the logic op off the op does not count, so
+    // the record is the key a draw gives here. With it on the op is unknown: left out below.
+    if (fixed.extended_dynamic_state_2_logic_op != 0 &&
+        !dynamic_features.has_extended_dynamic_state_2_logic_op &&
+        !dynamic_features.has_dynamic_state3_logic_op_enable &&
+        fixed.dynamic_state.logic_op_enable == 0) {
+        fixed.extended_dynamic_state_2_logic_op.Assign(0);
     }
-    if ((fixed.color_write_enable_dynamic != 0) != dynamic_features.has_color_write_enable &&
-        fixed.extended_dynamic_state_3_blend == 0) {
-        if (dynamic_features.has_color_write_enable) {
-            for (auto& attachment : fixed.attachments) {
-                if (attachment.mask_r == 0 && attachment.mask_g == 0 && attachment.mask_b == 0 &&
-                    attachment.mask_a == 0) {
-                    attachment.mask_r.Assign(1);
-                    attachment.mask_g.Assign(1);
-                    attachment.mask_b.Assign(1);
-                    attachment.mask_a.Assign(1);
-                }
-            }
-        }
-        fixed.color_write_enable_dynamic.Assign(dynamic_features.has_color_write_enable ? 1 : 0);
-    }
-    if ((fixed.extended_dynamic_state_2_logic_op != 0) !=
-        dynamic_features.has_extended_dynamic_state_2_logic_op) {
-        if (dynamic_features.has_extended_dynamic_state_2_logic_op) {
-            fixed.dynamic_state.logic_op.Assign(0);
-            fixed.extended_dynamic_state_2_logic_op.Assign(1);
-        } else if (fixed.dynamic_state.logic_op_enable == 0 &&
-                   !dynamic_features.has_dynamic_state3_logic_op_enable) {
-            fixed.extended_dynamic_state_2_logic_op.Assign(0);
-        }
-    }
+    // One key for every op while the logic op is off, as draws make them (Refresh).
     if (fixed.extended_dynamic_state_2_logic_op == 0 &&
         !dynamic_features.has_dynamic_state3_logic_op_enable &&
         fixed.dynamic_state.logic_op_enable == 0) {
         fixed.dynamic_state.logic_op.Assign(0);
     }
+    // Made for a device with other dynamic states: left out, as Fritchii leaves it.
     const std::array<std::pair<bool, bool>, 7> features{{
         {fixed.extended_dynamic_state != 0, dynamic_features.has_extended_dynamic_state},
         {fixed.extended_dynamic_state_2 != 0, dynamic_features.has_extended_dynamic_state_2},
@@ -2569,7 +2470,7 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                                            .pipeline != nullptr;
                             }
                             if (size_t reason = 0;
-                                !ConvertRecordedKey(record_key, envs, &reason)) {
+                                !RecordedKeyForThisDevice(record_key, envs, &reason)) {
                                 ++counts->unbuildable[reason];
                                 return false;
                             }
