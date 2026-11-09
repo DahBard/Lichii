@@ -697,10 +697,12 @@ private:
         u64 shape_key;
         u64 render_frame;
         GPUVAddr moved_to;
+        DAddr moved_cpu_addr; ///< The moved image serves [moved_cpu_addr, moved_cpu_addr + size)
         bool gpu_modified;
     };
     enum TombstoneRead : u8 { TombstoneSampled, TombstoneLoaded, TombstoneCpuRead, TombstoneReads };
-    void AddRelocationTombstone(const ImageBase& old_image, GPUVAddr moved_to);
+    void AddRelocationTombstone(const ImageBase& old_image, GPUVAddr moved_to,
+                                DAddr moved_cpu_addr);
     /// JoinImages: a new image at a tombstoned address waits for its first PrepareImage.
     void CheckTombstoneCreation(ImageId image_id, const ImageBase& image, bool overwritten);
     void CheckTombstonePrepare(ImageId image_id, const ImageBase& image, bool is_modification,

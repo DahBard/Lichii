@@ -3605,7 +3605,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
                     ++rt_stats.relocated_images;
                     Churn::Add(Churn::ImagesRelocated);
                     if (mode == 4) {
-                        AddRelocationTombstone(slot_images[old_id], gpu_addr);
+                        AddRelocationTombstone(slot_images[old_id], gpu_addr, cpu_addr);
                     }
                     RelocateImage(old_id, gpu_addr, cpu_addr);
                     // The other bad overlaps are linked to it as to a new image (below).
@@ -5020,7 +5020,8 @@ void TextureCache<P>::NoteRelocationGuard(ImageBase& image, RelocationGuard reas
 }
 
 template <class P>
-void TextureCache<P>::AddRelocationTombstone(const ImageBase& old_image, GPUVAddr moved_to) {
+void TextureCache<P>::AddRelocationTombstone(const ImageBase& old_image, GPUVAddr moved_to,
+                                             DAddr moved_cpu_addr) {
     relocation_tombstones.push_back(RelocationTombstone{
         .gpu_addr = old_image.gpu_addr,
         .cpu_addr = old_image.cpu_addr,
@@ -5028,6 +5029,7 @@ void TextureCache<P>::AddRelocationTombstone(const ImageBase& old_image, GPUVAdd
         .shape_key = RelocationShapeKey(old_image.info),
         .render_frame = RenderFrame(),
         .moved_to = moved_to,
+        .moved_cpu_addr = moved_cpu_addr,
         .gpu_modified = True(old_image.flags & ImageFlagBits::GpuModified),
     });
     tombstone_cpu_begin = (std::min)(tombstone_cpu_begin, old_image.cpu_addr);
@@ -5088,8 +5090,14 @@ void TextureCache<P>::CheckTombstoneCpuRead(DAddr cpu_addr, u64 size) {
         return;
     }
     for (const RelocationTombstone& tombstone : relocation_tombstones) {
-        if (tombstone.gpu_modified && cpu_addr < tombstone.cpu_addr + tombstone.size &&
-            tombstone.cpu_addr < cpu_addr + size) {
+        if (!tombstone.gpu_modified) {
+            continue;
+        }
+        const DAddr begin = (std::max)(cpu_addr, tombstone.cpu_addr);
+        const DAddr end = (std::min)(cpu_addr + size, tombstone.cpu_addr + tombstone.size);
+        // The drift is smaller than the image: the moved image serves the part it now covers.
+        if (begin < end && (begin < tombstone.moved_cpu_addr ||
+                            end > tombstone.moved_cpu_addr + tombstone.size)) {
             NoteTombstoneHit(tombstone, TombstoneCpuRead, cpu_addr, nullptr);
             return;
         }
