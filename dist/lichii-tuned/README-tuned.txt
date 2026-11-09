@@ -245,15 +245,16 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (EDEN_NX2_ASYNC_TRANSLATE=0, EDEN_NX2_ASYNC_DISCARD=0,
                               EDEN_NX2_PREBUILD_STREAM=0), logged like perf-trace.bat
  ab-23-round19-memory.bat     round 19's guest memory paths (EDEN_NX2_EXP35=0,
-                              LICHII_BANK_CHECK=1, EDEN_NX2_EXP18=0, EDEN_NX2_EXP29=0,
+                              EDEN_NX2_EXP36=1, LICHII_BANK_CHECK=1, EDEN_NX2_EXP18=0,
+                              EDEN_NX2_EXP29=0,
                               EDEN_NX2_INVALIDATE_BLOCKS=1, EDEN_NX2_SEC_RESERVE=0), logged like
                               perf-trace.bat
  ab-24-round19-render-targets.bat  no render target relocation, render-frame clock or cold sweep
                               (EDEN_NX2_EXP43=0, EDEN_NX2_RENDER_CLOCK=0,
                               EDEN_NX2_TC_COLD_FRAMES=0), logged like perf-trace.bat
  verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
-                              verify ... differ", tombstone hits and bank check "missed" should
-                              stay 0); slower
+                              verify ... differ", tombstone hits and the bank check's "without
+                              the frame check (mode 3)" should stay 0); slower
  verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
                               differences ("not met after the drain", "differing" and mismatch
                               counts should stay 0); slower
