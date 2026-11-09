@@ -2177,11 +2177,12 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                     continue;
                 }
                 jobs.push_back({0,
-                                [this, key, env = std::move(env)]() mutable {
+                                [this, key, compute_env = std::move(env)]() mutable {
                                     static const GuessMissing guess{};
-                                    env.SetGuessMissing(&guess);
+                                    compute_env.SetGuessMissing(&guess);
                                     ShaderPools pools;
-                                    return CreateComputePipeline(pools, key, env, nullptr, false)
+                                    return CreateComputePipeline(pools, key, compute_env, nullptr,
+                                                                 false)
                                                .pipeline != nullptr;
                                 },
                                 key.unique_hash});
