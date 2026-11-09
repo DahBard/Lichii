@@ -851,6 +851,13 @@ PipelineCache::~PipelineCache() {
     // The stop callback goes first: it uses background_pipelines.
     loading_stop_callback.reset();
     serialization_stop.request_stop();
+    background_pipelines.RequestStop();
+    if (const auto usage = background_pipelines.GetUsage(); usage.taken != 0 || usage.unused != 0) {
+        // Prebuilt pipelines a draw never took cost driver memory and build time for nothing.
+        LOG_INFO(Render_Vulkan,
+                 "Background pipelines this session: {} taken by draws, {} never used",
+                 usage.taken, usage.unused);
+    }
     background_pipelines.Stop();
     Common::NoteShutdownProgress();
     workers.WaitForRequests();
