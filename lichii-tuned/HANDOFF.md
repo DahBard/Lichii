@@ -800,8 +800,11 @@ Own changes:
 - Run #32 (round 20 with upstream #961, #951 and the preparation counts, Windows only): tuned4
   `23a9407df`. Run #33 (a stamp file renamed apart from Fritchii's) was cancelled and its commit
   dropped at the owner's request, in favour of shipping the recipe.
-- Run #34 (round 20 with the Ocarina recipe in the package, Windows only): tuned4 `e0b1f284f`.
-  Round 19 was skipped in testing; this is the next test.
+- Run #32 built (success, 25 minutes).
+- Run #34 (round 20 with the Ocarina recipe in the package, Windows only): tuned4 `e0b1f284f`,
+  built `pgo`, `pgo-lto` and `pgo-train` (success, 12 minutes; artifacts `lichii-tuned-r34-*`,
+  92/92/99 MB, each 1.8 MB larger than r32's: `recipes/OoT_v131072_cache_v54.nx2recipe` next to
+  lichii.exe). Round 19 was skipped in testing; this is the next test.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
