@@ -155,6 +155,25 @@ std::filesystem::path PrecompiledPath(const std::filesystem::path& title_dir, u3
     return title_dir / fmt::format("precompiled.fork-v{}.nx2prep", cache_version);
 }
 
+std::filesystem::path PreparedStampPath(const std::filesystem::path& title_dir,
+                                        u32 cache_version) {
+    return title_dir / fmt::format("precompiled_prepared.fork-v{}.txt", cache_version);
+}
+
+bool PreparationPending(u64 title_id, u32 cache_version) {
+    if (Mode() == 0 || title_id == 0) {
+        return false;
+    }
+    const auto title_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
+                           fmt::format("{:016x}", title_id);
+    std::error_code error;
+    if (std::filesystem::exists(PreparedStampPath(title_dir, cache_version), error)) {
+        return false;
+    }
+    return std::filesystem::exists(PrecompiledPath(title_dir, cache_version), error) ||
+           FindRecipe(title_id, title_dir, cache_version).has_value();
+}
+
 std::optional<Recipe> FindRecipe(u64 title_id, const std::filesystem::path& title_dir,
                                  u32 cache_version) {
     std::vector<std::filesystem::path> candidates;

@@ -47,6 +47,8 @@
 #include "yuzu/game/game_list.h"
 #include "yuzu/nup_dialogs.h"
 #include "yuzu/shader_warm_dialog.h"
+#include "video_core/nx2_precompile.h"
+#include "video_core/pipeline_cache_files.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 
 #include "applets/qt_amiibo_settings.h"
@@ -4510,7 +4512,10 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
         !Settings::values.use_disk_shader_cache.GetValue()) {
         return;
     }
-    if (!ShaderWarm::WarmPending(title_id)) {
+    // A precompile recipe for this title (Fritchii's precompiled pipelines) not prepared yet.
+    const bool precompile_pending = VideoCommon::Nx2Precompile::PreparationPending(
+        title_id, VideoCommon::VulkanPipelineCacheVersion);
+    if (!ShaderWarm::WarmPending(title_id) && !precompile_pending) {
         // Precached before: the renderer runs it again only when the driver or the file changed.
         ShaderWarm::RequestWarmBeforeStart(true);
         return;
@@ -4522,8 +4527,13 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
                            "are read and their shaders are built on every CPU thread, with the "
                            "shaders earlier play sessions saved, which takes a few minutes. Later "
                            "launches only build what is new, until the GPU driver changes. The "
-                           "loading screen has a Skip button.\n\n"
-                           "You can change this in Configure, Graphics, Advanced."),
+                           "loading screen has a Skip button.\n\n%1"
+                           "You can change this in Configure, Graphics, Advanced.")
+                            .arg(precompile_pending
+                                     ? tr("A precompile recipe was found for this game: every "
+                                          "pipeline the game is predicted to draw is prepared "
+                                          "too, about 15 minutes the first time.\n\n")
+                                     : QString{}),
                         QMessageBox::NoButton, this);
         QPushButton* const precache = box.addButton(tr("Precache now"), QMessageBox::AcceptRole);
         box.addButton(tr("Start without"), QMessageBox::RejectRole);

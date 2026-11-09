@@ -51,6 +51,15 @@ void SetGameFiles(u64 title_id, GameFiles files);
 [[nodiscard]] std::filesystem::path PrecompiledPath(const std::filesystem::path& title_dir,
                                                     u32 cache_version);
 
+/// <title_dir>/precompiled_prepared.fork-v<cache_version>.txt: the file, driver, GPU and release
+/// a preparation built every record for (PipelineCache::AddPrecompiledJobs).
+[[nodiscard]] std::filesystem::path PreparedStampPath(const std::filesystem::path& title_dir,
+                                                      u32 cache_version);
+
+/// A recipe or precompiled file for this title that no preparation finished yet: the desktop app
+/// asks before the game starts, as for a title never precached.
+[[nodiscard]] bool PreparationPending(u64 title_id, u32 cache_version);
+
 struct Recipe {
     std::filesystem::path path;
     Nx2Recipe::Header header;

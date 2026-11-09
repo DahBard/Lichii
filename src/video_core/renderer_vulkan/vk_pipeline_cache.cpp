@@ -25,6 +25,7 @@
 #include "common/scope_exit.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/scm_rev.h"
 #include "common/shutdown_progress.h"
 #include "common/thread.h"
 #include "common/thread_worker.h"
@@ -40,6 +41,7 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_perf.h"
+#include "video_core/nx2_precompile.h"
 #include "video_core/pipeline_cache_files.h"
 #include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
@@ -1797,6 +1799,9 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
             file_entries = 0;
         }
     }
+    // Fritchii's precompiled pipelines (a recipe for this title): built with the rest, here.
+    const size_t precompiled_first = jobs.size();
+    const auto precompiled = AddPrecompiledJobs(title_id, jobs, stop_loading);
     if (jobs.empty() && !compute_pending) {
         LOG_INFO(Render_Vulkan, "Shader precache: nothing to precache");
         return;
@@ -1810,9 +1815,10 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
     std::atomic<bool> cancel{false};
     bool skipped = false;
     LOG_INFO(Render_Vulkan,
-             "Shader precache: {} cached graphics pipelines and {} of {} compute programs to "
-             "build on {} threads",
-             graphics_jobs, jobs.size() - graphics_jobs, file_entries, num_threads);
+             "Shader precache: {} cached graphics pipelines, {} of {} compute programs and {} "
+             "precompiled pipelines to build on {} threads",
+             graphics_jobs, precompiled_first - graphics_jobs, file_entries,
+             jobs.size() - precompiled_first, num_threads);
     if (!jobs.empty()) {
         std::vector<std::jthread> threads;
         for (size_t thread = 0; thread < num_threads; ++thread) {
@@ -1853,6 +1859,17 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
             ShaderWarm::WriteWarmMarker(warm_file, *stamp_done);
         }
     }
+    if (precompiled && !skipped && !stop_loading.stop_requested()) {
+        const size_t precompiled_built = static_cast<size_t>(
+            std::count(built.begin() + static_cast<std::ptrdiff_t>(precompiled_first), built.end(),
+                       u8{1}));
+        LOG_INFO(Render_Vulkan,
+                 "Precompiled pipelines: {} of {} prepared (the others failed or can't be built "
+                 "on this device)",
+                 precompiled_built, jobs.size() - precompiled_first);
+        std::ofstream stamp_file(precompiled->first, std::ios::binary | std::ios::trunc);
+        stamp_file << precompiled->second;
+    }
     const size_t precached_before = precached.size();
     for (size_t index = 0; index < graphics_jobs; ++index) {
         if (built[index]) {
@@ -1873,6 +1890,258 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
              stop_loading.stop_requested() ? "stopped" : (skipped ? "skipped" : "finished"),
              total_built, done - total_built, jobs.size() - std::min(jobs.size(), done.load()),
              std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
+}
+
+bool PipelineCache::ConvertRecordedKey(GraphicsPipelineCacheKey& key,
+                                       std::span<FileEnvironment> envs) const {
+    // As LoadDiskResources converts the disk cache's records (keep the two alike): this driver,
+    // and the form this device gives the states it sets dynamically. Fritchii skips a record made
+    // for another device instead: 116,036 of 120,124 on AMD's Windows driver (zortos293/Lichii
+    // #1012).
+    auto& fixed = key.state;
+    fixed.driver_id = dynamic_features.driver_id;
+    fixed.driver_version = dynamic_features.driver_version;
+    if (fixed.dynamic_vertex_input == 0 && dynamic_features.has_dynamic_vertex_input) {
+        static constexpr std::array<u32, 8> type_classes{0, 1, 1, 2, 3, 1, 1, 1};
+        u64 types = 0;
+        for (size_t index = 0; index < fixed.attributes.size(); ++index) {
+            const auto& attribute = fixed.attributes[index];
+            if (attribute.enabled != 0) {
+                types |= u64{type_classes[attribute.type.Value()]} << (index * 2);
+            }
+        }
+        fixed.dynamic_vertex_input.Assign(1);
+        fixed.attribute_types = types;
+        fixed.attributes = {};
+        fixed.binding_divisors = {};
+        if (fixed.extended_dynamic_state != 0) {
+            fixed.vertex_strides = {};
+        }
+    }
+    if ((fixed.color_write_enable_dynamic != 0) != dynamic_features.has_color_write_enable &&
+        fixed.extended_dynamic_state_3_blend == 0) {
+        if (dynamic_features.has_color_write_enable) {
+            for (auto& attachment : fixed.attachments) {
+                if (attachment.mask_r == 0 && attachment.mask_g == 0 && attachment.mask_b == 0 &&
+                    attachment.mask_a == 0) {
+                    attachment.mask_r.Assign(1);
+                    attachment.mask_g.Assign(1);
+                    attachment.mask_b.Assign(1);
+                    attachment.mask_a.Assign(1);
+                }
+            }
+        }
+        fixed.color_write_enable_dynamic.Assign(dynamic_features.has_color_write_enable ? 1 : 0);
+    }
+    if ((fixed.extended_dynamic_state_2_logic_op != 0) !=
+        dynamic_features.has_extended_dynamic_state_2_logic_op) {
+        if (dynamic_features.has_extended_dynamic_state_2_logic_op) {
+            fixed.dynamic_state.logic_op.Assign(0);
+            fixed.extended_dynamic_state_2_logic_op.Assign(1);
+        } else if (fixed.dynamic_state.logic_op_enable == 0 &&
+                   !dynamic_features.has_dynamic_state3_logic_op_enable) {
+            fixed.extended_dynamic_state_2_logic_op.Assign(0);
+        }
+    }
+    if (fixed.extended_dynamic_state_2_logic_op == 0 &&
+        !dynamic_features.has_dynamic_state3_logic_op_enable &&
+        fixed.dynamic_state.logic_op_enable == 0) {
+        fixed.dynamic_state.logic_op.Assign(0);
+    }
+    const std::array<std::pair<bool, bool>, 7> features{{
+        {fixed.extended_dynamic_state != 0, dynamic_features.has_extended_dynamic_state},
+        {fixed.extended_dynamic_state_2 != 0, dynamic_features.has_extended_dynamic_state_2},
+        {fixed.extended_dynamic_state_2_logic_op != 0,
+         dynamic_features.has_extended_dynamic_state_2_logic_op},
+        {fixed.extended_dynamic_state_3_blend != 0,
+         dynamic_features.has_extended_dynamic_state_3_blend},
+        {fixed.extended_dynamic_state_3_enables != 0,
+         dynamic_features.has_extended_dynamic_state_3_enables},
+        {fixed.color_write_enable_dynamic != 0, dynamic_features.has_color_write_enable},
+        {fixed.dynamic_vertex_input != 0, dynamic_features.has_dynamic_vertex_input},
+    }};
+    if (std::ranges::any_of(features, [](const auto& feature) {
+            return feature.first != feature.second;
+        })) {
+        return false;
+    }
+    if (fixed.dynamic_vertex_input != 0) {
+        std::array<u64, Maxwell::MaxShaderProgram> attribute_masks;
+        attribute_masks.fill(~u64{0});
+        size_t env_index = 0;
+        for (size_t stage = 0; stage < Maxwell::MaxShaderProgram; ++stage) {
+            if (key.unique_hashes[stage] != 0 && env_index < envs.size()) {
+                attribute_masks[stage] = VideoCommon::VertexAttributeMaskOf(envs[env_index++]);
+            }
+        }
+        fixed.attribute_types = VideoCommon::KeyedAttributeTypes(
+            fixed.attribute_types, key.unique_hashes, attribute_masks);
+    }
+    if (fixed.provoking_vertex_last != 0 && !dynamic_features.has_provoking_vertex_last_mode) {
+        return false;
+    }
+    return fixed.xfb_enabled == 0 || fixed.provoking_vertex_last == 0 ||
+           dynamic_features.has_provoking_vertex_tf_preserve;
+}
+
+std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddPrecompiledJobs(
+    u64 title_id, std::vector<PrecacheJob>& jobs, std::stop_token stop_loading) {
+    namespace Precompile = VideoCommon::Nx2Precompile;
+    if (Precompile::Mode() == 0) {
+        return std::nullopt;
+    }
+    const auto base_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
+                          fmt::format("{:016x}", title_id);
+    // Assembled from the recipe and the game's files when missing or older than the recipe
+    // (tens of seconds, about the file's size in memory).
+    const auto path =
+        Precompile::EnsurePrecompiledFile(title_id, base_dir, CACHE_VERSION, stop_loading);
+    if (path.empty() || stop_loading.stop_requested()) {
+        return std::nullopt;
+    }
+    const std::string path_text = Common::FS::PathToUTF8String(path);
+    std::error_code error;
+    const u64 file_size = std::filesystem::file_size(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    const auto modified = std::filesystem::last_write_time(path, error).time_since_epoch().count();
+    // Prepared once per file, driver, GPU and release: the driver's cache keeps the pipelines.
+    const auto stamp_path = Precompile::PreparedStampPath(base_dir, CACHE_VERSION);
+    const std::string stamp =
+        fmt::format("{} {} {:#x} {} {}\n", file_size, modified, device.GetDriverVersion(),
+                    Common::g_build_version, device.GetModelName());
+    if (!Precompile::Forced()) {
+        std::ifstream stamp_file(stamp_path, std::ios::binary);
+        std::string line;
+        if (std::getline(stamp_file, line) && line + '\n' == stamp) {
+            LOG_INFO(Render_Vulkan,
+                     "Precompiled pipelines: {} was prepared for this driver and build already",
+                     path_text);
+            return std::nullopt;
+        }
+    }
+    // Layout (Nx2Recipe): "NX2PREP1", u32 cache version, u32 environment count, u32 record count,
+    // u32 reserved; per environment u64 offset and u64 size of a serialized environment; per
+    // record u8 kind (0 graphics, 1 compute), u8 environment count, u16 reserved, u32 environment
+    // indices in stage order, then the key. Records are read again when built.
+    auto env_index = std::make_shared<std::vector<std::pair<u64, u64>>>();
+    std::vector<u64> record_offsets;
+    try {
+        std::ifstream in(path, std::ios::binary);
+        in.exceptions(std::ifstream::failbit);
+        std::array<char, 8> magic{};
+        u32 version{}, env_count{}, record_count{}, reserved{};
+        in.read(magic.data(), magic.size())
+            .read(reinterpret_cast<char*>(&version), sizeof(version))
+            .read(reinterpret_cast<char*>(&env_count), sizeof(env_count))
+            .read(reinterpret_cast<char*>(&record_count), sizeof(record_count))
+            .read(reinterpret_cast<char*>(&reserved), sizeof(reserved));
+        if (std::string_view{magic.data(), magic.size()} != "NX2PREP1" ||
+            version != CACHE_VERSION) {
+            LOG_WARNING(Render_Vulkan, "Precompiled pipeline file {} has another format or version",
+                        path_text);
+            return std::nullopt;
+        }
+        if (u64{env_count} * 16 > file_size || u64{record_count} * 8 > file_size) {
+            LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
+            return std::nullopt;
+        }
+        env_index->resize(env_count);
+        in.read(reinterpret_cast<char*>(env_index->data()),
+                static_cast<std::streamsize>(env_count * sizeof((*env_index)[0])));
+        if (std::ranges::any_of(*env_index, [&](const auto& entry) {
+                return entry.first > file_size || entry.second > file_size - entry.first;
+            })) {
+            LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
+            return std::nullopt;
+        }
+        record_offsets.reserve(record_count);
+        std::array<u32, Maxwell::MaxShaderProgram> ids{};
+        for (u32 i = 0; i < record_count; ++i) {
+            record_offsets.push_back(static_cast<u64>(in.tellg()));
+            u8 kind{}, count{};
+            u16 pad{};
+            in.read(reinterpret_cast<char*>(&kind), 1)
+                .read(reinterpret_cast<char*>(&count), 1)
+                .read(reinterpret_cast<char*>(&pad), 2);
+            const bool compute = kind == 1;
+            if (count == 0 || count > ids.size() || kind > 1 || (compute && count != 1)) {
+                LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
+                return std::nullopt;
+            }
+            in.read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
+            if (std::any_of(ids.begin(), ids.begin() + count,
+                            [&](u32 id) { return id >= env_count; })) {
+                LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
+                return std::nullopt;
+            }
+            in.seekg(compute ? sizeof(ComputePipelineCacheKey) : sizeof(GraphicsPipelineCacheKey),
+                     std::ios::cur);
+        }
+    } catch (const std::ios_base::failure& e) {
+        LOG_ERROR(Render_Vulkan, "Cannot read precompiled pipelines from {}: {}", path_text,
+                  e.what());
+        return std::nullopt;
+    }
+    // Graphics pipelines the disk cache holds were built at boot already.
+    const auto known = std::make_shared<const std::unordered_set<u64>>(disk_pipelines);
+    for (const u64 offset : record_offsets) {
+        jobs.push_back({0, [this, path, env_index, known, offset]() -> bool {
+                            std::ifstream in(path, std::ios::binary);
+                            in.exceptions(std::ifstream::failbit);
+                            in.seekg(static_cast<std::streamoff>(offset));
+                            u8 kind{}, count{};
+                            u16 pad{};
+                            std::array<u32, Maxwell::MaxShaderProgram> ids{};
+                            in.read(reinterpret_cast<char*>(&kind), 1)
+                                .read(reinterpret_cast<char*>(&count), 1)
+                                .read(reinterpret_cast<char*>(&pad), 2)
+                                .read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
+                            const bool compute = kind == 1;
+                            ComputePipelineCacheKey compute_key{};
+                            GraphicsPipelineCacheKey graphics_key{};
+                            if (compute) {
+                                in.read(reinterpret_cast<char*>(&compute_key),
+                                        sizeof(compute_key));
+                            } else {
+                                in.read(reinterpret_cast<char*>(&graphics_key),
+                                        sizeof(graphics_key));
+                            }
+                            std::vector<FileEnvironment> envs(count);
+                            for (size_t i = 0; i < count; ++i) {
+                                const auto [env_offset, env_size] = (*env_index)[ids[i]];
+                                in.clear();
+                                in.seekg(static_cast<std::streamoff>(env_offset));
+                                envs[i].Deserialize(
+                                    in, static_cast<std::streamoff>(env_offset + env_size));
+                            }
+                            ShaderPools pools;
+                            if (compute) {
+                                return CreateComputePipeline(pools, compute_key, envs.front(),
+                                                             nullptr, false)
+                                           .pipeline != nullptr;
+                            }
+                            if (!ConvertRecordedKey(graphics_key, envs)) {
+                                return false;
+                            }
+                            if (known->contains(graphics_key.Hash())) {
+                                return true;
+                            }
+                            boost::container::static_vector<Shader::Environment*,
+                                                            Maxwell::MaxShaderProgram>
+                                env_ptrs;
+                            for (auto& env : envs) {
+                                env_ptrs.push_back(&env);
+                            }
+                            const auto pipeline = CreateGraphicsPipeline(
+                                pools, graphics_key, MakeSpan(env_ptrs), nullptr, false);
+                            return pipeline != nullptr && !pipeline->Failed();
+                        }});
+    }
+    LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} records of {} to prepare",
+             record_offsets.size(), path_text);
+    return std::make_pair(stamp_path, stamp);
 }
 
 void PipelineCache::QueueVulkanPipelineCacheFlush() {

@@ -18,9 +18,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include "common/container/unordered_map.h"
 #include <vector>
 
@@ -210,6 +212,17 @@ private:
     void PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                          std::unordered_set<u64> precached, std::stop_token stop_loading,
                          const VideoCore::DiskResourceLoadCallback& callback);
+
+    /// Fritchii's precompiled pipelines (zortos293/Lichii#895, VideoCommon::Nx2Precompile): the
+    /// records of the title's precompiled file, assembled from its recipe and the game's own files,
+    /// as precache jobs. Returns the stamp file and the stamp PrecacheShaders writes once every
+    /// one of them ran; nothing when there is nothing to prepare.
+    std::optional<std::pair<std::filesystem::path, std::string>> AddPrecompiledJobs(
+        u64 title_id, std::vector<PrecacheJob>& jobs, std::stop_token stop_loading);
+    /// A recorded graphics key in this device's form, converted as LoadDiskResources converts the
+    /// disk cache's records. False when this device can't build it.
+    [[nodiscard]] bool ConvertRecordedKey(GraphicsPipelineCacheKey& key,
+                                          std::span<VideoCommon::FileEnvironment> envs) const;
 
     const Device& device;
     Scheduler& scheduler;
