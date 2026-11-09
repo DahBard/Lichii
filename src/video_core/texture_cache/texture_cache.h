@@ -58,6 +58,13 @@ using VideoCore::Surface::PixelFormat;
 using VideoCore::Surface::SurfaceType;
 using namespace Common::Literals;
 
+/// Nanoseconds since `start` (the render target statistics of the slow clear log).
+[[nodiscard]] inline u64 NsSince(std::chrono::steady_clock::time_point start) {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - start)
+                                .count());
+}
+
 template <class P>
 TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManager& device_memory_)
     : runtime{runtime_}, device_memory{device_memory_} {
@@ -1325,8 +1332,11 @@ FramebufferId TextureCache<P>::GetFramebufferId(const RenderTargets& key) {
         return id ? &slot_image_views[id] : nullptr;
     });
     ImageView* const depth_buffer = key.depth_buffer_id ? &slot_image_views[key.depth_buffer_id] : nullptr;
+    const auto framebuffer_start = std::chrono::steady_clock::now();
     runtime.FlushDeferredClear();
     framebuffer_id = slot_framebuffers.insert(runtime, color_buffers, depth_buffer, key);
+    ++rt_stats.framebuffers_created;
+    rt_stats.framebuffer_ns += NsSince(framebuffer_start);
     return framebuffer_id;
 }
 
@@ -3033,8 +3043,11 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     join_bad_overlap_ids.clear();
     join_copies_to_do.clear();
     join_alias_indices.clear();
+    ++rt_stats.joins;
+    const auto walk_start = std::chrono::steady_clock::now();
     const bool this_is_linear = info.type == ImageType::Linear;
     const auto region_check = [&](ImageId overlap_id, ImageBase& overlap) {
+        ++rt_stats.overlaps_walked;
         if (True(overlap.flags & ImageFlagBits::Remapped)) {
             join_ignore_textures.insert(overlap_id);
             return;
@@ -3090,6 +3103,8 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     };
     ForEachSparseImageInRegion(channel_state->gpu_memory.GetID(), gpu_addr, size_bytes,
                                region_check_gpu);
+    rt_stats.walk_ns += NsSince(walk_start);
+    rt_stats.bad_overlaps += static_cast<u32>(join_bad_overlap_ids.size());
 
     bool can_rescale = info.rescaleable;
     bool any_rescaled = false;
@@ -3133,7 +3148,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             }
         }
     }
+    const auto create_start = std::chrono::steady_clock::now();
     const ImageId new_image_id = slot_images.insert(runtime, new_info, gpu_addr, cpu_addr);
+    rt_stats.create_ns += NsSince(create_start);
     if constexpr (requires(const Image& image) { image.OutOfMemory(); }) {
         if (slot_images[new_image_id].OutOfMemory()) {
             // Left out of the cache: lookups see no image (a null view) and make it again once
@@ -3171,6 +3188,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         new_image.flags |= ImageFlagBits::Sparse;
     }
 
+    const auto ignored_delete_start = std::chrono::steady_clock::now();
     for (const ImageId overlap_id : join_ignore_textures) {
         Image& overlap = slot_images[overlap_id];
         // Remapped images no longer describe the current guest memory. Discard their GPU
@@ -3185,6 +3203,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         UnregisterImage(overlap_id);
         DeleteImage(overlap_id);
     }
+    rt_stats.delete_ns += NsSince(ignored_delete_start);
 
     // A new render target that the clear binding it overwrites whole (every channel, the whole
     // image) needs no upload from guest memory first: Ocarina of Time creates ~4 such targets a
@@ -3380,6 +3399,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     const bool clear_skip = overwritten_by_clear();
     const bool copy_skip = !clear_skip && !copied_whole &&
                            (VideoCommon::TextureUploadBits() & 2) != 0 && overwritten_by_copies();
+    const auto refresh_start = std::chrono::steady_clock::now();
     if (clear_skip) {
         // Stays CpuModified: UpdateRenderTargets' PrepareImage drops the upload only when
         // IsFullClear agrees the clear covers the whole image, and uploads it otherwise.
@@ -3395,6 +3415,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         // TODO: Only upload what we need
         RefreshContents(new_image, new_image_id);
     }
+    rt_stats.refresh_ns += NsSince(refresh_start);
 
     if (can_rescale) {
         ScaleUp(new_image);
@@ -3402,6 +3423,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         ScaleDown(new_image);
     }
 
+    const auto joined_delete_start = std::chrono::steady_clock::now();
     for (size_t index = 0; index < join_copies_to_do.size(); ++index) {
         const JoinCopy& copy_object = join_copies_to_do[index];
         Image& overlap = slot_images[copy_object.id];
@@ -3435,6 +3457,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         UnregisterImage(copy_object.id);
         DeleteImage(copy_object.id);
     }
+    rt_stats.delete_ns += NsSince(joined_delete_start);
 
     RegisterImage(new_image_id);
     return new_image_id;
@@ -4230,9 +4253,11 @@ void TextureCache<P>::RemoveImageViewReferences(std::span<const ImageViewId> rem
 template <class P>
 void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_views) {
     runtime.FlushDeferredClear();
+    rt_stats.framebuffers_scanned += static_cast<u32>(framebuffers.size());
     auto it = framebuffers.begin();
     while (it != framebuffers.end()) {
         if (it->first.Contains(removed_views)) {
+            ++rt_stats.framebuffers_removed;
             auto framebuffer_id = it->second;
             ASSERT(framebuffer_id);
             if (framebuffer_id == last_framebuffer_id) {
