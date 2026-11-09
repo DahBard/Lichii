@@ -72,13 +72,14 @@ using namespace Common::Literals;
 /// made. 0 = off: candidates are only counted. 4 = verify: as 3 under the render-frame clock (as
 /// EDEN_NX2_RENDER_CLOCK=1), and each old range is kept as a tombstone for 2 render frames; reads
 /// that land on one are counted ("Relocation tombstones (EXP43=4) last 600 frames: N hits", first
-/// 8 logged), which must stay 0. Default 3, as in Fritchii v5 (Castle Town live
-/// toggles there: 46.3 -> 49.3 fps, 21 loads without a washed-out scene). Never for a shape whose
-/// GPU-written contents were sampled or rendered to without a clear in a later frame, or read by
-/// the CPU (sticky per shape for the session: "Render target relocation guard (EXP43)"), nor for
-/// rescaled, sparse, converted or CPU-read images, ones with a download queued, bound as another
-/// target of the clear or in another channel. Logs each shape's first candidate and relocation
-/// and "Render target relocation (EXP43=n) last 600 frames". Read once, on first use.
+/// 8 logged), which must stay 0. Default 3, as in Fritchii v5 (Castle Town live toggles there:
+/// 46.3 -> 49.3 fps, 21 loads without a washed-out scene). Never for a shape whose GPU-written
+/// contents were sampled or rendered to without a clear in a later frame, or read by the CPU
+/// (sticky per shape for the session: "Render target relocation guard (EXP43)"), nor at an
+/// address where that happened, nor for rescaled, sparse, converted or CPU-read images, ones with
+/// a download queued, bound as another target of the clear or in another channel. Logs each
+/// shape's first candidate and relocation and "Render target relocation (EXP43=n) last 600
+/// frames". Read once, on first use.
 [[nodiscard]] inline int RelocationMode() {
     static const int mode = [] {
         const char* value = std::getenv("EDEN_NX2_EXP43");

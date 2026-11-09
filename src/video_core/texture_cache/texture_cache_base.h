@@ -657,6 +657,17 @@ private:
     /// TickFrame: follows the counter, or falls back to frame_tick after two host frames
     /// without a count; logs the rate next to the relocation line.
     void TickRenderClock();
+    bool render_clock_live{};
+    bool render_clock_enabled{}; ///< Last tick: the clock wanted (Resume on the way back on)
+    bool render_clock_logged{};
+    u64 render_clock_base{};
+    u64 render_clock_source_base{};
+    u64 render_clock_last_counter{};
+    u64 render_clock_window_counter{}; ///< The counter at the last report
+    u32 render_clock_idle{};           ///< Host frames since the counter last advanced
+    u32 render_clock_live_frames{};    ///< Since the last report
+    u32 render_clock_switches{};
+
     /// EDEN_NX2_EXP43=4: relocation as 3, under the render-frame clock, and each relocated
     /// image's old range kept for 2 render frames. A read that lands on it (an image made at the
     /// old address and then sampled or rendered to without a clear, or a CPU read of the old
@@ -711,16 +722,6 @@ private:
     u64 cold_deleted{};      ///< Since the last report
     u64 cold_kept_guarded{}; ///< Dropped from the watch: GPU-written and guarded
     u64 cold_kept_read{};    ///< Dropped from the watch: GPU-written and read later or by the CPU
-    bool render_clock_live{};
-    bool render_clock_enabled{}; ///< Last tick: the clock wanted (Resume on the way back on)
-    bool render_clock_logged{};
-    u64 render_clock_base{};
-    u64 render_clock_source_base{};
-    u64 render_clock_last_counter{};
-    u64 render_clock_window_counter{}; ///< The counter at the last report
-    u32 render_clock_idle{};           ///< Host frames since the counter last advanced
-    u32 render_clock_live_frames{};    ///< Since the last report
-    u32 render_clock_switches{};
 
     [[nodiscard]] static bool RelocationShaped(const ImageInfo& info) noexcept {
         return info.type == ImageType::e2D && info.resources.levels == 1 &&
