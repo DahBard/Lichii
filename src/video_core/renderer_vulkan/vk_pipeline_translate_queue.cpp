@@ -186,9 +186,9 @@ void TranslateQueue::Shutdown() {
     std::vector<std::unique_ptr<TranslationJob>> jobs;
     {
         std::scoped_lock lock{mutex};
-        for (auto& [key, entry] : entries) {
-            if (entry.job) {
-                jobs.push_back(std::move(entry.job));
+        for (auto& item : entries) {
+            if (item.second.job) {
+                jobs.push_back(std::move(item.second.job));
             }
         }
         entries.clear();
