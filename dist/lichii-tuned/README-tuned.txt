@@ -154,6 +154,15 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    stops, the driver's cache is written during long builds, a slow shutdown that still makes
    progress is waited for instead of killed, and pipelines other builds stored are counted
    instead of logged as errors.
+ * Round 20, Fritchii's shader preparation: with a precompile recipe for the game (Fritchii's
+   Ocarina file is "OoT v131072 (cache v54).nx2recipe") in a "recipes" folder next to
+   lichii.exe, or in the game's shader folder, the "Precache shaders" step before the game
+   builds every pipeline the game is predicted to draw, so the GPU driver has them compiled
+   before they are first drawn: about 15 minutes the first time, asked at launch (Fritchii
+   measured Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). Pipelines
+   recorded on another GPU are converted for this one instead of skipped (Fritchii skips most
+   of them on AMD's Windows driver). Without a recipe nothing changes; EDEN_NX2_PRECOMPILE=0
+   turns it off.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
