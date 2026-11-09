@@ -223,6 +223,14 @@ struct GPU::Impl {
     void NotifyShutdown() {
         gpu_thread.NotifyShutdown();
         VideoCommon::GpuSplit::Get().SetTickHook(nullptr, nullptr);
+        if (renderer) {
+            // With the GPU threads stopped: the rasterizer's own threads that read guest GPU
+            // memory (asynchronous shader translation) stop before the services, which own the
+            // GPU address spaces, are torn down.
+            if (VideoCore::RasterizerInterface* const rasterizer = renderer->ReadRasterizer()) {
+                rasterizer->StopBackgroundWork();
+            }
+        }
         {
             // The GPU threads stopped: no sync operation runs anymore. Guest threads still run
             // until the kernel suspends them, and one waiting for a read's flush (OnCPURead)

@@ -555,6 +555,11 @@ struct RecyclerState {
     std::vector<RecycledImage> images; // oldest first
     u64 bytes = 0;
     VmaAllocator closed{}; ///< Torn down: keeps nothing more of it
+    /// Since the last TakeStats.
+    u64 taken = 0;
+    u64 missed = 0;
+    u64 kept = 0;
+    u64 dropped = 0;
 };
 
 RecyclerState& Recycler() {
@@ -633,6 +638,7 @@ void TrimRecycler(RecyclerState& state, u64 room, std::chrono::steady_clock::tim
     Bury(std::vector<RecycledImage>(first, last));
     state.images.erase(first, last);
     state.bytes = bytes;
+    state.dropped += drop;
 }
 } // Anonymous namespace
 
@@ -687,6 +693,7 @@ bool ImageRecycler::Put(u64 key, VmaAllocator allocator, VkImage handle,
     TrimRecycler(state, info.size, now);
     state.images.push_back({key, allocator, handle, allocation, info.size, now});
     state.bytes += info.size;
+    ++state.kept;
     return true;
 }
 
@@ -711,8 +718,24 @@ bool ImageRecycler::Take(u64 key, VmaAllocator allocator, VkImage& handle,
             break;
         }
     }
+    ++(found ? state.taken : state.missed);
     TrimRecycler(state, 0, std::chrono::steady_clock::now());
     return found;
+}
+
+ImageRecycler::Stats ImageRecycler::TakeStats() noexcept {
+    RecyclerState& state = Recycler();
+    std::scoped_lock lock{state.mutex};
+    const Stats stats{
+        .taken = state.taken,
+        .missed = state.missed,
+        .kept = state.kept,
+        .dropped = state.dropped,
+        .images = state.images.size(),
+        .bytes = state.bytes,
+    };
+    state.taken = state.missed = state.kept = state.dropped = 0;
+    return stats;
 }
 
 u64 ImageRecycler::KeptBytes() noexcept {

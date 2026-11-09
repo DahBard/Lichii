@@ -133,6 +133,10 @@ public:
     /// EDEN_NX2_MEM_TRACE: staging buffers, then the process, DXGI and VMA (LogMemoryTrace).
     void LogMemoryTrace();
 
+    /// "Image recycler (EXP42)": what vk::ImageRecycler did since the last call (every 600
+    /// frames), when it did anything.
+    void LogImageRecycler();
+
     /// True when ASTC is re-compressed to BC3 and opaque images may use BC1 instead.
     bool UseOpaqueAstcFormat() const;
 
@@ -529,6 +533,11 @@ public:
     /// Where the image's memory lies, for the collector (TextureCache::RunGarbageCollector).
     [[nodiscard]] vk::Image::MemoryBlock MemoryBlock() const noexcept {
         return original_image.GetMemoryBlock();
+    }
+
+    /// Whether the image took a recycled VkImage (EDEN_NX2_EXP42; the slow clear log counts them).
+    [[nodiscard]] bool FromPool() const noexcept {
+        return original_image.Recycled();
     }
 
     /// Returns true when the image is already initialized and mark it as initialized

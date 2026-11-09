@@ -340,6 +340,10 @@ public:
     virtual void LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                                    const DiskResourceLoadCallback& callback) {}
 
+    /// The GPU threads stopped for the emulation's shutdown: work the rasterizer runs on threads
+    /// of its own that reads guest GPU memory stops now, before the guest's address spaces go.
+    virtual void StopBackgroundWork() {}
+
     virtual void InitializeChannel(Tegra::Control::ChannelState& channel) {}
 
     virtual void BindChannel(Tegra::Control::ChannelState& channel) {}

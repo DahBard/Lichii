@@ -708,7 +708,7 @@ public:
     Image(Image&& rhs) noexcept
         : handle{std::exchange(rhs.handle, VkImage{})}, usage{rhs.usage}, owner{rhs.owner},
           allocator{rhs.allocator}, allocation{rhs.allocation}, dld{rhs.dld},
-          recycle_key{rhs.recycle_key} {}
+          recycle_key{rhs.recycle_key}, recycled{rhs.recycled} {}
 
     Image& operator=(Image&& rhs) noexcept {
         Release();
@@ -719,6 +719,7 @@ public:
         allocation = rhs.allocation;
         dld = rhs.dld;
         recycle_key = rhs.recycle_key;
+        recycled = rhs.recycled;
         return *this;
     }
 
@@ -726,6 +727,14 @@ public:
     /// destroyed; 0 for images that are not recycled.
     void SetRecycleKey(u64 key) noexcept {
         recycle_key = key;
+    }
+
+    /// Whether the image was taken from ImageRecycler rather than made.
+    void MarkRecycled() noexcept {
+        recycled = true;
+    }
+    [[nodiscard]] bool Recycled() const noexcept {
+        return recycled;
     }
 
     ~Image() noexcept {
@@ -770,6 +779,7 @@ private:
     VmaAllocation allocation = nullptr;
     const DeviceDispatch* dld = nullptr;
     u64 recycle_key = 0;
+    bool recycled = false;
 };
 
 /// Images on device-local memory, kept after release so an image of the same create info takes
@@ -795,6 +805,17 @@ public:
     [[nodiscard]] static u64 KeptBytes() noexcept;
     /// Drops the oldest kept images until at most `bytes` are kept.
     static void Shrink(u64 bytes) noexcept;
+
+    /// Takes found and missed, images kept and dropped since the last call, and what it holds.
+    struct Stats {
+        u64 taken;
+        u64 missed;
+        u64 kept;
+        u64 dropped;
+        u64 images;
+        u64 bytes;
+    };
+    [[nodiscard]] static Stats TakeStats() noexcept;
 };
 
 struct MemoryLocation {

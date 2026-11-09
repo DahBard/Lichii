@@ -14,14 +14,21 @@ namespace Vulkan {
 /// @param depth_enabled  The depth test is on for the draw.
 /// @param index_count    Index count of the draw.
 /// @param vertex_count   Vertex count of the draw.
-/// @param discard_native Let native draws follow the heuristic too (EDEN_NX2_ASYNC_DISCARD=1).
+/// @param discard_native Let native draws follow the heuristic too (EDEN_NX2_ASYNC_DISCARD=1 or
+///                       2, or the native_async_draws setting).
+/// @param recurring_target Every render target of the draw is cleared and redrawn every frame
+///                         (EDEN_NX2_ASYNC_DISCARD=2 asks; the other modes pass true). Native
+///                         draws into any other target wait.
 /// @return True when the draw may be skipped.
 constexpr bool CanDiscardPendingDraw(bool native, bool depth_enabled, u32 index_count,
-                                    u32 vertex_count, bool discard_native = false) {
+                                    u32 vertex_count, bool discard_native = false,
+                                    bool recurring_target = true) {
     // Native draws can produce persistent resources, even with depth enabled. They are only
-    // skipped when the user opts in (EDEN_NX2_ASYNC_DISCARD=1), trading a possible missing
-    // effect for no stall while a new pipeline builds.
-    if (native && !discard_native) {
+    // skipped when allowed, trading a possible missing effect for no stall while a new pipeline
+    // builds. With EDEN_NX2_ASYNC_DISCARD=2 only those into targets the frame clears and redraws
+    // are: a skipped draw into a layer rendered once is missing for good (title screen text,
+    // chat bubbles), one into a per-frame target for a frame.
+    if (native && (!discard_native || !recurring_target)) {
         return false;
     }
     // Preserve the legacy async-shader heuristic.
@@ -38,7 +45,7 @@ enum class NativeDrawAction {
     Skip,      ///< Drop the draw.
 };
 
-/// @param mode           Wait, Bounded or Skip (EDEN_NX2_ASYNC_DISCARD=1 passes Skip).
+/// @param mode           Wait, Bounded or Skip (EDEN_NX2_ASYNC_DISCARD=1 and 2 pass Skip).
 /// @param can_discard    The legacy heuristic allows skipping this draw.
 /// @param budget_left_us Microseconds left of this frame's wait budget.
 constexpr NativeDrawAction DecideNativePending(NativePendingMode mode, bool can_discard,
