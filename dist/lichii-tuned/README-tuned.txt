@@ -167,8 +167,10 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    there too. EDEN_NX2_PRECOMPILE=0 turns it off. If a crash ends the preparation, the next
    launch skips the pipelines it was building (upstream #999). Upstream #820's emulation of
    noperspective varyings is reverted, as in Fritchii (it also caused white fog at the Hyrule
-   Field drawbridge there); r35's preparation still crashed near its end, which is being
-   looked into.
+   Field drawbridge there). r34's and r35's preparation crashed near its end because of
+   something else: on AMD's driver, its compute jobs dropped pipelines whose build was still
+   queued, and the queued build then ran on freed memory. Fritchii doesn't queue these builds.
+   r36 builds them in the job itself.
  * Crashes: this package writes lichii-crash-<pid>.txt and lichii-crash-<pid>.dmp to
    %APPDATA%\eden\crash_dumps when Lichii crashes (EDEN_NX2_CRASH_DUMP=1 in nx2_switches.txt).
    Send both with the log.
