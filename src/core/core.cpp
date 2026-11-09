@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <atomic>
 #include <memory>
-#include <new>
 #include <utility>
 
 #include "game_settings.h"
@@ -17,6 +16,7 @@
 #include "common/adpf.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "common/shutdown_progress.h"
 #include "common/string_util.h"
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
@@ -34,6 +34,7 @@
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/program_metadata.h"
 #include "core/file_sys/registered_cache.h"
+#include "core/file_sys/romfs.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/submission_package.h"
@@ -52,6 +53,7 @@
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/apm/apm_controller.h"
 #include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/filesystem/romfs_controller.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/glue/time/static.h"
 #include "core/hle/service/psc/time/static.h"
@@ -73,15 +75,13 @@
 #include "hid_core/hid_core.h"
 #include "network/network.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2_precompile.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
 namespace Core {
 
 std::atomic<u64> g_nx2_present_count{};
-static_assert(std::atomic<u64>::is_always_lock_free);
-std::array<std::atomic<u64>, 4096> g_nx2_present_times_ns{};
-std::atomic<u32> g_nx2_present_time_services{};
 
 FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
                                          const std::string& path) {
@@ -191,15 +191,8 @@ struct System::Impl {
 
     u64 program_id;
 
-    bool Initialize(System& system) {
-        try {
-            device_memory.emplace();
-        } catch (const std::bad_alloc&) {
-            LOG_CRITICAL(Core, "Failed to allocate guest memory");
-        }
-        if (device_memory && !device_memory->buffer.BackingBasePointer()) {
-            device_memory.reset();
-        }
+    void Initialize(System& system) {
+        device_memory.emplace();
 
         is_multicore = Settings::values.use_multi_core.GetValue();
         memory_layout = Settings::values.memory_layout_mode.GetValue();
@@ -223,7 +216,6 @@ struct System::Impl {
         kernel.SetMulticore(is_multicore);
         cpu_manager.SetMulticore(is_multicore);
         cpu_manager.SetAsyncGpu(is_async_gpu);
-        return device_memory.has_value();
     }
 
     void ReinitializeIfNecessary(System& system) {
@@ -343,17 +335,12 @@ struct System::Impl {
         debugger.emplace(system, port);
     }
 
-    SystemResultStatus InitializeKernel(System& system) {
+    void InitializeKernel(System& system) {
         LOG_DEBUG(Core, "initialized OK");
 
         // Setting changes may require a full system reinitialization (e.g., disabling multicore).
         ReinitializeIfNecessary(system);
-        if (!device_memory) {
-            LOG_CRITICAL(Core, "Not enough host memory to start the guest kernel");
-            return SystemResultStatus::ErrorMemoryAllocation;
-        }
         kernel.Initialize();
-        return SystemResultStatus::Success;
     }
 
     SystemResultStatus SetupForApplicationProcess(System& system, Frontend::EmuWindow& emu_window) {
@@ -414,19 +401,8 @@ struct System::Impl {
                                               : Common::WallClock::CNTFRQ;
         Common::g_wall_clock.SetGuestCNTFRQ(cntfrq);
         LOG_INFO(Core, "Guest counter frequency: {} Hz", cntfrq);
-        // The guest clocks derive from the host TSC calibration (or the OS clock). A wrong rate
-        // there skews every guest timer by a constant factor (#105), so record what was measured:
-        // tsc vs the CPUID base/max frequency is a sanity check at a glance.
-#ifdef ARCHITECTURE_x86_64
-        LOG_INFO(Core, "Host clock: tsc {} Hz, cpu base {} MHz, max {} MHz, invariant {}",
-                 Common::g_cpu_caps.tsc_frequency, Common::g_cpu_caps.base_frequency,
-                 Common::g_cpu_caps.max_frequency, Common::g_cpu_caps.invariant_tsc);
-#endif
 
-        const auto kernel_result = InitializeKernel(system);
-        if (kernel_result != SystemResultStatus::Success) {
-            return kernel_result;
-        }
+        InitializeKernel(system);
 
         if (params.applet_type == Service::AM::AppletType::Application) {
             current_application_filepath = filepath;
@@ -484,6 +460,27 @@ struct System::Impl {
             cheat_engine->Initialize();
         }
 
+        // EDEN_NX2_PRECOMPILE: the game's files, for assembling a precompile recipe (#895) on the
+        // pipeline cache's preparation thread. The RomFS as the process reads it, update included.
+        if (VideoCommon::Nx2Precompile::Mode() != 0) {
+            const u64 process_id = process->GetHandle()->GetProcessId();
+            VideoCommon::Nx2Precompile::SetGameFiles(
+                params.program_id, [this, process_id]() -> std::vector<FileSys::VirtualDir> {
+                    Service::FileSystem::ProgramId program{};
+                    std::shared_ptr<Service::FileSystem::SaveDataController> save;
+                    std::shared_ptr<Service::FileSystem::RomFsController> romfs;
+                    if (fs_controller.OpenProcess(&program, &save, &romfs, process_id).IsError() ||
+                        !romfs) {
+                        return {};
+                    }
+                    auto dir = FileSys::ExtractRomFS(romfs->OpenRomFSCurrentProcess());
+                    if (!dir) {
+                        return {};
+                    }
+                    return {std::move(dir)};
+                });
+        }
+
         // Register with applet manager
         // All threads are started, begin main process execution, now that we're in the clear
         applet_manager.CreateAndInsertByFrontendAppletParameters(std::move(process), params);
@@ -525,6 +522,8 @@ struct System::Impl {
 
     void ShutdownMainProcess() {
         debug_service.reset();
+        // Waits for a call in progress (it opens the RomFS, a quick step).
+        VideoCommon::Nx2Precompile::SetGameFiles(0, {});
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
 
@@ -542,15 +541,22 @@ struct System::Impl {
         Network::CancelPendingSocketOperations();
         kernel.SuspendEmulation(true);
         kernel.CloseServices();
+        // Each step done tells the frontend the teardown still moves (see
+        // Common::ShutdownProgress); the GPU's (pipeline caches) reports its own steps.
+        Common::NoteShutdownProgress();
         kernel.ShutdownCores();
+        Common::NoteShutdownProgress();
         services.reset();
         service_manager.reset();
         fs_controller.Reset();
         cheat_engine.reset();
         core_timing.ClearPendingEvents();
         app_loader.reset();
+        Common::NoteShutdownProgress();
         audio_core.reset();
+        Common::NoteShutdownProgress();
         gpu_core.reset();
+        Common::NoteShutdownProgress();
         host1x_core.reset();
         perf_stats.reset();
         cpu_manager.Shutdown();
@@ -675,8 +681,8 @@ const CpuManager& System::GetCpuManager() const {
     return impl->cpu_manager;
 }
 
-bool System::Initialize() {
-    return impl->Initialize(*this);
+void System::Initialize() {
+    impl->Initialize(*this);
 }
 
 void System::Run() {

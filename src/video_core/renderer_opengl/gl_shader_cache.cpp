@@ -317,7 +317,6 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
     const auto load_compute{[&](std::ifstream& file, FileEnvironment env) {
         ComputePipelineKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
-        VideoCommon::CheckComputeRecord(env, key.shared_memory_size, key.workgroup_size);
         queue_work([this, key, env_ = std::move(env), &state, &callback](Context* ctx) mutable {
             ctx->pools.ReleaseContents();
             auto pipeline{CreateComputePipeline(ctx->pools, key, env_, true)};
@@ -335,10 +334,8 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
-        VideoCommon::CheckGraphicsRecord(key.unique_hashes, envs.size());
         queue_work([this, key, envs_ = std::move(envs), &state, &callback](Context* ctx) mutable {
-            boost::container::static_vector<Shader::Environment*, Maxwell::MaxShaderProgram>
-                env_ptrs;
+            boost::container::static_vector<Shader::Environment*, 5> env_ptrs;
             for (auto& env : envs_) {
                 env_ptrs.push_back(&env);
             }
@@ -469,8 +466,7 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline() {
             env_ptrs.push_back(&environments.envs[index]);
         }
     }
-    SerializePipeline(graphics_key, env_ptrs, shader_cache_filename, CACHE_VERSION,
-                      host_info.EnvironmentReadProperties());
+    SerializePipeline(graphics_key, env_ptrs, shader_cache_filename, CACHE_VERSION);
     return pipeline;
 }
 
@@ -593,7 +589,7 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
         return pipeline;
     }
     SerializePipeline(key, std::array<const GenericEnvironment*, 1>{&env}, shader_cache_filename,
-                      CACHE_VERSION, host_info.EnvironmentReadProperties());
+                      CACHE_VERSION);
     return pipeline;
 }
 

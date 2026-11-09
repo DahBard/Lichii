@@ -90,6 +90,14 @@ public:
         return mask;
     }
 
+    /// Whether a report in the region is still listed (pending host results, or written and not
+    /// unregistered yet). Only the cache mutex: callable from the split front.
+    [[nodiscard]] bool HasCachedReports(VAddr addr, size_t size) {
+        bool result = false;
+        IterateCache<false>(addr, size, [&result](QueryLocation) { result = true; });
+        return result;
+    }
+
     /// Return true when a CPU region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size) {
         bool result = false;
@@ -119,7 +127,12 @@ public:
     bool HasUncommittedFlushes() const;
 
     /// Whether a new fence has queries to flush or host writes to sync for this cache.
-    bool HasPendingFenceWork() const;
+    /// `ignore_payload_sync` (EDEN_NX2_EXP28 & 1, zortos293/Lichii#717 FENCE_TRIM): payload
+    /// releases' host buffer syncs don't count; they wait for a later fence or wait for idle.
+    bool HasPendingFenceWork(bool ignore_payload_sync = false) const;
+
+    /// EXP28 & 1: a fence was skipped although payload releases wait for their host sync.
+    void NotePayloadSyncDeferred();
 
     bool ShouldWaitAsyncFlushes();
 

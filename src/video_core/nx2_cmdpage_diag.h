@@ -28,13 +28,7 @@
 // thread logs the counts.
 namespace Tegra::Nx2CmdPageDiag {
 
-inline bool g_enabled = std::getenv("EDEN_NX2_CMDPAGE_DIAG") != nullptr;
-
-/// Called by VideoCore::CreateGPU: static initialization runs before the frontend loads
-/// nx2_switches.txt, so a switch set only there takes effect from that point on.
-inline void ReadSwitch() {
-    g_enabled = std::getenv("EDEN_NX2_CMDPAGE_DIAG") != nullptr;
-}
+inline const bool g_enabled = std::getenv("EDEN_NX2_CMDPAGE_DIAG") != nullptr;
 
 inline constexpr u64 PageBytes = u64{1} << Nx2WrittenPageBits;
 inline constexpr u32 PageWords = static_cast<u32>(PageBytes / sizeof(u32));
@@ -197,8 +191,9 @@ inline void CheckMissedWrite(u64 page_addr, u32 begin, u32 end) {
     }
 }
 
-/// The front's macro read `words` at `source` after draining (MME DMA): `changed` of them differ
-/// from guest memory read before the drain; `gpu_written`: on pages GPU work has written.
+/// The front's macro read `words` at `source` (MME DMA): `changed` of them differ between the
+/// read after waiting for memory writers and the last sync and the read after a full drain;
+/// `gpu_written`: on pages GPU work has written.
 inline void RecordDmaRead(u64 source, u32 words, u32 changed, bool gpu_written) {
     State& state = Get();
     state.dma_reads.fetch_add(1, std::memory_order_relaxed);

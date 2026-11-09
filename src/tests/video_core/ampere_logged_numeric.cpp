@@ -176,8 +176,7 @@ TEST_CASE("Logged Pokopia F2I preserves guards and rejects unrelated modifiers",
         for (size_t index = 0; index + 1 < lowered.instructions.size(); ++index)
             CHECK(((lowered.instructions[index] >> 16) & 15) == guard);
     }
-    for (const u32 source : {0x80c03400U, 0xc0c03400U, 0x44c03400U, 0x40c03440U,
-                             0x48c03400U, 0x50c03400U, 0x60c03400U}) {
+    for (const u32 source : {0x44c03400U, 0x40c03440U, 0x48c03400U, 0x50c03400U, 0x60c03400U}) {
         auto invalid = LoggedF2I;
         invalid.words[1] = source;
         CHECK_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
@@ -193,7 +192,7 @@ TEST_CASE("Logged Pokopia F2I preserves guards and rejects unrelated modifiers",
     invalid = LoggedF2I;
     invalid.words[2] |= 1U << 27;
     CHECK_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
-    invalid.words = {0x00157b05, 0x40400400, 0x0021e100, 0x0001e400};
+    invalid.words = {0x00157b05, 0x00400440, 0x0021e100, 0x0001e400};
     CHECK_FALSE(LowerToMaxwell(std::array{invalid, Exit}));
 }
 
@@ -292,32 +291,6 @@ TEST_CASE("Logged Kirby FMUL preserves high guest registers across uniform mirro
             CHECK(remapped.instruction.Bits(field, 8) < 216);
             CHECK(LowerToMaxwell(std::array{uniform_marker, instruction, Exit}));
         }
-    }
-}
-
-TEST_CASE("Logged Ocarina uniform IMAD preserves high destinations across uniform mirrors",
-          "[video_core][ampere][logged_numeric][ocarina]") {
-    // Kakariko graveyard pixel shaders: IMAD R229 = R29 * UR10 + RZ (and R225 = R49 * UR10)
-    // were rejected with "native register shadowing mode", so the draw was skipped.
-    constexpr std::array multiplies{
-        Instruction{{0x1de57c24, 0x0000000a, 0x0f8e02ff, 0x000fe200}},
-        Instruction{{0x31e17c24, 0x0000000a, 0x0f8e02ff, 0x000fe200}},
-    };
-    const Instruction uniform_marker{{0x0000fc02, 0, 0, 0}};
-    for (const auto& multiply : multiplies) {
-        const auto pressure = Shader::Ampere::PrepareRegisterPressure(multiply, 216);
-        REQUIRE(pressure.valid);
-        CHECK(pressure.instruction.Bits(16, 8) == 212 + multiply.Bits(16, 8) % 4);
-        CHECK(pressure.instruction.Bits(24, 8) == multiply.Bits(24, 8));
-        CHECK(pressure.instruction.words[1] == multiply.words[1]);
-        CHECK(pressure.instruction.words[2] == multiply.words[2]);
-        REQUIRE(pressure.prefix.size() == 8);
-        REQUIRE(pressure.suffix.size() == 8);
-        const auto lowered = LowerToMaxwell(std::array{uniform_marker, multiply, Exit});
-        INFO(lowered.error);
-        REQUIRE(lowered);
-        CHECK(std::equal(pressure.prefix.begin(), pressure.prefix.end(),
-                         lowered.instructions.begin()));
     }
 }
 

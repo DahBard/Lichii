@@ -12,15 +12,14 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPropertyAnimation>
-#include <QPushButton>
 #include <QStyleOption>
 #include "common/container/unordered_map.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "core/loader/loader.h"
 #include "ui_loading_screen.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/shader_warm/shader_warm_builder.h"
 #include "yuzu/loading_screen.h"
+#include "yuzu/fritchii/fritchii_ui.h"
 
 // Mingw seems to not have QMovie at all. If QMovie is missing then use a single frame instead of an
 // showing the full animation
@@ -42,20 +41,6 @@ QProgressBar {
 QProgressBar::chunk {
   background-color: #ff3c28;
   width: 1px;
-})";
-
-constexpr char SKIP_BUTTON_STYLE[] = R"(
-QPushButton {
-  background-color: black;
-  color: white;
-  border: 2px solid white;
-  border-radius: 6px;
-  padding: 6px 24px;
-  font: 12pt "Arial";
-}
-QPushButton:disabled {
-  color: gray;
-  border-color: gray;
 })";
 
 constexpr char PROGRESSBAR_STYLE_COMPLETE[] = R"(
@@ -96,32 +81,28 @@ LoadingScreen::LoadingScreen(QWidget* parent)
     });
     connect(this, &LoadingScreen::LoadProgress, this, &LoadingScreen::OnLoadProgress,
             Qt::QueuedConnection);
-
-    // Shown while shaders are precached: starts the game without waiting for the rest.
-    skip_button = new QPushButton(tr("Skip"), this);
-    skip_button->setStyleSheet(QString::fromUtf8(SKIP_BUTTON_STYLE));
-    skip_button->setToolTip(tr("Start the game now. The shaders not precached yet are precached "
-                               "on a later launch."));
-    skip_button->hide();
-    ui->verticalLayout->insertWidget(2, skip_button, 0, Qt::AlignHCenter | Qt::AlignTop);
-    connect(skip_button, &QPushButton::clicked, this, [this] {
-        VideoCommon::ShaderWarm::RequestSkipWarm();
-        skip_button->setEnabled(false);
-    });
     qRegisterMetaType<VideoCore::LoadCallbackStage>();
 
     stage_translations = {
         {VideoCore::LoadCallbackStage::Prepare, tr("Loading...")},
         {VideoCore::LoadCallbackStage::Build, tr("Loading Shaders %1 / %2")},
         {VideoCore::LoadCallbackStage::Complete, tr("Launching...")},
-        {VideoCore::LoadCallbackStage::Warm, tr("Precaching shaders %1 / %2")},
     };
     progressbar_style = {
         {VideoCore::LoadCallbackStage::Prepare, PROGRESSBAR_STYLE_PREPARE},
         {VideoCore::LoadCallbackStage::Build, PROGRESSBAR_STYLE_BUILD},
         {VideoCore::LoadCallbackStage::Complete, PROGRESSBAR_STYLE_COMPLETE},
-        {VideoCore::LoadCallbackStage::Warm, PROGRESSBAR_STYLE_BUILD},
     };
+    if (FritchiiUi::Enabled()) {
+        stage_translations = {
+            {VideoCore::LoadCallbackStage::Prepare, tr("Starting...")},
+            {VideoCore::LoadCallbackStage::Build, tr("Preparing shaders %1 / %2")},
+            {VideoCore::LoadCallbackStage::Complete, tr("Almost ready...")},
+        };
+        progressbar_style[VideoCore::LoadCallbackStage::Build] = FritchiiUi::LoadingBarStyle();
+        progressbar_style[VideoCore::LoadCallbackStage::Complete] = FritchiiUi::LoadingBarStyle();
+        ui->progress_bar->setFixedHeight(6);
+    }
 }
 
 LoadingScreen::~LoadingScreen() = default;
@@ -171,8 +152,6 @@ void LoadingScreen::OnLoadProgress(VideoCore::LoadCallbackStage stage, std::size
         } else {
             ui->progress_bar->show();
         }
-        skip_button->setVisible(stage == VideoCore::LoadCallbackStage::Warm);
-        skip_button->setEnabled(true);
         previous_stage = stage;
         // reset back to fast shader compiling since the stage changed
         slow_shader_compile_start = false;
@@ -197,7 +176,7 @@ void LoadingScreen::OnLoadProgress(VideoCore::LoadCallbackStage stage, std::size
         }
         // only calculate an estimate time after a second has passed since stage change
         const auto diff = duration_cast<milliseconds>(now - slow_shader_start);
-        if (diff > seconds{1} && value > slow_shader_first_value) {
+        if (diff > seconds{1}) {
             const auto eta_mseconds =
                 static_cast<long>(static_cast<double>(total - slow_shader_first_value) /
                                   (value - slow_shader_first_value) * diff.count());
@@ -210,8 +189,7 @@ void LoadingScreen::OnLoadProgress(VideoCore::LoadCallbackStage stage, std::size
     }
 
     // update labels and progress bar
-    if (stage == VideoCore::LoadCallbackStage::Build ||
-        stage == VideoCore::LoadCallbackStage::Warm) {
+    if (stage == VideoCore::LoadCallbackStage::Build) {
         ui->stage->setText(stage_translations[stage].arg(value).arg(total));
     } else {
         ui->stage->setText(stage_translations[stage]);

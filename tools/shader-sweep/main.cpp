@@ -40,7 +40,7 @@ constexpr std::array StageNames{"vertex",  "tess-control", "tess-eval", "geometr
                                 "compute", "vertex-a",     "task",      "mesh"};
 
 Stage ParseStage(std::string_view name) {
-    for (size_t i = 0; i < StageNames.size(); ++i) {
+    for (size_t i = 0; i < 6; ++i) {
         if (name == StageNames[i])
             return static_cast<Stage>(i);
     }
@@ -182,12 +182,6 @@ public:
             sph = reader.Read<Shader::ProgramHeader>();
             if (stage == Stage::Geometry)
                 gp_passthrough_mask = reader.Read<std::array<u32, 8>>();
-            if (stage == Stage::Task || stage == Stage::Mesh) {
-                if (version < 53)
-                    throw std::runtime_error("Task/mesh environments require cache version 53");
-                mesh_registers = reader.Read<std::array<u32, 3>>();
-                mesh_primitive_header = reader.Read<Shader::ProgramHeader>();
-            }
         }
         if (reader.Remaining())
             throw std::runtime_error("Trailing bytes after environment record");
@@ -538,17 +532,16 @@ int main(int argc, char** argv) {
         std::optional<Stage> requested_stage;
         u32 version{};
         bool lower_only{};
-        bool packed_code{};
         bool capture_extent{};
         for (int i = 1; i < argc; ++i) {
             const std::string arg{argv[i]};
             if (arg == "--help") {
                 std::cout << "shader-sweep [INPUT] [--stage "
-                             "vertex|tess-control|tess-eval|geometry|fragment|compute|task|mesh]\n"
+                             "vertex|tess-control|tess-eval|geometry|fragment|compute]\n"
                              "  [--format instructions|native-header] [--environment FILE "
-                             "--cache-version 46|47|48|49|50|51|52|53]\n"
+                             "--cache-version 46|47|48|49|50|51|52]\n"
                              "  [--pipeline-key FILE] [--capture-extent] "
-                             "(--output SPV | --lower-only WORDS | --packed-code WORDS)\n";
+                             "(--output SPV | --lower-only WORDS)\n";
                 return 0;
             }
             if (!arg.starts_with("--")) {
@@ -574,15 +567,14 @@ int main(int argc, char** argv) {
                 pipeline_key = value;
             else if (arg == "--cache-version") {
                 if (value != "46" && value != "47" && value != "48" && value != "49" && value != "50" &&
-                    value != "51" && value != "52" && value != "53")
-                    throw std::runtime_error("Expected cache version 46 to 53");
+                    value != "51" && value != "52")
+                    throw std::runtime_error("Expected cache version 46 to 52");
                 version = static_cast<u32>(std::stoul(value));
-            } else if (arg == "--output" || arg == "--lower-only" || arg == "--packed-code") {
+            } else if (arg == "--output" || arg == "--lower-only") {
                 if (!output.empty())
                     throw std::runtime_error("Only one output mode is permitted");
                 output = value;
-                lower_only = arg != "--output";
-                packed_code = arg == "--packed-code";
+                lower_only = arg == "--lower-only";
             } else
                 throw std::runtime_error("Unknown option " + arg);
         }
@@ -623,16 +615,11 @@ int main(int argc, char** argv) {
                 if (type < 1 || type > 5)
                     throw std::runtime_error("Invalid native graphics header stage");
                 const Stage header_stage = static_cast<Stage>(type - 1);
-                const Stage stage = requested_stage.value_or(
-                    env.captured ? env.ShaderStage() : header_stage);
-                const bool mesh_envelope =
-                    (stage == Stage::Task && type == 1) ||
-                    (stage == Stage::Mesh && (type == 1 || type == 3));
-                if ((stage != header_stage && !mesh_envelope) ||
-                    (env.captured && env.ShaderStage() != stage)) {
+                if ((requested_stage && *requested_stage != header_stage) ||
+                    (env.captured && env.ShaderStage() != header_stage)) {
                     throw std::runtime_error("Stage disagrees with native header");
                 }
-                env.SetStage(stage);
+                env.SetStage(header_stage);
                 env.SetHeader(bytes);
             } else if (!requested_stage && !env.captured && !lower_only) {
                 throw std::runtime_error(
@@ -701,12 +688,7 @@ int main(int argc, char** argv) {
             diagnostic["lowered_words"] = lowered.instructions.size();
             if (lower_only) {
                 diagnostic["phase"] = "output";
-                if (packed_code) {
-                    env.SetCode(lowered);
-                    WriteFile(output, env.code);
-                } else {
-                    WriteFile(output, lowered.instructions);
-                }
+                WriteFile(output, lowered.instructions);
                 diagnostic["status"] = "ok";
                 std::cout << diagnostic.dump() << '\n';
                 return 0;

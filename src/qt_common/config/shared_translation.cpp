@@ -21,12 +21,6 @@
 
 namespace ConfigurationShared {
 
-/**
- * Builds the label and tooltip every settings widget shows, keyed by setting id.
- *
- * @param parent Object used for translation lookups.
- * @return The translation map.
- */
 std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     std::unique_ptr<TranslationMap> translations = std::make_unique<TranslationMap>();
     const auto& tr = [](const char* text) -> QString { return QCoreApplication::translate("ConfigurationShared", text); };
@@ -157,15 +151,13 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "checked, when it can't run on this GPU, with resolution scaling, and for the rest "
               "of the session if its output fails Lichii's checks.\nTakes effect when a game "
               "starts."));
-    INSERT(Settings, frame_rate_limit, tr("Frame rate limit (Switch 2):"),
-           tr("Rate of the Switch 2 VSync event that games start their frames on (default 60 Hz)."
-              "\nAbove 60 Hz most games run too fast; use it with a game patch that follows real "
-              "time, such as \"FPS Unlock (built-in)\" for Ocarina of Time.\nTakes effect when a "
-              "game starts."));
     INSERT(Settings, fsr_sharpening_slider, tr("RCAS Sharpness:"),
            tr("Strength of RCAS (AMD's contrast-adaptive sharpening) on the upscaler used in place "
               "of a game's DLSS (AMD FSR 3.1); 0% turns it off.\nAlso sets the sharpening "
               "of the AMD FSR 1 and SGSR window adapting filters."));
+    INSERT(Settings, nvidia_dlss_preset, tr("DLSS preset:"),
+           tr("The DLSS model. K is the tested default; L and M are NVIDIA's newer models, J the "
+              "older one. Default lets NVIDIA choose per quality mode."));
     INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
@@ -226,9 +218,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, skip_cpu_inner_invalidation, tr("Skip CPU Inner Invalidation"),
            tr("Skips certain cache invalidations during memory updates, reducing CPU usage and "
               "improving latency. This may cause soft-crashes."));
-    INSERT(Settings, fps_limit, tr("FPS Limit"),
-           tr("Caps how often the game presents, so the game itself runs at this rate. 0 leaves "
-              "the frame rate to the game and the display."));
     INSERT(Settings, vsync_mode, tr("VSync Mode:"),
            tr("FIFO (VSync) does not drop frames or exhibit tearing but is limited by the screen "
               "refresh rate.\nFIFO Relaxed allows tearing as it recovers from a slow down.\n"
@@ -276,7 +265,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "the GPU after each dispatch.\nAuto marks what the shader's stores can reach and "
               "falls back to Full when that cannot be proven.\nFull marks the whole binding (up to "
               "8 MiB), the original behaviour: it can delay the game's own writes to nearby memory "
-              "(flickering effects) and copy far more data back from the GPU."));
+              "(flickering effects) and copy far more data back from the GPU.\n64 KiB cap marks at "
+              "most 64 KiB, which can miss data a large dispatch really wrote."));
     INSERT(Settings, use_asynchronous_shaders, tr("Enable asynchronous shader compilation"),
            tr("May reduce shader stutter."));
     INSERT(Settings, gpu_clock, tr("GPU Clocks"),
@@ -298,36 +288,22 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Determines the number of depth slices processed in a single dispatch.\n"
               "Increasing this can improve throughput on high-end GPUs but may cause TDR or driver "
               "timeouts on weaker hardware."));
-    INSERT(Settings, pin_gpu_threads, tr("Pin GPU threads to their own cores"),
-           tr("Pins the emulator's GPU threads to dedicated physical CPU cores and keeps the "
-              "emulated CPU cores off them.\n"
-              "Can hurt performance on CPUs with few cores. Skipped on CPUs with fewer than 6 "
-              "physical performance cores.\n"
-              "Windows and Linux only. Takes effect when a game starts."));
 
     INSERT(Settings, use_vulkan_driver_pipeline_cache, tr("Use Vulkan pipeline cache"),
            tr("Enables GPU vendor-specific pipeline cache.\nThis option can improve shader loading "
               "time significantly in cases where the Vulkan driver does not store pipeline cache "
               "files internally."));
-    INSERT(Settings, precache_shaders, tr("Precache shaders before game start:"),
-           tr("Builds shaders on the loading screen, on every CPU thread, so they don't stutter "
-              "the first time the game uses them: the compute shaders found in the game files, "
-              "and the shaders saved by earlier play sessions that the normal shader loading "
-              "leaves for later. The first launch reads the game files and takes a few minutes; "
-              "later launches only build what is new, until the GPU driver changes. The loading "
-              "screen has a Skip button.\nAsk asks at launch while the game has never been "
-              "precached."));
-    INSERT(Settings, native_async_draws, tr("Switch 2 draws with unbuilt pipelines:"),
-           tr("Only applies when asynchronous shader building is on. Decides what a Switch 2 draw "
-              "does when its graphics pipeline is still building.\n"
-              "Wait stalls the GPU until the pipeline is ready (no missing effects, but long "
-              "stalls on new content). Skip drops the draw, which can leave an effect missing for "
-              "a few frames. Bounded waits up to the time below per frame, then skips. The "
-              "EDEN_NX2_ASYNC_DISCARD=1 environment variable still forces Skip."));
-    INSERT(Settings, native_pipeline_wait_ms, tr("Pipeline wait per frame (ms):"),
-           tr("Used by the Bounded mode: the most time per frame that Switch 2 draws may wait in "
-              "total for pipelines that are still building. Once spent, the remaining unbuilt "
-              "draws of that frame are skipped."));
+    INSERT(Settings, use_graphics_pipeline_library,
+           tr("Shader libraries (faster first-time shader builds)"),
+           tr("Builds each shader stage once and links them into pipelines, so new shaders "
+              "cause shorter stutters.\nUsed on NVIDIA and AMD GPUs. The graphics half of the "
+              "shader warm-up (Prepare shaders in the game list) needs it.\nTakes effect after "
+              "restarting the game."));
+    INSERT(Settings, shader_warm_threads, tr("Shader warm-up threads:"),
+           tr("CPU threads the shader warm-up uses (low priority). More threads finish the "
+              "warm-up sooner. It builds only while the game is paused, or from Emulation, "
+              "Prepare Shaders Now, when it shares the CPU with the game.\nTakes effect at the "
+              "next game start."));
     INSERT(Settings, enable_compute_pipelines, tr("Enable Compute Pipelines (Intel Vulkan Only)"),
            tr("Required by some games.\nThis setting only exists for Intel "
               "proprietary drivers and may crash if enabled.\nCompute pipelines are always enabled "
@@ -339,6 +315,9 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, use_video_framerate, tr("Sync to framerate of video playback"),
            tr("Run the game at normal speed during video playback, even when the framerate is "
               "unlocked."));
+    INSERT(Settings, oot_30fps, tr("Ocarina of Time: 30 FPS mode (lower-end PCs)"),
+           tr("Caps Ocarina of Time at 30 FPS. The game keeps its normal speed. Takes effect at "
+              "once; the 60 FPS / 30 FPS button in the status bar switches it too."));
     INSERT(Settings, mkw_30fps, tr("Mario Kart World: 30 FPS mode"),
            tr("Forces the game to use its native 30 FPS mode at normal game speed. "
               "Takes effect after restarting the game."));
@@ -512,6 +491,7 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(NativeComputeWriteMark, Auto, tr("Auto (shader extent)")),
                               PAIR(NativeComputeWriteMark, Full, tr("Full binding")),
+                              PAIR(NativeComputeWriteMark, Cap64K, tr("64 KiB cap")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::GpuFenceBehavior>::Index(),
                           {
@@ -591,6 +571,14 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(AntiAliasing, None, tr("None")),
                               PAIR(AntiAliasing, Fxaa, tr("FXAA")),
                               PAIR(AntiAliasing, Smaa, tr("SMAA")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::DlssPreset>::Index(),
+                          {
+                              PAIR(DlssPreset, Default, tr("Default (NVIDIA's choice)")),
+                              PAIR(DlssPreset, J, tr("J")),
+                              PAIR(DlssPreset, K, tr("K (recommended)")),
+                              PAIR(DlssPreset, L, tr("L")),
+                              PAIR(DlssPreset, M, tr("M")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::OotAntiAliasing>::Index(),
                           {
@@ -721,18 +709,6 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(ConsoleMode, Docked, tr("Docked")),
                               PAIR(ConsoleMode, Handheld, tr("Handheld")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::PrecacheShaders>::Index(),
-                          {
-                              PAIR(PrecacheShaders, Off, tr("Off")),
-                              PAIR(PrecacheShaders, Ask, tr("Ask")),
-                              PAIR(PrecacheShaders, Always, tr("Always")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::NativeAsyncDraws>::Index(),
-                          {
-                              PAIR(NativeAsyncDraws, Wait, tr("Wait")),
-                              PAIR(NativeAsyncDraws, Bounded, tr("Bounded wait")),
-                              PAIR(NativeAsyncDraws, Skip, tr("Skip")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::CpuClock>::Index(),
                           {

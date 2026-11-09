@@ -1,61 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include <algorithm>
 #include <array>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <optional>
-#include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 
 #include <fmt/format.h>
 
 #include "common/common_types.h"
-#include "common/fs/file_lock.h"
 
 namespace VideoCommon {
 
 inline constexpr u32 OpenGLPipelineCacheVersion = 48;
-
-// The Vulkan disk cache holds guest environments (the guest code and the values its translation
-// read), not SPIR-V: whatever is built from it is translated and emitted by the running build, so
-// an emitter change needs no new version. Bump the version when the record layout changes. When
-// translation starts asking the environment something older records don't hold, those records
-// fail one by one and their pipelines are built when the game uses them; a new version would
-// throw every record away instead. CompatibleVulkanPipelineCacheVersions lists the older versions
-// with this version's record layout.
+/// 54 since 2026-11-08 (was 52): zortos293/Lichii writes the same records under 53 and 54, and our
+/// graphics keys already keep only the attribute types a program reads (KeyedAttributeTypes, their
+/// #408), which is all their version 55 changes. So shared caches and #895 recipes of 54 are taken as
+/// they are, and moving to 55 later is this number plus VulkanOwnPreviousVersions.
 inline constexpr u32 VulkanPipelineCacheVersion = 54;
-
-/// Older Vulkan cache versions with this version's record layout, newest first. A build that
-/// finds no cache of its own version starts from the newest of these on disk, so an update keeps
-/// the pipelines the game has already shown.
-inline constexpr std::array<u32, 2> CompatibleVulkanPipelineCacheVersions{53, 52};
-
-/// Header magic of the guest environment caches and of the Vulkan driver pipeline cache.
-inline constexpr std::array<char, 8> PipelineCacheMagic{'y', 'u', 'z', 'u', 'c', 'a', 'c', 'h'};
-inline constexpr std::array<char, 8> VulkanDriverPipelineCacheMagic{'y', 'u', 'z', 'u',
-                                                                    'v', 'k', 'c', 'h'};
-
-/// Whether `versions` are all below `version` and strictly decreasing. An empty list is valid.
-[[nodiscard]] constexpr bool IsOlderVersionList(std::span<const u32> versions, u32 version) {
-    u32 newer = version;
-    for (const u32 older : versions) {
-        if (older >= newer) {
-            return false;
-        }
-        newer = older;
-    }
-    return true;
-}
-static_assert(IsOlderVersionList(CompatibleVulkanPipelineCacheVersions,
-                                 VulkanPipelineCacheVersion));
-// A version with another record layout must not start from these: their files would be read as
-// its own. Check the list whenever the version changes, then update this.
-static_assert(VulkanPipelineCacheVersion == 54,
-              "Check CompatibleVulkanPipelineCacheVersions against the new version");
+/// This fork's earlier versions of the same record format, newest first: their files are copied
+/// once to the current version's names (header version rewritten; records unchanged).
+inline constexpr std::array<u32, 1> VulkanOwnPreviousVersions{52};
 
 // Official Eglantine (cache version 18 at c0cb3325) and this fork (a different version) both
 // used <shader dir>/<title>/vulkan.bin and vulkan_pipelines.bin. Each build deletes a file
@@ -66,22 +37,6 @@ static_assert(VulkanPipelineCacheVersion == 54,
     const std::filesystem::path& directory, std::string_view stem, u32 version) {
     return directory / fmt::format("{}.fork-v{}.bin", stem, version);
 }
-
-/// The file whose lock (Common::FS::FileLock) is held by whatever writes a guest environment cache
-/// (PipelineCacheMagic), which is appended to in place, so that emulators running at once never
-/// write it together or read what another is writing. The driver pipeline cache is replaced whole
-/// by a rename and has no lock.
-[[nodiscard]] inline std::filesystem::path PipelineCacheLockPath(
-    const std::filesystem::path& file) {
-    auto lock = file;
-    lock += ".lock";
-    return lock;
-}
-
-/// How long one waits for that lock while another emulator holds it: longer than a load, append
-/// or rewrite takes, but a crashed emulator holds it while it writes a crash dump. Then a load goes
-/// on as where the file system has no locks, and an append is left out.
-inline constexpr std::chrono::seconds PipelineCacheLockWait{5};
 
 /// True when the file starts with this magic number followed by this cache version.
 [[nodiscard]] inline bool PipelineCacheHeaderMatches(const std::filesystem::path& file,
@@ -115,6 +70,19 @@ inline bool AdoptLegacyPipelineCache(const std::filesystem::path& legacy,
     return !error;
 }
 
+/// Copies a file of this fork's earlier version that has no version in it (the used-pipelines
+/// list, the merge log) when the current one doesn't exist yet; the old file stays for older builds.
+inline void CopyOwnUnversionedFile(const std::filesystem::path& old_file,
+                                   const std::filesystem::path& new_file) {
+    std::error_code error;
+    if (!std::filesystem::exists(new_file, error) && std::filesystem::exists(old_file, error)) {
+        std::filesystem::copy_file(old_file, new_file, error);
+    }
+}
+
+/// Copies a cache whose records this build reads, written with another cache version, to
+/// `destination` with this build's version in its header (from zortos293/Lichii#194). The
+/// source is never changed; an existing destination is kept.
 inline bool CopyCompatiblePipelineCache(const std::filesystem::path& source,
                                         const std::filesystem::path& destination,
                                         const std::array<char, 8>& magic, u32 source_version,
@@ -149,92 +117,65 @@ inline bool CopyCompatiblePipelineCache(const std::filesystem::path& source,
     return true;
 }
 
-struct PipelineCacheCarryOver {
-    std::optional<u32> version{}; ///< The older version the cache was started from
-    bool failed{}; ///< An older cache to start from is there, but it couldn't be read or copied
+/// Reads one pipeline record from `file` (positioned at its start, with exceptions enabled,
+/// `end` its size) and returns the bytes that identify its pipeline, or nullopt when the record
+/// is malformed. The bytes must compare equal for records of the same pipeline.
+using PipelineRecordKeyReader =
+    std::function<std::optional<std::string>(std::ifstream& file, std::streamoff end)>;
+
+using PipelineKeySet = std::unordered_set<std::string>;
+
+struct PipelineCacheMergeResult {
+    enum class Status {
+        Merged,         ///< `added_records` appended (possibly none)
+        Missing,        ///< No source file
+        WrongHeader,    ///< The source is not a cache of the expected magic and version
+        BadSource,      ///< A source record does not parse; nothing was written
+        BadDestination, ///< The destination does not parse; it was left as it is
+        NoSpace,        ///< Not enough free disk space for the merged copy
+        WriteFailed,    ///< Writing or renaming the merged copy failed; the destination is unchanged
+    };
+    Status status{};
+    size_t added_pipelines{};
+    size_t added_records{};
+    size_t known_pipelines{}; ///< Source pipelines the destination already had
+    std::string detail;
 };
 
-/// Starts the `version` cache named `stem` from the newest cache of `versions` in `directory`,
-/// unless a `version` cache already exists. Older files are copied, never changed, so the builds
-/// that wrote them keep them.
-inline PipelineCacheCarryOver CarryOverPipelineCache(const std::filesystem::path& directory,
-                                                     std::string_view stem,
-                                                     const std::array<char, 8>& magic,
-                                                     std::span<const u32> versions, u32 version) {
-    const auto destination = VersionedPipelineCachePath(directory, stem, version);
-    std::error_code error;
-    if (std::filesystem::exists(destination, error) || error) {
-        return {};
-    }
-    // Another emulator starting the same cache, or appending to it once started, goes first: the
-    // copy is made only while there is no cache of this version (see CopyCompatiblePipelineCache).
-    std::optional<Common::FS::FileLock> lock;
-    if (magic == PipelineCacheMagic) {
-        lock.emplace(PipelineCacheLockPath(destination), PipelineCacheLockWait);
-    }
-    for (const u32 source_version : versions) {
-        const auto source = VersionedPipelineCachePath(directory, stem, source_version);
-        if (!std::filesystem::is_regular_file(source, error)) {
-            continue;
-        }
-        // Only the newest cache: an older one would bring back pipelines the newer one has since
-        // replaced. One that can't be opened (another process holds it) stops here too.
-        if (!std::ifstream(source, std::ios::binary).is_open()) {
-            return {.failed = true};
-        }
-        if (!PipelineCacheHeaderMatches(source, magic, source_version)) {
-            continue; // Another file under that name, or one cut off before its header ends
-        }
-        if (CopyCompatiblePipelineCache(source, destination, magic, source_version, version)) {
-            return {.version = source_version};
-        }
-        return {.failed = true};
-    }
-    return {};
-}
+/// Appends to `destination` the records of `source` (a cache with `source_version` in its
+/// header, otherwise identical records) whose pipeline key the destination does not hold, every
+/// record of a new key in source order. The result is written next to `destination` and renamed
+/// over it; the source is never changed. A destination that does not exist is created with
+/// `destination_version`. `known_keys` holds the destination's keys: filled by scanning it when
+/// empty, and extended by a successful merge, so several sources scan the destination once.
+PipelineCacheMergeResult MergePipelineCache(const std::filesystem::path& source,
+                                            const std::filesystem::path& destination,
+                                            const std::array<char, 8>& magic, u32 source_version,
+                                            u32 destination_version,
+                                            const PipelineRecordKeyReader& read_key,
+                                            std::optional<PipelineKeySet>& known_keys);
 
-enum class PipelineCacheClear {
-    Missing, ///< There was no cache of this version, nor an older one to start from
-    Cleared,
-    Failed,
+/// Adds to the used-pipelines list `destination` (magic, count, then u64 hash + u8 age per
+/// entry) the hashes of `source` it lacks, keeping the lower age of a hash both hold, through a
+/// temporary file. Returns how many were added, or nullopt when `source` is truncated or either
+/// file has another magic (then nothing is written).
+std::optional<size_t> MergeUsedPipelineLists(const std::filesystem::path& source,
+                                             const std::filesystem::path& destination, u32 magic);
+
+/// Size and modification time of a file, to tell whether it changed since it was merged.
+struct PipelineCacheFileStamp {
+    u64 size{};
+    s64 modified{};
+    bool operator==(const PipelineCacheFileStamp&) const = default;
 };
 
-/// Empties the `version` cache named `stem`. When an older cache of `versions` is on disk, a
-/// header-only (empty) cache of this version takes the place of the removed one, so the next boot
-/// doesn't start from the older cache again; the older files stay with the builds that wrote them.
-inline PipelineCacheClear ClearPipelineCache(const std::filesystem::path& directory,
-                                             std::string_view stem,
-                                             const std::array<char, 8>& magic,
-                                             std::span<const u32> versions, u32 version) {
-    const auto file = VersionedPipelineCachePath(directory, stem, version);
-    std::error_code error;
-    const bool exists = std::filesystem::exists(file, error);
-    const bool has_older = std::ranges::any_of(versions, [&](u32 older) {
-        std::error_code older_error;
-        return std::filesystem::exists(VersionedPipelineCachePath(directory, stem, older),
-                                       older_error);
-    });
-    if (!exists && !has_older) {
-        return PipelineCacheClear::Missing;
-    }
-    // A running game appending to it or rewriting it finishes first, so it can't bring back what
-    // is removed here.
-    std::optional<Common::FS::FileLock> lock;
-    if (magic == PipelineCacheMagic) {
-        lock.emplace(PipelineCacheLockPath(file), PipelineCacheLockWait);
-    }
-    if (exists && !std::filesystem::remove(file, error)) {
-        return PipelineCacheClear::Failed;
-    }
-    if (has_older) {
-        std::ofstream stream(file, std::ios::binary);
-        stream.write(magic.data(), magic.size());
-        stream.write(reinterpret_cast<const char*>(&version), sizeof(version));
-        if (!stream.good()) {
-            return PipelineCacheClear::Failed;
-        }
-    }
-    return PipelineCacheClear::Cleared;
-}
+[[nodiscard]] std::optional<PipelineCacheFileStamp> StampPipelineCacheFile(
+    const std::filesystem::path& file);
+
+/// The sidecar recording the stamp of each source file (by file name) when it was last merged.
+using PipelineMergeLog = std::map<std::string, PipelineCacheFileStamp>;
+
+[[nodiscard]] PipelineMergeLog ReadPipelineMergeLog(const std::filesystem::path& file);
+bool WritePipelineMergeLog(const std::filesystem::path& file, const PipelineMergeLog& log);
 
 } // namespace VideoCommon

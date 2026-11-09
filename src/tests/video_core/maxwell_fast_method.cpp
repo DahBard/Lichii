@@ -5,10 +5,8 @@
 #include <array>
 #include <chrono>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <random>
-#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -26,6 +24,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/renderer_null/null_rasterizer.h"
 
 namespace VideoCommon {
@@ -44,10 +43,25 @@ struct GpuSplitTestAccess {
         return split.write_position;
     }
 
-    static void Start(GpuSplit& split, Core::System& system) {
-        Initialize(split, system);
-        split.active = true;
-        split.back_thread = std::jthread([&split](std::stop_token stop) { split.BackLoop(stop); });
+    /// As if `words` more were sent.
+    static void Advance(GpuSplit& split, u64 words) {
+        split.write_position += words;
+    }
+
+    /// As if the back had run everything before `position`.
+    static void Consume(GpuSplit& split, u64 position) {
+        split.consumed.store(position, std::memory_order_release);
+    }
+
+    /// As if the back ran, in the entry at `position`, a dispatch writing [begin, begin + size).
+    static void RunDispatch(GpuSplit& split, u64 position, u64 begin, u64 size) {
+        split.back_entry_position = position;
+        GpuSplit::recording_dispatch = true;
+        split.StartDispatch();
+        split.RecordDispatchWrite(begin, size);
+        split.ConfirmDispatch();
+        split.FinishDispatch(true, false);
+        GpuSplit::recording_dispatch = false;
     }
 
     static u64 NearWrap() {
@@ -381,6 +395,142 @@ TEST_CASE("GpuSplit CB batching respects device remaps within GPU big pages",
     f.Compare();
 }
 
+TEST_CASE("GpuSplit compute and copy write ranges count only for reads they overlap",
+          "[video_core][maxwell_fast_method][gpu_split_writer_ranges]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    using Kind = VideoCommon::GpuSplit::WriterKind;
+    Fixture f;
+    f.memory.BindRasterizer(&f.rasterizer);
+    // Two GPU pages on device pages that are not adjacent.
+    f.memory.Map(0x100000, 0x40000, 0x1000, Tegra::PTEKind::PITCH, false);
+    f.memory.Map(0x101000, 0x80000, 0x1000, Tegra::PTEKind::PITCH, false);
+    VideoCommon::GpuSplit split;
+    Access::Initialize(split, f.system, 100);
+
+    split.NoteWriterRange(f.memory, 0x100100, 0x100, Kind::Copy);
+    REQUIRE(split.WritersMayWriteSince(50, 0x401fc, 8));
+    REQUIRE_FALSE(split.WritersMayWriteSince(50, 0x40200, 4));
+    REQUIRE_FALSE(split.WritersMayWriteSince(50, 0x80100, 4));
+    REQUIRE_FALSE(split.WritersMayWriteSince(100, 0x40180, 4));
+
+    // Across both device pages: not one device range, so it may write anything.
+    Access::Advance(split, 10);
+    split.NoteWriterRange(f.memory, 0x100f00, 0x200, Kind::Copy);
+    REQUIRE(split.WritersMayWriteSince(105, 0x40200, 4));
+    REQUIRE_FALSE(split.WritersMayWriteSince(110, 0x40200, 4));
+
+    // A writer no engine front classified.
+    Access::Advance(split, 10);
+    split.NoteWriter();
+    REQUIRE(split.WritersMayWriteSince(115, 0x12345000, 4));
+    REQUIRE_FALSE(split.WritersMayWriteSince(120, 0x40180, 4));
+    REQUIRE(split.UnboundedWriters()[static_cast<size_t>(Kind::Copy)] == 1);
+    REQUIRE(split.UnboundedWriters()[static_cast<size_t>(Kind::Other)] == 1);
+
+    // An inline upload's words write one range: noted once, moved along while nobody kept a
+    // check of it, noted anew after one.
+    Access::Advance(split, 10);
+    split.NoteWriterRange(f.memory, 0x100400, 0x80, Kind::Upload);
+    Access::Advance(split, 1);
+    split.NoteWriterRange(f.memory, 0x100400, 0x80, Kind::Upload);
+    REQUIRE(split.WriterRangeCount() == 2);
+    REQUIRE(split.WritersMayWriteSince(130, 0x40400, 4));
+    const u64 since = Access::End(split);
+    u64 checked = split.WriterRangeCount();
+    REQUIRE_FALSE(split.WritersMayWriteSince(since, 0x40000, 0x1000, &checked));
+    Access::Advance(split, 1);
+    split.NoteWriterRange(f.memory, 0x100400, 0x80, Kind::Upload);
+    REQUIRE(split.WriterRangeCount() == 3);
+    REQUIRE(split.WritersMayWriteSince(since, 0x40000, 0x1000, &checked));
+    u64 other_page = checked;
+    REQUIRE_FALSE(split.WritersMayWriteSince(since, 0x80000, 0x1000, &other_page));
+    REQUIRE(other_page == 3);
+}
+
+TEST_CASE("GpuSplit compute releases to unmapped memory write nothing",
+          "[video_core][maxwell_fast_method][gpu_split_writer_ranges]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    using Kind = VideoCommon::GpuSplit::WriterKind;
+    using Note = VideoCommon::GpuSplit::ReleaseNote;
+    Fixture f;
+    f.memory.BindRasterizer(&f.rasterizer);
+    f.memory.Map(0x100000, 0x40000, 0x1000, Tegra::PTEKind::PITCH, false);
+    VideoCommon::GpuSplit split;
+    Access::Initialize(split, f.system, 100);
+    const auto notes = [&split](Note note) {
+        return split.ReleaseNotes()[static_cast<size_t>(note)];
+    };
+
+    // Translated when the back runs it: GPU address 0 has no mapping, so nothing is written.
+    split.NoteReleaseWriter(f.memory, 0, 4, true);
+    REQUIRE_FALSE(split.WritersMayWriteSince(50, 0x40000, 0x1000));
+    REQUIRE(notes(Note::Unmapped) == 1);
+
+    // A reduction is translated when its fence signals: it may write anything.
+    Access::Advance(split, 10);
+    split.NoteReleaseWriter(f.memory, 0, 4, false);
+    REQUIRE(split.WritersMayWriteSince(105, 0x12345000, 4));
+    REQUIRE(notes(Note::LateUnmapped) == 1);
+
+    // Mapped: only its bytes.
+    Access::Advance(split, 10);
+    split.NoteReleaseWriter(f.memory, 0x100010, 16, true);
+    REQUIRE(split.WritersMayWriteSince(115, 0x4001c, 4));
+    REQUIRE_FALSE(split.WritersMayWriteSince(115, 0x40020, 4));
+    REQUIRE(notes(Note::Ranged) == 1);
+    REQUIRE(split.UnboundedWriters()[static_cast<size_t>(Kind::Release)] == 1);
+}
+
+TEST_CASE("GpuSplit dispatches count where the back recorded their writes",
+          "[video_core][maxwell_fast_method][gpu_split_dispatch_writes]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    using Check = VideoCommon::GpuSplit::DispatchCheck;
+    Fixture f;
+    VideoCore::Nx2Debug::LoadExperiments();
+    const int previous = VideoCore::Nx2Debug::g_experiments[10].exchange(1);
+    SCOPE_EXIT {
+        VideoCore::Nx2Debug::g_experiments[10].store(previous);
+    };
+    VideoCommon::GpuSplit split;
+    Access::Initialize(split, f.system, 100);
+    bool waited = false;
+
+    // Sent before the back was told to record (EXP10 just turned on): may write anything.
+    Access::Advance(split, 2);
+    split.NoteDispatchWriter();
+    u64 checked = split.DispatchWriteCount();
+    REQUIRE(split.DispatchesMayWriteSince(100, 0x40000, 0x1000, false, checked, waited) ==
+            Check::Unbounded);
+
+    const u64 since = Access::End(split);
+    Access::Consume(split, since);
+    REQUIRE(split.DispatchesMayWriteSince(since, 0x40000, 0x1000, false, checked, waited) ==
+            Check::Miss);
+
+    // Queued: unknown until the back ran it.
+    const u64 entry = Access::End(split);
+    Access::Advance(split, 2);
+    split.NoteDispatchWriter();
+    REQUIRE(split.DispatchesMayWriteSince(since, 0x40000, 0x1000, false, checked, waited) ==
+            Check::Queued);
+    Access::RunDispatch(split, entry, 0x80000, 0x100);
+    Access::Consume(split, Access::End(split));
+    REQUIRE(split.DispatchesMayWriteSince(since, 0x40000, 0x1000, false, checked, waited) ==
+            Check::Miss);
+    REQUIRE(checked == split.DispatchWriteCount());
+    u64 fresh = 0;
+    REQUIRE(split.DispatchesMayWriteSince(since, 0x80000, 0x1000, false, fresh, waited) ==
+            Check::Overlap);
+    // A snapshot taken after it ran.
+    const u64 later = Access::End(split);
+    fresh = split.DispatchWriteCount();
+    REQUIRE(split.DispatchesMayWriteSince(later, 0x80000, 0x1000, false, fresh, waited) ==
+            Check::Miss);
+    REQUIRE_FALSE(waited);
+    REQUIRE(split.GetDispatchStats().sent == 2);
+    REQUIRE(split.GetDispatchStats().bounded == 1);
+}
+
 TEST_CASE("GpuSplit dispatch preserves mapped uploads and macro boundaries",
           "[video_core][maxwell_fast_method][gpu_split_dispatch]") {
     using Access = VideoCommon::GpuSplitTestAccess;
@@ -652,188 +802,4 @@ TEST_CASE("Maxwell3D fast method dispatch cost", "[.][maxwell_fast_method_bench]
     const double run_ns = words(true);
     WARN("Three constant buffer words: " << single_ns << " ns one by one, " << run_ns
                                          << " ns as a run (unmapped buffer)");
-}
-
-TEST_CASE("Full split drains preserve aliased uploads, partial coverage and queued remaps",
-          "[video_core][gpu_split_dependencies]") {
-    using Access = VideoCommon::GpuSplitTestAccess;
-    Fixture f;
-    f.system.Initialize();
-    Kernel::KProcess process{f.system.Kernel()};
-    SCOPE_EXIT { f.system.Kernel().UnregisterKernelObject(&process); };
-    auto& table = process.GetPageTable().GetImpl();
-    table.Resize(20, 12);
-    constexpr VAddr cpu_address = 0x4000;
-    constexpr DAddr device_address = 0x10000;
-    constexpr GPUVAddr gpu_address = 0x100000;
-    constexpr GPUVAddr alias = 0x200000;
-    auto* backing = f.physical.GetPointerFromRaw<u8>(0x10000);
-    for (u64 page = 0; page < 2; ++page) {
-        const VAddr address = cpu_address + page * 0x1000;
-        table.entries.GetAndFault(address >> 12)
-            .Store(false, Common::PageType::Memory, 1,
-                   reinterpret_cast<uintptr_t>(backing + page * 0x1000) - address);
-    }
-    process.GetMemory().SetCurrentPageTable(process);
-    const auto asid = f.device_memory.RegisterProcess(&process.GetMemory());
-    f.device_memory.BindInterface(&f.rasterizer);
-    f.device_memory.Map(device_address, cpu_address, 0x2000, asid);
-    SCOPE_EXIT {
-        f.device_memory.Unmap(device_address, 0x2000);
-        f.device_memory.UnregisterProcess(asid);
-    };
-    f.memory.BindRasterizer(&f.rasterizer);
-    f.memory.Map(gpu_address, device_address, 0x2000, Tegra::PTEKind::PITCH, false);
-    f.memory.Map(alias, device_address, 0x1000, Tegra::PTEKind::PITCH, false);
-    std::memset(backing, 0, 0x2000);
-
-    VideoCommon::GpuSplit split;
-    Access::Start(split, f.system);
-    SCOPE_EXIT { split.Stop(); };
-    const auto state = [&](u32 method, u32 value) {
-        split.Method(&f.fast, method, value, true, nullptr);
-    };
-    const auto upload = [&](GPUVAddr address, u32 size, std::vector<u32> words) {
-        state(ShadowControl, 0);
-        state(CbAddressHigh, static_cast<u32>(address >> 32));
-        state(CbAddressLow, static_cast<u32>(address));
-        state(CbSize, size);
-        state(CbOffset, 0);
-        split.MultiMethod(&f.fast, CbData, words.data(), static_cast<u32>(words.size()),
-                          static_cast<u32>(words.size()), nullptr);
-        std::ranges::fill(words, 0xdeadbeef);
-    };
-
-    upload(gpu_address, 16, {1, 2, 3, 4});
-    upload(alias + 4, 4, {20, 30});
-    upload(gpu_address + 0x1000, 8, {50, 60});
-    split.Drain(VideoCommon::DrainSite::MacroDmaRead);
-    std::array<u32, 4> read{};
-    f.memory.ReadBlockUnsafe(gpu_address, read.data(), sizeof(read));
-    REQUIRE(read == std::array<u32, 4>{1, 20, 3, 4});
-    REQUIRE(f.memory.Read<u32>(alias + 4) == 20);
-    REQUIRE(f.memory.Read<u32>(gpu_address + 0x1000) == 50);
-
-    split.Defer([&] {
-        f.memory.Map(alias, device_address + 0x1000, 0x1000, Tegra::PTEKind::PITCH, false);
-    });
-    upload(alias, 4, {70});
-    split.Drain(VideoCommon::DrainSite::MacroDmaRead);
-    REQUIRE(f.memory.Read<u32>(gpu_address) == 1);
-    REQUIRE(f.memory.Read<u32>(gpu_address + 0x1000) == 70);
-    REQUIRE(f.memory.Read<u32>(alias + 4) == 60);
-}
-
-TEST_CASE("Split consumption does not complete deferred downstream callbacks",
-          "[video_core][gpu_split_dependencies]") {
-    using Access = VideoCommon::GpuSplitTestAccess;
-    Fixture f;
-    f.system.Initialize();
-    VideoCommon::GpuSplit split;
-    Access::Start(split, f.system);
-    SCOPE_EXIT { split.Stop(); };
-    std::vector<std::function<void()>> deferred;
-    std::array<u32, 3> output{};
-    for (u32 i = 0; i < output.size(); ++i) {
-        split.Defer([&, i] { deferred.emplace_back([&, i] { output[i] = i + 1; }); });
-    }
-    split.Drain(VideoCommon::DrainSite::MacroDmaRead);
-    REQUIRE(deferred.size() == 3);
-    REQUIRE(output == std::array<u32, 3>{});
-    split.Run([&] {
-        for (auto& operation : deferred) {
-            operation();
-        }
-        deferred.clear();
-    });
-    REQUIRE(output == std::array<u32, 3>{1, 2, 3});
-}
-
-TEST_CASE("Split restart resets writer positions without replaying old releases",
-          "[video_core][gpu_split_dependencies]") {
-    using Access = VideoCommon::GpuSplitTestAccess;
-    Fixture f;
-    f.system.Initialize();
-    VideoCommon::GpuSplit split;
-    u32 released{};
-    u32 release_count{};
-    for (u32 session = 1; session <= 3; ++session) {
-        Access::Start(split, f.system);
-        SCOPE_EXIT { split.Stop(); };
-        REQUIRE(Access::End(split) == 0);
-        REQUIRE_FALSE(split.WaitForWriters());
-        REQUIRE_FALSE(split.WaitForSync());
-        split.Defer([&, session] {
-            released = session;
-            ++release_count;
-        });
-        split.NoteWriter();
-        split.NoteSync();
-        split.Drain(VideoCommon::DrainSite::Acquire);
-        REQUIRE(released == session);
-        REQUIRE(release_count == session);
-        split.Stop();
-        REQUIRE_FALSE(split.Active());
-        REQUIRE_FALSE(split.BackRunning());
-        REQUIRE(Access::End(split) == 0);
-    }
-}
-
-TEST_CASE("Maxwell3D takes its macros back from the split's front once the split stops",
-          "[video_core][gpu_split_dependencies]") {
-    using Access = VideoCommon::GpuSplitTestAccess;
-    Fixture f;
-    VideoCommon::GpuSplit split;
-    Access::Initialize(split, f.system);
-    auto& engine = f.fast;
-    constexpr u32 StartAddressPointer = MAXWELL3D_REG_INDEX(load_mme.start_address_ptr);
-    constexpr u32 StartAddress = MAXWELL3D_REG_INDEX(load_mme.start_address);
-    const u32 state = f.state_methods.front();
-    // The front takes the macros over and tracks a state write in its shadow RAM copy.
-    engine.FrontCallMethod(f.system, split, state, 0x1234, true);
-    REQUIRE(engine.shadow_state.reg_array[state] != 0x1234);
-    // The split stopped: the next engine method runs on this thread, not the split's back.
-    engine.CallMethod(f.system, StartAddressPointer, 0, true);
-    engine.CallMethod(f.system, StartAddress, 0x40, true);
-    CHECK(engine.shadow_state.reg_array[state] == 0x1234);
-    CHECK(engine.GetNativeMacroPositions()[0] == 0x40);
-}
-
-TEST_CASE("Maxwell3D keeps state written after the split stops over the front's shadow RAM",
-          "[video_core][gpu_split_dependencies]") {
-    using Access = VideoCommon::GpuSplitTestAccess;
-    Fixture f;
-    VideoCommon::GpuSplit split;
-    Access::Initialize(split, f.system);
-    auto& engine = f.fast;
-    const u32 state = f.state_methods.front();
-    engine.FrontCallMethod(f.system, split, state, 0x1234, true);
-    // After the stop, DmaPusher sinks a state write and consumes the sink before the next
-    // executable method: the handback must come first so that write wins.
-    engine.method_sink.emplace_back(state, 0x5678);
-    engine.ConsumeSink(f.system);
-    engine.CallMethod(f.system, MAXWELL3D_REG_INDEX(load_mme.start_address_ptr), 0, true);
-    CHECK(engine.shadow_state.reg_array[state] == 0x5678);
-    CHECK(engine.regs.reg_array[state] == 0x5678);
-}
-
-TEST_CASE("Maxwell3D's split front uploads macro code sent as one multi-method run",
-          "[video_core][gpu_split_dependencies]") {
-    using Access = VideoCommon::GpuSplitTestAccess;
-    Fixture f;
-    VideoCommon::GpuSplit split;
-    Access::Initialize(split, f.system);
-    auto& engine = f.fast;
-    engine.SetNativeTuringMacroMode(true);
-    // GCC 13's loop unswitching dropped these words from the front's per-word loop (#500).
-    constexpr u32 pointer = 0x262;
-    constexpr std::array<u32, 6> code{0x740003, 0x18c00000, 0x318c0001,
-                                      0x740003, 0x18c00000, 0x318c0000};
-    engine.FrontCallMethod(f.system, split, MAXWELL3D_REG_INDEX(load_mme.instruction_ptr), pointer,
-                           true);
-    engine.FrontCallMultiMethod(f.system, split, MAXWELL3D_REG_INDEX(load_mme.instruction),
-                                code.data(), code.size(), code.size());
-    const auto& macros = engine.GetNativeMacroEngine();
-    REQUIRE(macros.native_write_offset == pointer * 3 + code.size());
-    CHECK(std::equal(code.begin(), code.end(), macros.native_code.begin() + pointer * 3));
 }

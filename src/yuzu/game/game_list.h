@@ -77,7 +77,6 @@ public:
 
     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
     void SetScanEnabled(bool enabled);
-    void SetReportableProgramId(u64 program_id);
 
     void SaveInterfaceLayout();
     void LoadInterfaceLayout();
@@ -89,6 +88,11 @@ public:
 
     void ResetViewMode();
 
+    /// The game's right-click menu, for another view of the same game (Fritchii's home card).
+    void AddGameMenu(QMenu& context_menu, u64 program_id, const std::string& path) {
+        AddGamePopup(context_menu, program_id, path);
+    }
+
 public slots:
     void SetNupConversionRunning(bool running);
     void RefreshGameDirectory();
@@ -97,7 +101,6 @@ public slots:
     void OnPopulate();
 
 signals:
-    void ReportCompatibilityRequested(u64 program_id);
     void BootGame(const QString& game_path, StartGameType type);
     void GameChosen(const QString& game_path, const u64 title_id = 0);
     void OpenFolderRequested(u64 program_id, GameListOpenTarget target,
@@ -174,9 +177,7 @@ private:
     Core::System& system;
 
     bool m_isTreeMode = true;
-    bool m_populating = false;
     bool nup_conversion_running{};
-    u64 reportable_program_id{};
     QAbstractItemView* m_currentView = nullptr;
 };
 

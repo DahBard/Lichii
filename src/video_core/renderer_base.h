@@ -9,7 +9,6 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <string>
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -23,27 +22,6 @@ class GraphicsContext;
 } // namespace Core::Frontend
 
 namespace VideoCore {
-
-struct RendererDeviceInfo {
-    std::string model;
-    std::string driver;
-    std::string api;
-};
-
-enum class FrameGenState : u8 {
-    Pending,
-    Running,
-    UnsupportedRenderer,
-    UnsupportedBuild,
-    UnsupportedGpu,
-    UnsupportedSurface,
-    MissingLosslessDll,
-};
-
-struct FrameGenStatus {
-    FrameGenState state{FrameGenState::UnsupportedRenderer};
-    u64 generated_frames{};
-};
 
 struct RendererSettings {
     // Screenshot
@@ -72,15 +50,6 @@ public:
     [[nodiscard]] virtual RasterizerInterface* ReadRasterizer() = 0;
 
     [[nodiscard]] virtual std::string GetDeviceVendor() const = 0;
-
-    /// Whether frame generation can run and how many frames it has generated so far
-    [[nodiscard]] virtual FrameGenStatus GetFrameGenStatus() const {
-        return {};
-    }
-
-    [[nodiscard]] const RendererDeviceInfo& GetDeviceInfo() const {
-        return device_info;
-    }
 
     // Getter/setter functions:
     // ------------------------
@@ -136,7 +105,6 @@ protected:
     int m_current_frame = 0;  ///< Current frame, should be set by the renderer
 
     RendererSettings renderer_settings;
-    RendererDeviceInfo device_info;
 
 private:
     /// Updates the framebuffer layout of the contained render window handle.

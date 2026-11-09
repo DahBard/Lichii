@@ -28,27 +28,26 @@ TEST_CASE("Spatial cutscene replacement decodes sRGB into float without temporal
 }
 
 TEST_CASE("DLSS recording restores inputs before each evaluation failure returns", "[dlss_contract]") {
-    using EvaluationResult = VideoCommon::DlssEvaluationResult;
-    for (const auto failure : {EvaluationResult::Succeeded, EvaluationResult::OptionsFailed,
-                               EvaluationResult::TokenFailed, EvaluationResult::ConstantsFailed,
-                               EvaluationResult::EvaluateFailed}) {
+    using Result = VideoCommon::DlssEvaluationResult;
+    for (const auto failure : {Result::Succeeded, Result::OptionsFailed, Result::TokenFailed,
+                               Result::ConstantsFailed, Result::EvaluateFailed}) {
         std::vector<int> events;
         bool sampled = false;
         bool partial_output = false;
         const auto result = VideoCommon::RecordDlssEvaluation(
-            [&] { events.push_back(1); return failure != EvaluationResult::OptionsFailed; },
-            [&] { events.push_back(2); return failure != EvaluationResult::TokenFailed; },
+            [&] { events.push_back(1); return failure != Result::OptionsFailed; },
+            [&] { events.push_back(2); return failure != Result::TokenFailed; },
             [&] { events.push_back(3); sampled = true; },
-            [&] { events.push_back(4); return failure != EvaluationResult::ConstantsFailed; },
-            [&] { events.push_back(5); partial_output = true; return failure != EvaluationResult::EvaluateFailed; },
+            [&] { events.push_back(4); return failure != Result::ConstantsFailed; },
+            [&] { events.push_back(5); partial_output = true; return failure != Result::EvaluateFailed; },
             [&] { events.push_back(6); sampled = false; });
         REQUIRE(result == failure);
         REQUIRE_FALSE(sampled);
-        if (failure == EvaluationResult::OptionsFailed) {
+        if (failure == Result::OptionsFailed) {
             REQUIRE(events == std::vector<int>{1});
-        } else if (failure == EvaluationResult::TokenFailed) {
+        } else if (failure == Result::TokenFailed) {
             REQUIRE(events == std::vector<int>{1, 2});
-        } else if (failure == EvaluationResult::ConstantsFailed) {
+        } else if (failure == Result::ConstantsFailed) {
             REQUIRE(events == std::vector<int>{1, 2, 3, 4, 6});
         } else {
             REQUIRE(events == std::vector<int>{1, 2, 3, 4, 5, 6});

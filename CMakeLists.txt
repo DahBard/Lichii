@@ -732,6 +732,7 @@ add_subdirectory(src)
 
 if (ENABLE_DEBUG_TOOLS)
     add_subdirectory(tools/shader-sweep)
+    add_subdirectory(tools/nx2-precompile)
     add_subdirectory(tools/maxwell-disas)
     add_subdirectory(tools/maxwell-spirv)
     add_subdirectory(tools/maxwell-ir)
@@ -761,7 +762,8 @@ if(ENABLE_QT AND UNIX AND NOT APPLE)
         DESTINATION "share/icons/hicolor/256x256/apps"
         RENAME "io.github.zortos293.lichii.png")
 
-    install(FILES "dist/io.github.zortos293.lichii.xml"
+    # TODO: these files need to be updated.
+    install(FILES "dist/dev.eden_emu.eden.xml"
         DESTINATION "share/mime/packages")
     install(FILES "dist/io.github.zortos293.lichii.metainfo.xml"
         DESTINATION "share/metainfo")

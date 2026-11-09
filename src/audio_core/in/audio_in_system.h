@@ -69,7 +69,7 @@ public:
      *
      * @return The default audio input device name.
      */
-    static std::string_view GetDefaultDeviceName();
+    std::string_view GetDefaultDeviceName() const;
 
     /**
      * Get the default USB audio input device name.
@@ -78,7 +78,7 @@ public:
      *
      * @return The default USB audio input device name.
      */
-    static std::string_view GetDefaultUacDeviceName();
+    std::string_view GetDefaultUacDeviceName() const;
 
     /**
      * Is the given initialize config valid?
@@ -87,7 +87,7 @@ public:
      * @param in_params   - Input parameters, see AudioInParameter.
      * @return Result code.
      */
-    static Result IsConfigValid(std::string_view device_name, const AudioInParameter& in_params);
+    Result IsConfigValid(std::string_view device_name, const AudioInParameter& in_params) const;
 
     /**
      * Initialize this system.

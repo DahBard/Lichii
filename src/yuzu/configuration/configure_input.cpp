@@ -24,7 +24,6 @@
 #include "yuzu/configuration/configure_input.h"
 #include "yuzu/configuration/configure_input_advanced.h"
 #include "yuzu/configuration/configure_input_player.h"
-#include "yuzu/configuration/configure_microphone.h"
 #include "yuzu/configuration/configure_motion_touch.h"
 #include "yuzu/configuration/configure_ringcon.h"
 #include "yuzu/configuration/configure_touchscreen_advanced.h"
@@ -63,7 +62,6 @@ ConfigureInput::ConfigureInput(Core::System& system_, QWidget* parent)
 
 ConfigureInput::~ConfigureInput() = default;
 
-/// Initialize controller and microphone pages, sharing the active system with host capture preview.
 void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
                                 std::size_t max_players) {
     const bool is_powered_on = system.IsPoweredOn();
@@ -145,8 +143,6 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
             [this](bool is_handheld) { UpdateDockedState(is_handheld); });
 
     advanced = new ConfigureInputAdvanced(hid_core, this);
-    microphone = new ConfigureMicrophone(system, this);
-    ui->tabWidget->addTab(microphone, tr("Microphone"));
 
     QHBoxLayout* advancedLayout = new QHBoxLayout(ui->tabAdvanced);
     advancedLayout->addWidget(advanced);
@@ -208,11 +204,10 @@ void ConfigureInput::PropagatePlayerNumberChanged(size_t player_index, bool chec
 QList<QWidget*> ConfigureInput::GetSubTabs() const {
     return {
         ui->tabPlayer1, ui->tabPlayer2, ui->tabPlayer3, ui->tabPlayer4,  ui->tabPlayer5,
-        ui->tabPlayer6, ui->tabPlayer7, ui->tabPlayer8, ui->tabAdvanced, microphone,
+        ui->tabPlayer6, ui->tabPlayer7, ui->tabPlayer8, ui->tabAdvanced,
     };
 }
 
-/// Apply all Controls pages, including the saved microphone device and gain.
 void ConfigureInput::ApplyConfiguration() {
     const bool was_global = Settings::values.players.UsingGlobal();
     Settings::values.players.SetGlobal(true);
@@ -221,7 +216,6 @@ void ConfigureInput::ApplyConfiguration() {
     }
 
     advanced->ApplyConfiguration();
-    microphone->ApplyConfiguration();
 
     const bool pre_docked_mode = Settings::IsDockedMode();
     const bool docked_mode_selected = ui->radioDocked->isChecked();

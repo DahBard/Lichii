@@ -35,6 +35,14 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
+- Since round 21 (2026-11-09): branch `tuned` = Fritchii v5.5's tree (`fritchii-v5.5`,
+  `4012e5271`, Frizti/Lichii `oot-gather-fix`; its upstream base is nx2 `27226d256` of
+  2026-11-05) + `.github/workflows/lichii-tuned.yml` + this folder, recorded as a merge so the
+  branch's history stays (no force push). Our changes are branch `tuned5`; the patch is
+  `git diff --binary fritchii-v5.5 tuned5`, backed up in `tuned5.bundle` (fetch
+  `refs/tags/fritchii-v5.5` from https://github.com/Frizti/Lichii first). The variants are
+  `msvc` (as Fritchii ships), `pgo` and `pgo-lto`; `pgo-train` is off. The bullets below
+  describe the tuned4 era (upstream nx2 base) where they differ.
 - Branch `tuned` of DahBard/Lichii = upstream nx2 `cbb512ee7` (merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
@@ -111,7 +119,25 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   and the Actions log host; git clones work. Read job logs with the GitHub MCP `get_job_logs`
   tool: a large `tail_lines` saves the log to a file you can grep.
 
-## What the tuned build contains (tuned4)
+## What the tuned build contains (tuned5, from round 21; tuned4 below)
+
+Round 21 (2026-11-09): the Fritchii base.
+- The owner ran Fritchii v5.5 on the laptop: a steady 60 fps (Test results, 2026-11-09), against
+  our ~30. Decision: restart the tuned fork on Fritchii and bring our changes over in small
+  groups, each A/B-able against plain Fritchii. The old fork stays on `tuned4` (`e9226a635`,
+  r36, built but not tested).
+- First build (run #37): plain Fritchii v5.5 plus `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` (the
+  owner's standing choice, `6fa98f063`), in three variants: `msvc` (as Fritchii ships), `pgo`
+  and `pgo-lto` (our MinGW clang + PGO + `-march=x86-64-v3 -mtune=arrowlake`). It answers
+  whether our toolchain helps or hurts on the laptop.
+- To bring over next, each with an A/B launcher, in an order set by the Fritchii comparison:
+  - Radeon: FSR 4, with camera jitter off by default (the water shimmer).
+  - Laptop CPU: hybrid core placement and the spin/wait tweaks.
+  - Diagnostics: the GUI crash writer (`da111dfcf`) and our perf logging.
+  - The A/B launchers.
+  Where Fritchii has its own version of an idea, Fritchii's stays.
+
+## What the tuned4 build contained (rounds 1-20)
 
 Round 20 (2026-11-09): upstream Lichii's open pull requests and Fritchii v5.2, the owner's two
 sources from now on (upstream nx2 had nothing past `cbb512ee7`). Round 19 was not tested; run #30

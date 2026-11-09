@@ -1,8 +1,8 @@
 name: lichii-tuned
 
 # Windows and CachyOS (Linux) builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H)
-# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch plus
-# lichii-tuned/lichii-tuned.patch. Every push to the `tuned` branch that touches the patch or this
+# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch (Fritchii v5.5's tree since
+# round 21) plus lichii-tuned/lichii-tuned.patch (branch tuned5). Every push to the `tuned` branch that touches the patch or this
 # workflow builds the Windows variants. The CachyOS ones build only when the owner asks for a
 # Linux build: run the workflow by hand with `only: cachyos` (or `all`).
 on:
@@ -43,17 +43,16 @@ jobs:
           # Same plus ThinLTO across the whole program.
           - variant: pgo-lto
             lto: "ON"
-          # The same source built like the official MSVC download (MSVC, no PGO, baseline x86-64),
-          # to tell compiler differences from source changes. Off until a glitch shows up only in
-          # the pgo builds; run lichii-tuned/check_patch_warnings.py before turning it on.
-          # - variant: msvc
-          #   lto: "OFF"
-          #   msvc: true
-          # Instrumented build that records an Ocarina profile while you play (slower). On from
-          # round 18, for the CPU work: profiles uploaded to lichii-tuned/pgo tune the next builds.
-          - variant: pgo-train
+          # The same source built like Fritchii's MSVC download (MSVC, no PGO, baseline x86-64).
+          # On from round 21: the owner compares it with the pgo builds on the Fritchii base.
+          - variant: msvc
             lto: "OFF"
-            train: true
+            msvc: true
+          # Instrumented build that records an Ocarina profile while you play (slower). Off from
+          # round 21; profiles uploaded to lichii-tuned/pgo tune the next builds.
+          # - variant: pgo-train
+          #   lto: "OFF"
+          #   train: true
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M

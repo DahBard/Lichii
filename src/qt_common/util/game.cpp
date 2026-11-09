@@ -243,39 +243,25 @@ void RemoveAddOnContent(u64 program_id, InstalledEntryType type) {
 void RemoveTransferableShaderCache(u64 program_id, GameListRemoveTarget target) {
     const auto shader_cache_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir);
     const auto shader_cache_folder_path = shader_cache_dir / fmt::format("{:016x}", program_id);
-    using VideoCommon::PipelineCacheClear;
-    const auto result = [&] {
+    const auto target_file = [&] {
         switch (target) {
         case GameListRemoveTarget::GlShaderCache:
-            return VideoCommon::ClearPipelineCache(shader_cache_folder_path, "opengl",
-                                                   VideoCommon::PipelineCacheMagic, {},
-                                                   VideoCommon::OpenGLPipelineCacheVersion);
-        case GameListRemoveTarget::VkShaderCache: {
-            // An empty cache stays in its place when an older one is on disk, so the next boot
-            // doesn't start from that one again.
-            const auto cleared = VideoCommon::ClearPipelineCache(
-                shader_cache_folder_path, "vulkan", VideoCommon::PipelineCacheMagic,
-                VideoCommon::CompatibleVulkanPipelineCacheVersions,
-                VideoCommon::VulkanPipelineCacheVersion);
-            if (cleared == PipelineCacheClear::Cleared) {
-                // Its used list names pipelines that are no longer cached.
-                Common::FS::RemoveFile(VideoCommon::VersionedPipelineCachePath(
-                    shader_cache_folder_path, "vulkan_used",
-                    VideoCommon::VulkanPipelineCacheVersion));
-            }
-            return cleared;
-        }
+            return VideoCommon::VersionedPipelineCachePath(
+                shader_cache_folder_path, "opengl", VideoCommon::OpenGLPipelineCacheVersion);
+        case GameListRemoveTarget::VkShaderCache:
+            return VideoCommon::VersionedPipelineCachePath(
+                shader_cache_folder_path, "vulkan", VideoCommon::VulkanPipelineCacheVersion);
         default:
-            return PipelineCacheClear::Missing;
+            return std::filesystem::path{};
         }
     }();
 
-    if (result == PipelineCacheClear::Missing) {
+    if (!Common::FS::Exists(target_file)) {
         QtCommon::Frontend::Warning(tr("Error Removing Transferable Shader Cache"),
                                     tr("A shader cache for this title does not exist."));
         return;
     }
-    if (result == PipelineCacheClear::Cleared) {
+    if (Common::FS::RemoveFile(target_file)) {
         QtCommon::Frontend::Information(tr("Successfully Removed"),
                                         tr("Successfully removed the transferable shader cache."));
     } else {
@@ -287,13 +273,13 @@ void RemoveTransferableShaderCache(u64 program_id, GameListRemoveTarget target) 
 void RemoveVulkanDriverPipelineCache(u64 program_id) {
     const auto shader_cache_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir);
     const auto shader_cache_folder_path = shader_cache_dir / fmt::format("{:016x}", program_id);
-    // An empty cache stays in its place when an older one is on disk, so the next boot doesn't
-    // start from that one again.
-    if (VideoCommon::ClearPipelineCache(shader_cache_folder_path, "vulkan_pipelines",
-                                        VideoCommon::VulkanDriverPipelineCacheMagic,
-                                        VideoCommon::CompatibleVulkanPipelineCacheVersions,
-                                        VideoCommon::VulkanPipelineCacheVersion) ==
-        VideoCommon::PipelineCacheClear::Failed) {
+    const auto target_file = VideoCommon::VersionedPipelineCachePath(
+        shader_cache_folder_path, "vulkan_pipelines", VideoCommon::VulkanPipelineCacheVersion);
+
+    if (!Common::FS::Exists(target_file)) {
+        return;
+    }
+    if (!Common::FS::RemoveFile(target_file)) {
         QtCommon::Frontend::Warning(tr("Error Removing Vulkan Driver Pipeline Cache"),
                                     tr("Failed to remove the driver pipeline cache."));
     }

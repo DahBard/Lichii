@@ -23,7 +23,6 @@ class QTimer;
 
 class ConfigureInputAdvanced;
 class ConfigureInputPlayer;
-class ConfigureMicrophone;
 
 class InputProfiles;
 
@@ -80,7 +79,6 @@ private:
     // Checkboxes representing the "Connected Controllers".
     std::array<QCheckBox*, 8> connected_controller_checkboxes{};
     ConfigureInputAdvanced* advanced = nullptr;
-    ConfigureMicrophone* microphone = nullptr;
 
     Core::System& system;
 };

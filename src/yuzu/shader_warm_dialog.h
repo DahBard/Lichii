@@ -25,14 +25,17 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 
-/// True when the title has a shader precache file.
+/// True when the title has a compute or graphics warm-up file.
 bool ShaderWarmFilesExist(u64 title_id);
 
-/// Removes the title's precache files. Returns false and fills `error` on failure.
+/// Removes both warm-up files of the title. Returns false and fills `error` on failure.
 bool DeleteShaderWarmFiles(u64 title_id, std::string& error);
 
-/// Window that builds a game's shader precache file on a worker thread and shows the stage, the
-/// progress and the result. Closing it while it works stops the build first.
+/// The NVIDIA shader cache size tip the first time it is asked for, empty after that.
+QString TakeShaderCacheTip();
+
+/// Modeless window that builds a game's shader warm-up files on a worker thread and shows the
+/// stage, the progress and the result. Closing it while it works stops the build first.
 class ShaderWarmDialog : public QDialog {
     Q_OBJECT
 
@@ -45,7 +48,7 @@ public:
     bool IsRunning() const {
         return running;
     }
-    /// The title whose precache file this dialog builds.
+    /// The title whose warm-up files this dialog prepares.
     u64 TitleId() const {
         return title_id;
     }

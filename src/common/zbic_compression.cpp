@@ -3,7 +3,6 @@
 
 #include <cstring>
 
-#include "common/logging.h"
 #include "common/zbic_compression.h"
 
 #define ZSTD_ZBIC_SUPPORT 1
@@ -39,8 +38,6 @@ int DecompressDataZBIC(std::span<u8> dst, std::span<const u8> src) {
     }
     const size_t res = ZSTD_decompress(dst.data(), dst.size(), src.data(), src.size());
     if (ZSTD_isError(res)) {
-        LOG_ERROR(Loader, "ZBIC decompression of {} bytes into {} bytes failed: {}", src.size(),
-                  dst.size(), ZSTD_getErrorName(res));
         return -1;
     }
     return static_cast<int>(res);

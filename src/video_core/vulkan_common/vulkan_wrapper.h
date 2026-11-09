@@ -345,8 +345,8 @@ struct DeviceDispatch : InstanceDispatch {
 #ifdef _WIN32
     PFN_vkGetMemoryWin32HandleKHR vkGetMemoryWin32HandleKHR{};
 #endif
-    PFN_vkGetDeviceFaultInfoEXT vkGetDeviceFaultInfoEXT{};
     PFN_vkGetPipelineExecutablePropertiesKHR vkGetPipelineExecutablePropertiesKHR{};
+    PFN_vkWaitForPresentKHR vkWaitForPresentKHR{};
     PFN_vkGetPipelineExecutableStatisticsKHR vkGetPipelineExecutableStatisticsKHR{};
     PFN_vkGetQueryPoolResults vkGetQueryPoolResults{};
     PFN_vkGetSemaphoreCounterValue vkGetSemaphoreCounterValue{};
@@ -750,6 +750,9 @@ public:
     };
     [[nodiscard]] MemoryBlock GetMemoryBlock() const noexcept;
 
+    /// True when the image's memory is device local (not placed in host memory over budget).
+    [[nodiscard]] bool IsDeviceLocal() const noexcept;
+
 private:
     void Release() const noexcept;
 
@@ -1131,6 +1134,14 @@ public:
 
     std::vector<VkPipelineExecutablePropertiesKHR> GetPipelineExecutablePropertiesKHR(
         VkPipeline pipeline) const;
+
+    /// vkWaitForPresentKHR; VK_ERROR_FEATURE_NOT_PRESENT when the function was not loaded.
+    VkResult WaitForPresentKHR(VkSwapchainKHR swapchain, u64 present_id,
+                               u64 timeout_ns) const noexcept {
+        return dld->vkWaitForPresentKHR
+                   ? dld->vkWaitForPresentKHR(handle, swapchain, present_id, timeout_ns)
+                   : VK_ERROR_FEATURE_NOT_PRESENT;
+    }
 
     std::vector<VkPipelineExecutableStatisticKHR> GetPipelineExecutableStatisticsKHR(
         VkPipeline pipeline, u32 executable_index) const;
