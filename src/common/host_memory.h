@@ -9,6 +9,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -79,6 +80,31 @@ public:
     /// A new kernel on this memory: everything a previous one used may hold data.
     void ForgetContents();
 
+    /// EDEN_NX2_SEC_RESERVE (Windows, on by default, =0 off; Fritchii 91eaf0945, b59b8a860): the
+    /// guest memory section is created with SEC_RESERVE instead of SEC_COMMIT, so the commit charge
+    /// follows what the guest uses instead of all of it from boot. Commit commits the pages behind
+    /// a range (whole 64 KiB granules, those committed already skipped); MarkUsed (so
+    /// ClearBackingRegion too) and Map call it. Commit never goes back down. A no-op otherwise.
+    void Commit(size_t physical_offset, size_t length);
+
+    /// Commits everything outside `lazy` (physical offset and length of the kernel's user pools,
+    /// whose pages are committed as they are handed out). A no-op without EDEN_NX2_SEC_RESERVE.
+    void CommitAllBut(std::span<const std::pair<size_t, size_t>> lazy);
+
+    [[nodiscard]] bool CommitsOnUse() const noexcept {
+        return commit_on_use;
+    }
+
+    /// The section's commit state, for the memory log.
+    struct CommitStats {
+        bool reserved{};       ///< EDEN_NX2_SEC_RESERVE is on for this memory
+        u64 committed_bytes{}; ///< Committed by Commit
+        u64 section_bytes{};
+        u64 fault_commits{};      ///< Granules the fault handler had to commit (must stay 0)
+        u64 first_fault_offset{}; ///< The first of those: backing offset, or virtual | 1 << 63
+    };
+    [[nodiscard]] CommitStats GetCommitStats() const;
+
     [[nodiscard]] u8* BackingBasePointer() noexcept {
         return backing_base;
     }
@@ -130,10 +156,12 @@ private:
     static constexpr size_t GranuleShift = 16; ///< 64 KiB of backing per state byte
     static constexpr u8 GranuleUsed = 1 << 0;   ///< Handed out at least once
     static constexpr u8 GranuleDirty = 1 << 1;  ///< May hold non-zero data
+    static constexpr u8 GranuleCommitted = 1 << 2; ///< EDEN_NX2_SEC_RESERVE: committed
     std::unique_ptr<std::atomic<u8>[]> granules;
     size_t num_granules{};
     // Windows requires it for kernels whom lack proper support for some functions!
     bool fallback_buffer{false};
+    bool commit_on_use{false}; ///< EDEN_NX2_SEC_RESERVE (see Commit)
 };
 
 } // namespace Common

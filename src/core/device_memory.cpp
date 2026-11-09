@@ -44,6 +44,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     std::mutex mutex;
     std::condition_variable_any wake;
     std::chrono::seconds interval = 5s;
+    Common::HostMemory::CommitStats logged_commit{};
     while (true) {
         {
             std::unique_lock lock{mutex};
@@ -51,6 +52,21 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         }
         if (stop.stop_requested()) {
             return;
+        }
+        // EDEN_NX2_SEC_RESERVE: the guest memory's commit, when it grew by 512 MiB or the fault
+        // handler had to commit pages (each a missed commit: that count must stay 0).
+        if (const auto commit = buffer.GetCommitStats();
+            commit.reserved &&
+            (commit.committed_bytes >= logged_commit.committed_bytes + (u64{512} << 20) ||
+             commit.fault_commits != logged_commit.fault_commits)) {
+            const bool in_virtual = (commit.first_fault_offset >> 63) != 0;
+            LOG_INFO(HW_Memory,
+                     "Guest memory: {} of {} MiB committed (EDEN_NX2_SEC_RESERVE), {} fault "
+                     "commits (first at {} offset {:#x})",
+                     commit.committed_bytes >> 20, commit.section_bytes >> 20,
+                     commit.fault_commits, in_virtual ? "virtual" : "backing",
+                     commit.first_fault_offset & ~(u64{1} << 63));
+            logged_commit = commit;
         }
         const auto start = std::chrono::steady_clock::now();
         const auto [resident, trimmed] = buffer.TrimZeroPages();
