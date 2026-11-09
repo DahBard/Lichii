@@ -36,6 +36,7 @@
 #include "shader_recompiler/profile.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
+#include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
@@ -128,6 +129,13 @@ struct ComputePipelineCacheEntry {
                                        const ComputePipelineCacheKey& key) const;
 };
 
+/// EDEN_NX2_ASYNC_DISCARD, read on first use: what a native draw does while its pipeline is
+/// missing. 0: the native_async_draws setting decides (Wait by default). 1: skipped by the legacy
+/// heuristic. 2: skipped only into render targets the frame clears and redraws, the rest wait.
+/// Unset: 2 while the setting is Wait, its default; 0 when the setting was changed. Non-native
+/// draws keep the legacy heuristic in every mode.
+[[nodiscard]] int AsyncDiscardMode();
+
 class PipelineCache : public VideoCommon::ShaderCache {
 public:
     explicit PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, const Device& device,
@@ -139,6 +147,12 @@ public:
     ~PipelineCache();
 
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
+
+    /// Whether the last CurrentGraphicsPipeline returned null because its draw was skipped for an
+    /// unbuilt pipeline (asynchronous shaders), not because there is no pipeline to build.
+    [[nodiscard]] bool LastLookupSkipped() const noexcept {
+        return discard_decision.serial == lookup_serial && discard_decision.skip;
+    }
 
     void TickFrame();
 
@@ -153,6 +167,43 @@ private:
     /// Returns `pipeline` when it is built or its draw must wait for it, nullptr when the draw
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) noexcept;
+
+    /// What the current draw does while its pipeline is not ready (EDEN_NX2_ASYNC_DISCARD, the
+    /// native_async_draws setting, the legacy heuristic; full-screen passes always wait),
+    /// decided once per lookup however often the lookup asks.
+    [[nodiscard]] NativeDrawAction PendingDrawAction();
+    /// Counts CurrentGraphicsPipeline calls, for the once-per-lookup decision.
+    u64 lookup_serial{};
+    struct DiscardDecision {
+        u64 serial{~u64{0}};
+        NativeDrawAction action{};
+        bool skip{}; ///< The lookup's draw was skipped
+        VideoCommon::DrawTargets targets{};
+    };
+    DiscardDecision discard_decision;
+    /// Counts one decision for the 10 s line, and lists a persistent target the first time a
+    /// draw into it misses its pipeline. GPU thread.
+    void NoteDiscardDecision(bool skip, const VideoCommon::DrawTargets& targets);
+    /// TickFrame: the EDEN_NX2_ASYNC_DISCARD counts of the last 10 s.
+    void ReportAsyncDiscard();
+    /// EDEN_NX2_ASYNC_DISCARD counts, GPU thread only. Lookups by class of their targets (index:
+    /// VideoCommon::DrawTargetClass), a lookup that repeats the one before (same pipeline key and
+    /// target, same frame: the rasterizer's second lookups) counted once.
+    struct DiscardStats {
+        std::array<u32, 3> skipped{};
+        std::array<u32, 3> waited{};
+        std::chrono::nanoseconds held_at_window{}; ///< GraphicsPipeline::HoldTimeTotal then
+        std::chrono::steady_clock::time_point window{};
+        // The last lookup counted.
+        GraphicsPipelineCacheKey last_key{};
+        u64 last_frame{~u64{0}};
+        GPUVAddr last_target{};
+        VideoCommon::DrawTargetClass last_kind{};
+        bool last_skip{};
+    };
+    DiscardStats discard_stats;
+    /// Persistent targets listed so far (32 at most per session).
+    std::unordered_set<GPUVAddr> listed_persistent_targets;
 
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline();
 

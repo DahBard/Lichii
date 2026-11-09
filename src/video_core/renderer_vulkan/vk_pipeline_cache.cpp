@@ -65,6 +65,7 @@
 #include "video_core/shader_notify.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #include "video_core/surface.h"
+#include "video_core/texture_cache/formatter.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -985,7 +986,7 @@ void PipelineCache::RefreshGraphicsKey() {
 }
 
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
-
+    ++lookup_serial;
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
         return nullptr;
@@ -2453,6 +2454,7 @@ void ReportWorstFrame() {
 void PipelineCache::TickFrame() {
     ++frame_count;
     ReportWorstFrame();
+    ReportAsyncDiscard();
     native_wait_budget_us =
         static_cast<s64>(Settings::values.native_pipeline_wait_ms.GetValue()) * 1000;
     while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first)) {
@@ -2531,9 +2533,97 @@ void PipelineCache::EvictUnusedPipelines() {
              EvictAfterFrames, graphics_cache.size());
 }
 
+namespace {
+/// EDEN_NX2_ASYNC_DISCARD as given: -1 unset, 0, 1 or 2. Read on the first unbuilt pipeline,
+/// after nx2_switches.txt was applied.
+int AsyncDiscardSwitch() {
+    static const int value = [] {
+        const char* text = std::getenv("EDEN_NX2_ASYNC_DISCARD");
+        const int parsed = text == nullptr  ? -1
+                           : text[0] == '0' ? 0
+                           : text[0] == '1' ? 1
+                                            : 2;
+        static constexpr std::array<const char*, 4> what{
+            "unset: 2 while the native_async_draws setting is Wait (its default), else the setting",
+            "0: native draws by the native_async_draws setting",
+            "1: native draws skip unbuilt pipelines by the legacy heuristic",
+            "2: native draws skip unbuilt pipelines only into render targets cleared every frame",
+        };
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_ASYNC_DISCARD {}", what[parsed + 1]);
+        return parsed;
+    }();
+    return value;
+}
+} // Anonymous namespace
+
+int AsyncDiscardMode() {
+    if (const int value = AsyncDiscardSwitch(); value >= 0) {
+        return value;
+    }
+    // Fritchii v5's default (b2a243415), unless the setting was changed from Wait: with an empty
+    // shader cache, skipping by the legacy heuristic dropped draws into render-once layers for
+    // good (no "Press Start", empty chat bubbles, wrong lighting), while waiting for every
+    // pipeline stalls each new one.
+    return Settings::values.native_async_draws.GetValue() == Settings::NativeAsyncDraws::Wait
+               ? 2
+               : 0;
+}
+
+NativeDrawAction PipelineCache::PendingDrawAction() {
+    // Native draws whose pipeline is still building are skipped instead of waited for when the
+    // mode allows (the object is missing for a frame or more rather than the game holding while
+    // the driver compiles). Full-screen passes (no depth, few vertices) still wait, so a lighting
+    // or post pass is never dropped.
+    //
+    // The legacy heuristic ignores the target, so a draw into a layer the game renders once
+    // (title screen text, a chat bubble, a probe) loses its only draw for good when its pipeline
+    // is missing. EDEN_NX2_ASYNC_DISCARD=2 skips only into targets fully cleared in this frame
+    // and in a recent earlier one; first-time and persistent targets wait. The frame is the
+    // texture cache's frame tick; a tick that lands mid-frame can only make a target look
+    // first-time, so it costs a wait and never a skip (ClassifyClearedTarget).
+    if (discard_decision.serial == lookup_serial) {
+        return discard_decision.action;
+    }
+    const int mode = AsyncDiscardMode();
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+    // The environment variable wins over the setting; the setting is read per call.
+    NativePendingMode native_mode = NativePendingMode::Wait;
+    if (native && mode != 0) {
+        native_mode = NativePendingMode::Skip;
+    } else if (native) {
+        switch (Settings::values.native_async_draws.GetValue()) {
+        case Settings::NativeAsyncDraws::Bounded:
+            native_mode = NativePendingMode::Bounded;
+            break;
+        case Settings::NativeAsyncDraws::Skip:
+            native_mode = NativePendingMode::Skip;
+            break;
+        default:
+            break;
+        }
+    }
+    // Classified in every mode, for the counts (with 1, the persistent column is what that rule
+    // drops for good); it runs per missing pipeline, not per draw.
+    const VideoCommon::DrawTargets targets = texture_cache.ClassifyDrawTargets();
+    const bool recurring =
+        mode != 2 || !native || targets.kind == VideoCommon::DrawTargetClass::Recurring;
+    const auto& draw_state = maxwell3d->draw_manager.draw_state;
+    // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
+    const bool can_discard = CanDiscardPendingDraw(
+        native, maxwell3d->regs.zeta_enable != 0, draw_state.draw_element_count,
+        draw_state.draw_element_count, native && native_mode != NativePendingMode::Wait,
+        recurring);
+    const NativeDrawAction action =
+        native ? DecideNativePending(native_mode, can_discard, native_wait_budget_us)
+               : (can_discard ? NativeDrawAction::Skip : NativeDrawAction::Wait);
+    discard_decision = DiscardDecision{
+        .serial = lookup_serial, .action = action, .skip = false, .targets = targets};
+    return action;
+}
+
 /// Returns `pipeline` when it is built or the current draw must wait for it, and nullptr when the
-/// draw may be skipped while it builds (asynchronous shaders; native draws only with
-/// EDEN_NX2_ASYNC_DISCARD=1). Each nullptr returned for an unbuilt pipeline is counted for the log.
+/// draw may be skipped while it builds (asynchronous shaders, PendingDrawAction). Each nullptr
+/// returned for an unbuilt pipeline is counted for the log.
 GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexcept {
     if (pipeline->IsBuilt()) {
         return pipeline;
@@ -2541,76 +2631,37 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     if (!use_asynchronous_shaders) {
         return pipeline;
     }
-    // EDEN_NX2_ASYNC_DISCARD=1: skip native draws whose pipeline is still building instead of
-    // waiting for it (experimental; the draw may be missing for a frame or more).
-    /// Reads EDEN_NX2_ASYNC_DISCARD once and logs when it is on.
-    static const bool discard_native = [] {
-        const char* value = std::getenv("EDEN_NX2_ASYNC_DISCARD");
-        const bool enabled = value != nullptr && value[0] == '1';
-        if (enabled) {
-            LOG_INFO(Render_Vulkan, "EDEN_NX2_ASYNC_DISCARD: native draws skip unbuilt pipelines");
+    bool discard = false;
+    switch (PendingDrawAction()) {
+    case NativeDrawAction::Wait:
+        break;
+    case NativeDrawAction::Skip:
+        discard = true;
+        break;
+    case NativeDrawAction::WaitTimed: {
+        const auto begin = std::chrono::steady_clock::now();
+        const bool built = pipeline->WaitBuilt(std::chrono::microseconds{native_wait_budget_us});
+        const auto spent = std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - begin)
+                               .count();
+        native_wait_budget_us -= spent;
+        native_wait_used_us += spent;
+        static auto window = std::chrono::steady_clock::now();
+        if (std::chrono::steady_clock::now() - window > std::chrono::seconds{10}) {
+            LOG_INFO(Render_Vulkan,
+                     "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms "
+                     "per frame)",
+                     static_cast<double>(native_wait_used_us) / 1000.0,
+                     Settings::values.native_pipeline_wait_ms.GetValue());
+            native_wait_used_us = 0;
+            window = std::chrono::steady_clock::now();
         }
-        return enabled;
-    }();
-    const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
-    // The environment variable wins over the setting; the setting is read per call.
-    NativePendingMode mode = NativePendingMode::Wait;
-    if (native) {
-        switch (Settings::values.native_async_draws.GetValue()) {
-        case Settings::NativeAsyncDraws::Bounded:
-            mode = NativePendingMode::Bounded;
-            break;
-        case Settings::NativeAsyncDraws::Skip:
-            mode = NativePendingMode::Skip;
-            break;
-        default:
-            break;
-        }
-        if (discard_native) {
-            mode = NativePendingMode::Skip;
-        }
+        discard = !built;
+        break;
     }
-    // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
-    const bool can_discard = CanDiscardPendingDraw(
-        native, maxwell3d->regs.zeta_enable != 0, draw_state.draw_element_count,
-        draw_state.draw_element_count, native && mode != NativePendingMode::Wait);
-    bool discard = can_discard;
-    if (native) {
-        switch (DecideNativePending(mode, can_discard, native_wait_budget_us)) {
-        case NativeDrawAction::Wait:
-            discard = false;
-            break;
-        case NativeDrawAction::Skip:
-            discard = true;
-            break;
-        case NativeDrawAction::WaitTimed: {
-            const auto begin = std::chrono::steady_clock::now();
-            const bool built =
-                pipeline->WaitBuilt(std::chrono::microseconds{native_wait_budget_us});
-            const auto spent = std::chrono::duration_cast<std::chrono::microseconds>(
-                                   std::chrono::steady_clock::now() - begin)
-                                   .count();
-            native_wait_budget_us -= spent;
-            native_wait_used_us += spent;
-            static auto window = std::chrono::steady_clock::now();
-            if (std::chrono::steady_clock::now() - window > std::chrono::seconds{10}) {
-                LOG_INFO(Render_Vulkan,
-                         "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms "
-                         "per frame)",
-                         static_cast<double>(native_wait_used_us) / 1000.0,
-                         Settings::values.native_pipeline_wait_ms.GetValue());
-                native_wait_used_us = 0;
-                window = std::chrono::steady_clock::now();
-            }
-            if (built) {
-                return pipeline;
-            }
-            discard = true;
-            break;
-        }
-        }
     }
+    discard_decision.skip = discard;
+    NoteDiscardDecision(discard, discard_decision.targets);
     if (discard) {
         if ((skipped_lookups.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
             // Counts lookups, not draws: a draw state can look its pipeline up more than once.
@@ -2620,6 +2671,66 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         }
     }
     return discard ? nullptr : pipeline;
+}
+
+void PipelineCache::NoteDiscardDecision(bool skip, const VideoCommon::DrawTargets& targets) {
+    auto& stats = discard_stats;
+    const bool repeat = stats.last_frame == frame_count && stats.last_skip == skip &&
+                        stats.last_kind == targets.kind && stats.last_target == targets.gpu_addr &&
+                        stats.last_key == graphics_key;
+    if (repeat) {
+        return;
+    }
+    stats.last_frame = frame_count;
+    stats.last_skip = skip;
+    stats.last_kind = targets.kind;
+    stats.last_target = targets.gpu_addr;
+    stats.last_key = graphics_key;
+    const size_t index = static_cast<size_t>(targets.kind);
+    ++(skip ? stats.skipped : stats.waited)[index];
+    constexpr size_t MaxListedTargets = 32;
+    if (targets.kind != VideoCommon::DrawTargetClass::Persistent || targets.gpu_addr == 0 ||
+        listed_persistent_targets.size() >= MaxListedTargets ||
+        !listed_persistent_targets.insert(targets.gpu_addr).second) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan,
+             "Async discard: draw into persistent target {:#x} {}x{} {} {} for its pipeline "
+             "{:016x} (EDEN_NX2_ASYNC_DISCARD mode {}; each target listed once, {} of {})",
+             targets.gpu_addr, targets.width, targets.height, targets.format,
+             skip ? "skipped" : "waits", graphics_key.Hash(), AsyncDiscardMode(),
+             listed_persistent_targets.size(), MaxListedTargets);
+}
+
+void PipelineCache::ReportAsyncDiscard() {
+    auto& stats = discard_stats;
+    const auto now = std::chrono::steady_clock::now();
+    if (stats.window == std::chrono::steady_clock::time_point{}) {
+        stats.window = now;
+        stats.held_at_window = GraphicsPipeline::HoldTimeTotal();
+        return;
+    }
+    if (now - stats.window < std::chrono::seconds{10}) {
+        return;
+    }
+    const auto held_total = GraphicsPipeline::HoldTimeTotal();
+    const auto held = held_total - stats.held_at_window;
+    const auto& skipped = stats.skipped;
+    const auto& waited = stats.waited;
+    if (skipped[0] + skipped[1] + skipped[2] + waited[0] + waited[1] + waited[2] != 0) {
+        const auto ms = [](auto d) { return std::chrono::duration<double, std::milli>(d).count(); };
+        LOG_INFO(Render_Vulkan,
+                 "Async discard in the last 10 s (EDEN_NX2_ASYNC_DISCARD mode {}): lookups of "
+                 "unbuilt pipelines skipped {} recurring, {} first-time, {} persistent; waited "
+                 "{} recurring, {} first-time, {} persistent; {:.1f} ms of draws held for "
+                 "unbuilt pipelines",
+                 AsyncDiscardMode(), skipped[0], skipped[1], skipped[2], waited[0], waited[1],
+                 waited[2], ms(held));
+    }
+    stats.skipped = {};
+    stats.waited = {};
+    stats.held_at_window = held_total;
+    stats.window = now;
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
