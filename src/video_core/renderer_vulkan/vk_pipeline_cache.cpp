@@ -3060,8 +3060,9 @@ NativeDrawAction PipelineCache::PendingDrawAction() {
     // (title screen text, a chat bubble, a probe) loses its only draw for good when its pipeline
     // is missing. EDEN_NX2_ASYNC_DISCARD=2 skips only into targets fully cleared in this frame
     // and in a recent earlier one; first-time and persistent targets wait. The frame is the
-    // texture cache's frame tick; a tick that lands mid-frame can only make a target look
-    // first-time, so it costs a wait and never a skip (ClassifyClearedTarget).
+    // texture cache's render frame, counted at the guest's flips (ClassifyClearedTarget). While
+    // the render-frame clock is off or not live it is the present tick, which can land between
+    // two clears of one target in the same frame and make the target look recurring.
     if (discard_decision.serial == lookup_serial) {
         return discard_decision.action;
     }
