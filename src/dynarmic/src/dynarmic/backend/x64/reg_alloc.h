@@ -148,7 +148,7 @@ class RegAlloc final {
 public:
     using ArgumentInfo = std::array<Argument, IR::max_arg_count>;
     RegAlloc() noexcept = default;
-    RegAlloc(std::bitset<32> gpr_order, std::bitset<32> xmm_order, bool spill_to_gpr = false, bool scratch_copy = false) noexcept;
+    RegAlloc(std::bitset<32> gpr_order_, std::bitset<32> xmm_order_, bool spill_to_gpr_ = false, bool scratch_copy_ = false) noexcept;
 
     ArgumentInfo GetArgumentInfo(const IR::Inst* inst) noexcept;
     void RegisterPseudoOperation(const IR::Inst* inst) noexcept;

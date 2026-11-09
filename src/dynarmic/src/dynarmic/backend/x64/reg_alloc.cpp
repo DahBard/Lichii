@@ -185,8 +185,8 @@ bool Argument::IsInMemory(RegAlloc& reg_alloc) const noexcept {
     return HostLocIsSpill(*reg_alloc.ValueLocation(value.GetInst()));
 }
 
-RegAlloc::RegAlloc(std::bitset<32> gpr_order, std::bitset<32> xmm_order, bool spill_to_gpr, bool scratch_copy) noexcept
-    : gpr_order(gpr_order), xmm_order(xmm_order), spill_to_gpr(spill_to_gpr), scratch_copy(scratch_copy)
+RegAlloc::RegAlloc(std::bitset<32> gpr_order_, std::bitset<32> xmm_order_, bool spill_to_gpr_, bool scratch_copy_) noexcept
+    : gpr_order(gpr_order_), xmm_order(xmm_order_), spill_to_gpr(spill_to_gpr_), scratch_copy(scratch_copy_)
 {}
 
 RegAlloc::ArgumentInfo RegAlloc::GetArgumentInfo(const IR::Inst* inst) noexcept {
