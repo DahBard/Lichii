@@ -815,11 +815,13 @@ void TextureCache<P>::TickFrame() {
     }
 }
 
-/// EDEN_NX2_TC_COLD_FRAMES: the cold sweep's K (TextureCache::SweepColdImages), 0 = off.
+/// EDEN_NX2_TC_COLD_FRAMES: the cold sweep's K (TextureCache::SweepColdImages), 0 = off. 4 by
+/// default as in Fritchii v5 (Castle Town: device memory 8.8 -> ~6.4 GB at 2 min, 11 loads
+/// without a washed-out scene).
 inline u64 TcColdFrames() {
     static const u64 frames = [] {
         const char* value = std::getenv("EDEN_NX2_TC_COLD_FRAMES");
-        return value != nullptr ? std::strtoull(value, nullptr, 10) : 0ULL;
+        return value != nullptr ? std::strtoull(value, nullptr, 10) : 4ULL;
     }();
     return frames;
 }

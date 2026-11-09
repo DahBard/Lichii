@@ -330,9 +330,9 @@ private:
 };
 inline Nx2FrameFenceClock g_nx2_frame_fence;
 
-// Render-frame clock (EDEN_NX2_RENDER_CLOCK=1): one count per guest frame, bumped where the
-// frame's last GPU work is, so the texture cache's relocation rules can tell frames apart where
-// the host present tick (mid-stream) cannot. Sources:
+// Render-frame clock (EDEN_NX2_RENDER_CLOCK, on by default): one count per guest frame, bumped
+// where the frame's last GPU work is, so the texture cache's relocation rules can tell frames
+// apart where the host present tick (mid-stream) cannot. Sources:
 // - by default the flip's frame fence (Nx2FrameFenceClock above), bumped on the split's back in
 //   stream order (FenceManager::SignalSyncPoint);
 // - EDEN_NX2_RENDER_CLOCK_SYNCPT=<id>: every back signal of that syncpoint (manual override).
@@ -349,12 +349,14 @@ inline int Nx2RenderClockSyncpt() {
     }();
     return syncpt;
 }
-/// EDEN_NX2_RENDER_CLOCK: 1 the clock, 0 or unset off. (Fritchii's 2, its present poll's word as
-/// the source, is not here: that poll is not ported, and the word never counted there.)
+/// EDEN_NX2_RENDER_CLOCK: 1 or unset the clock, 0 off. On by default as in Fritchii v5 (Castle
+/// Town: the flip-fence clock at 1.00 per host frame, 0 tombstone hits under EDEN_NX2_EXP43=4,
+/// 11 loads without a washed-out scene). (Fritchii's 2, its present poll's word as the source, is
+/// not here: that poll is not ported, and the word never counted there.)
 inline bool Nx2RenderClockEnv() {
     static const bool env = [] {
         const char* value = std::getenv("EDEN_NX2_RENDER_CLOCK");
-        return value != nullptr && value[0] == '1';
+        return value == nullptr || value[0] == '1';
     }();
     return env;
 }
