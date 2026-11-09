@@ -29,6 +29,7 @@
 #include "shader_recompiler/frontend/ir/reg.h"
 #include "shader_recompiler/frontend/ir/value.h"
 #include "shader_recompiler/ir_opt/passes.h"
+#include "shader_recompiler/translate_profile.h"
 
 namespace Shader::Optimization {
 namespace {
@@ -369,9 +370,13 @@ void VisitInst(Pass& pass, IR::Block* block, IR::Inst& inst) {
 }
 
 void VisitBlock(Pass& pass, IR::Block* block) {
-    for (IR::Inst& inst : block->Instructions()) {
-        VisitInst(pass, block, inst);
+    {
+        TranslateProfile::Scope scope{TranslateProfile::Step::SsaVisit};
+        for (IR::Inst& inst : block->Instructions()) {
+            VisitInst(pass, block, inst);
+        }
     }
+    TranslateProfile::Scope scope{TranslateProfile::Step::SsaSeal};
     pass.SealBlock(block);
 }
 
@@ -402,6 +407,7 @@ void SsaRewritePass(IR::Program& program) {
     for (auto block = program.post_order_blocks.rbegin(); block != end; ++block) {
         VisitBlock(pass, *block);
     }
+    TranslateProfile::Scope scope{TranslateProfile::Step::SsaFinal};
     for (auto block = program.post_order_blocks.rbegin(); block != end; ++block) {
         for (IR::Inst& inst : (*block)->Instructions()) {
             if (inst.GetOpcode() == IR::Opcode::Phi) {

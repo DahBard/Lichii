@@ -200,6 +200,8 @@ add_library(shader_recompiler STATIC
     runtime_info.h
     shader_info.h
     storage_write_extent.h
+    translate_profile.cpp
+    translate_profile.h
     varying_state.h)
 
 if (ENABLE_OPENGL)
