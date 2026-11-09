@@ -2438,13 +2438,16 @@ bool Maxwell3D::FrontDrawFromGpuArguments(Core::System& system, VideoCommon::Gpu
     }
     fs.regs[end_method] = draw->end;
     fs.vertex_arguments_unknown = 3;
-    split.Defer([this, &system, arguments, device = *device, end = draw->end] {
-        DrawFromGpuArguments(system, arguments, device, end);
-    });
+    // A draw: guest memory it writes through the caches only (FrontNoteWrites).
+    split.Defer(
+        [this, &system, arguments, device_address = *device, end = draw->end] {
+            DrawFromGpuArguments(system, arguments, device_address, end);
+        },
+        VideoCommon::GpuSplit::Writes::Caches);
     // The end of the macro, as FrontRunMacro ends it (its writes include draw manager methods).
     fs.draw_pending = false;
     split.Defer([this, system_ptr = &system] { FinishFrontMacro(*system_ptr); },
-                VideoCommon::GpuSplit::FastDrawNeutral);
+                VideoCommon::GpuSplit::Writes::Caches, VideoCommon::GpuSplit::FastDrawNeutral);
     return true;
 }
 
