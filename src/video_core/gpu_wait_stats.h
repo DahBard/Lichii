@@ -87,7 +87,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(WriteSite::Count)> 
     "DMA copy",
 };
 
-inline constexpr std::array<const char*, 3> source_names{"other", "texture", "buffer"};
+inline constexpr std::array<const char*, 4> source_names{"other", "texture", "buffer", "handed"};
 
 /// Sync operations other than reactive flushes that a guest thread waits for.
 enum class Site : u8 {
@@ -176,6 +176,15 @@ inline void AddWriteCheck(size_t core, u64 ns) {
     }
 }
 
+/// Guest writes collected without GPU::OnCPUWrite (EDEN_NX2_EXP35), by core.
+inline std::array<CoreCounter, Core::Hardware::NUM_CPU_CORES> g_write_collects{};
+
+inline void CountWriteCollect(size_t core) {
+    if (core < g_write_collects.size()) {
+        BumpOwned(g_write_collects[core].value);
+    }
+}
+
 /// GPU::OnCPURead's GetFlushArea calls (served or not) and their time (two cache locks), by core
 /// (GetCurrentHostThreadID; the last slot takes every other thread).
 inline std::array<CoreCounter, CoreSlots> g_area_checks{};
@@ -188,6 +197,17 @@ inline void AddAreaCheck(size_t core, u64 ns) {
     } else {
         g_area_checks[CoreSlots - 1].value.fetch_add(1, std::memory_order_relaxed);
         g_area_check_ns[CoreSlots - 1].value.fetch_add(ns, std::memory_order_relaxed);
+    }
+}
+
+/// Of those, the ones GetFlushArea answered without the cache locks (DownloadAreaSource::LockFree).
+inline std::array<CoreCounter, CoreSlots> g_lock_free_reads{};
+
+inline void CountLockFreeRead(size_t core) {
+    if (core < CoreSlots - 1) {
+        BumpOwned(g_lock_free_reads[core].value);
+    } else {
+        g_lock_free_reads[CoreSlots - 1].value.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -295,8 +315,8 @@ struct ReactiveTotals {
     u64 max_bytes{};
     u64 wake_ns{};
     u64 other_areas{}; ///< Flushes of areas past MaxAreas
-    std::array<u64, 3> count_by_source{};
-    std::array<u64, 3> ns_by_source{};
+    std::array<u64, source_names.size()> count_by_source{};
+    std::array<u64, source_names.size()> ns_by_source{};
     std::array<u64, CoreSlots> ns_by_core{};
     std::vector<AreaTotals> areas;
 };
@@ -308,7 +328,8 @@ inline ReactiveTotals g_reactive;
 inline void RecordReactive(const VideoCore::RasterizerDownloadArea& area, size_t core, u64 request,
                            const FlushTiming& timing, u64 woke) {
     const u64 wait = woke - request;
-    const size_t source = (std::min<size_t>)(static_cast<size_t>(area.source), 2);
+    const size_t source =
+        (std::min<size_t>)(static_cast<size_t>(area.source), source_names.size() - 1);
     std::scoped_lock lock{g_reactive_mutex};
     ReactiveTotals& totals = g_reactive;
     ++totals.count;
@@ -355,8 +376,10 @@ struct ReportState {
     std::array<u64, Core::Hardware::NUM_CPU_CORES> writes{};
     std::array<u64, Core::Hardware::NUM_CPU_CORES> write_checks{};
     std::array<u64, Core::Hardware::NUM_CPU_CORES> write_check_ns{};
+    std::array<u64, Core::Hardware::NUM_CPU_CORES> write_collects{};
     u64 area_checks{};
     u64 area_check_ns{};
+    u64 lock_free_reads{};
     u64 front_idle{};
     u64 front_poll{};
     u64 back_idle{};
@@ -383,10 +406,12 @@ inline ReportState Snapshot(u64 now) {
         state.writes[i] = g_rasterizer_writes[i].value.load(std::memory_order_relaxed);
         state.write_checks[i] = g_write_checks[i].value.load(std::memory_order_relaxed);
         state.write_check_ns[i] = g_write_check_ns[i].value.load(std::memory_order_relaxed);
+        state.write_collects[i] = g_write_collects[i].value.load(std::memory_order_relaxed);
     }
     for (size_t i = 0; i < CoreSlots; ++i) {
         state.area_checks += g_area_checks[i].value.load(std::memory_order_relaxed);
         state.area_check_ns += g_area_check_ns[i].value.load(std::memory_order_relaxed);
+        state.lock_free_reads += g_lock_free_reads[i].value.load(std::memory_order_relaxed);
     }
     state.front_idle = g_front_idle_ns.load(std::memory_order_relaxed);
     state.front_poll = g_front_poll_ns.load(std::memory_order_relaxed);
@@ -493,7 +518,8 @@ inline void MaybeReport(bool split_active) {
     for (size_t i = 0; i < shown; ++i) {
         const AreaTotals& area = reactive.areas[i];
         line += fmt::format(" {:#x}+{:#x} {} {}x {:.1f} ms (max {:.2f})", area.start, area.size,
-                            source_names[(std::min<size_t>)(static_cast<size_t>(area.source), 2)],
+                            source_names[(std::min<size_t>)(static_cast<size_t>(area.source),
+                                                            source_names.size() - 1)],
                             area.count, Ms(area.wait_ns), Ms(area.max_ns));
         for (const Watch& watch : g_watches) {
             if (watch.page.load(std::memory_order_relaxed) != area.start) {
@@ -562,17 +588,20 @@ inline void MaybeReport(bool split_active) {
         line += " none";
     }
     end_list();
-    line += fmt::format("; flush area checks {} in {:.1f} ms", cur.area_checks - old.area_checks,
-                        Ms(cur.area_check_ns - old.area_check_ns));
-    line += " | rasterizer-path writes by core (OnCPUWrite calls, time):";
+    line += fmt::format("; flush area checks {} in {:.1f} ms ({} without the cache locks)",
+                        cur.area_checks - old.area_checks,
+                        Ms(cur.area_check_ns - old.area_check_ns),
+                        cur.lock_free_reads - old.lock_free_reads);
+    line += " | rasterizer-path writes by core (OnCPUWrite calls, time; collected without them):";
     u64 all_writes = 0;
     for (size_t i = 0; i < cur.writes.size(); ++i) {
         const u64 writes = cur.writes[i] - old.writes[i];
         all_writes += writes;
         if (writes != 0) {
-            line += fmt::format(" {} {} ({}, {:.1f} ms),", i, writes,
+            line += fmt::format(" {} {} ({}, {:.1f} ms; {}),", i, writes,
                                 cur.write_checks[i] - old.write_checks[i],
-                                Ms(cur.write_check_ns[i] - old.write_check_ns[i]));
+                                Ms(cur.write_check_ns[i] - old.write_check_ns[i]),
+                                cur.write_collects[i] - old.write_collects[i]);
         }
     }
     if (all_writes == 0) {

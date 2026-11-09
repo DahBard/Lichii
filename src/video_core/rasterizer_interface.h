@@ -195,6 +195,11 @@ public:
 
     virtual RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) = 0;
 
+    /// GetFlushArea's answer under the caches' locks, never handed over (EDEN_NX2_EXP60).
+    virtual RasterizerDownloadArea GetFlushAreaLocked(DAddr addr, u64 size) {
+        return GetFlushArea(addr, size);
+    }
+
     /// Whether reports in the range wait for host query results not yet in guest memory.
     [[nodiscard]] virtual bool HasPendingQueries([[maybe_unused]] DAddr addr,
                                                  [[maybe_unused]] u64 size) {

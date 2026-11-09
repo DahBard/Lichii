@@ -22,6 +22,7 @@
 #include <fstream>
 #include <mutex>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <fmt/format.h>
@@ -32,6 +33,7 @@
 #include "common/dkb_frame_trace.h"
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
+#include "common/nx2_experiment.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -2570,6 +2572,65 @@ bool RasterizerVulkan::HoldsQueries(DAddr addr, u64 size) {
 }
 
 VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64 size) {
+    // A guest read of cached memory asks under both caches' locks, which the split's back holds
+    // through its draws (Fritchii, Castle Town: 12% of the guest cores' busy time went to waiting
+    // for them). Pages no image was ever registered on (page_filter) and no GPU write ever marked
+    // (bits that never clear, set before the buffer cache arms a read trap) need no look: neither
+    // cache finds anything there, and the locked path answers this same preemptive area.
+    // EDEN_NX2_EXP36=1 always takes the locked path (Fritchii 99567589b).
+    static const bool lock_free = Common::ReadNx2Experiment(36, 0) == 0;
+    const DAddr page_begin = Common::AlignDown(addr, Core::DEVICE_PAGESIZE);
+    const DAddr page_end = Common::AlignUp(addr + size, Core::DEVICE_PAGESIZE);
+    if (lock_free && Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
+        !texture_cache.page_filter.Any(addr, size) &&
+        !Tegra::Nx2MayBeGpuWritten(page_begin, page_end - page_begin)) {
+        return VideoCore::RasterizerDownloadArea{
+            .start_address = page_begin,
+            .end_address = page_end,
+            .preemtive = true,
+            .source = VideoCore::DownloadAreaSource::LockFree,
+        };
+    }
+    // EDEN_NX2_EXP60=1 (Fritchii e423d1bd1, off): the back takes both locks again right after it
+    // releases them, so a read waiting for them slept for milliseconds. Spin a little; if they
+    // stay taken, hand the look to the GPU thread with the flush request (GPU::OnCPURead), where
+    // nothing holds them: it runs this locked path there, with its read trap and preflush marks.
+    static const bool hand_over = Common::ReadNx2Experiment(60, 0) != 0;
+    if (hand_over) {
+        constexpr int Tries = 256;
+        bool texture_locked = false;
+        bool buffer_locked = false;
+        for (int attempt = 0; attempt < Tries && !(texture_locked && buffer_locked); ++attempt) {
+            texture_locked = texture_locked || texture_cache.mutex.try_lock();
+            buffer_locked = buffer_locked || buffer_cache.mutex.try_lock();
+            if (!(texture_locked && buffer_locked)) {
+                std::this_thread::yield();
+            }
+        }
+        if (!(texture_locked && buffer_locked)) {
+            if (texture_locked) {
+                texture_cache.mutex.unlock();
+            }
+            if (buffer_locked) {
+                buffer_cache.mutex.unlock();
+            }
+            return VideoCore::RasterizerDownloadArea{
+                .start_address = page_begin,
+                .end_address = page_end,
+                .preemtive = false,
+                .source = VideoCore::DownloadAreaSource::Handed,
+            };
+        }
+        // Both held: the locked path takes them again (they are recursive).
+        const auto area = GetFlushAreaLocked(addr, size);
+        buffer_cache.mutex.unlock();
+        texture_cache.mutex.unlock();
+        return area;
+    }
+    return GetFlushAreaLocked(addr, size);
+}
+
+VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushAreaLocked(DAddr addr, u64 size) {
     std::optional<VideoCore::RasterizerDownloadArea> texture_area;
     {
         std::scoped_lock lock{texture_cache.mutex};

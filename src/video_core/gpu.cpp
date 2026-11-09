@@ -286,26 +286,38 @@ struct GPU::Impl {
         const u64 request = Stats::Now();
         Stats::AddAreaCheck(core, request - check_start);
         if (raster_area.preemtive) {
+            if (raster_area.source == VideoCore::DownloadAreaSource::LockFree) {
+                Stats::CountLockFreeRead(core);
+            }
             return raster_area;
         }
         raster_area.preemtive = true;
+        // EDEN_NX2_EXP60: the cache locks stayed taken, so the GPU thread looks for this read.
+        const bool handed = raster_area.source == VideoCore::DownloadAreaSource::Handed;
         // A guest CPU read of GPU-written memory (reactive flushing): count them, they decide
         // whether buffer data must be copied back at every fence (EDEN_NX2_BUFFER_DOWNLOADS).
-        if (static std::atomic<u64> reads{}; (reads.fetch_add(1, std::memory_order_relaxed) & 63) == 0) {
+        if (static std::atomic<u64> reads{};
+            !handed && (reads.fetch_add(1, std::memory_order_relaxed) & 63) == 0) {
             LOG_INFO(HW_GPU, "CPU read of GPU-written memory [{:#x}, {:#x}) ({} so far)",
                      raster_area.start_address, raster_area.end_address,
                      reads.load(std::memory_order_relaxed));
         }
         // Filled on the GPU thread while this thread waits for it.
         Stats::FlushTiming timing{};
-        const u64 fence = RequestSyncOperation([this, raster_area, &timing]() {
+        const u64 fence = RequestSyncOperation([this, raster_area, addr, size, handed, &timing]() {
             timing.start = Stats::Now();
             const Stats::HostWaits host_before = Stats::t_host_waits;
             const u64 bytes_before = Stats::t_download_bytes;
             // Apply collected guest writes before downloading GPU data over guest memory.
             InvalidateGPUCache();
             timing.applied = Stats::Now();
-            renderer->ReadRasterizer()->FlushRegion(raster_area.start_address, raster_area.end_address - raster_area.start_address);
+            // A handed read gets the locked look here, with its read trap and preflush marks.
+            const auto flush_area =
+                handed ? renderer->ReadRasterizer()->GetFlushAreaLocked(addr, size) : raster_area;
+            if (!handed || !flush_area.preemtive) {
+                renderer->ReadRasterizer()->FlushRegion(
+                    flush_area.start_address, flush_area.end_address - flush_area.start_address);
+            }
             timing.host_ns = Stats::t_host_waits.ns - host_before.ns;
             timing.finishes = Stats::t_host_waits.count - host_before.count;
             timing.bytes = Stats::t_download_bytes - bytes_before;
