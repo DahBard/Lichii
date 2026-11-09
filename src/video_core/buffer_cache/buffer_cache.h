@@ -1661,17 +1661,18 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     // the memory tracker, leaving stale host contents, so check such a bank on every bind: games
     // rewrite per-draw data between draws, and checking once per frame left it stale for a frame
     // now and then (white flashes in Ocarina of Time, Eglantine 031e07436c).
-    // LICHII_BANK_CHECK (Fritchii v4's EDEN_NX2_EXP9, which it also reads): 1 (default) compares
-    // only the pages that may have changed (CheckNativeBankPagesTracked), 2 compares every page
-    // and logs what 1 would have missed, 3 is 1 without the once-a-frame compare, 0 compares
-    // every page on every bind as before: ~650,000 pages a second in Ocarina (r23), 99.7%
-    // unchanged.
+    // LICHII_BANK_CHECK (Fritchii's EDEN_NX2_EXP9, which it also reads): 1 compares only the
+    // pages that may have changed (CheckNativeBankPagesTracked), 3 (default, as Fritchii v5) is
+    // 1 without the once-a-frame compare of every page, which never found a change there
+    // (Castle Town: uniform buffers 135.6 -> 97.9 ms/s of the split's back, 40.8 -> 42.3 fps),
+    // 2 compares every page and logs what 1 would have missed, 0 compares every page on every
+    // bind as before: ~650,000 pages a second in Ocarina (r23), 99.7% unchanged.
     static const int bank_check_mode = [] {
         const char* value = std::getenv("LICHII_BANK_CHECK");
         if (value == nullptr || value[0] == '\0') {
             value = std::getenv("EDEN_NX2_EXP9");
         }
-        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 1;
+        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 3;
     }();
     const bool native_bank = has_host_buffer &&
                              (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
@@ -1923,8 +1924,9 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
     // Compare a page when such a write or one the buffer cache saw flagged it, when it was
     // flagged at the previous bind (the write's bytes may land after the compare), when it is
     // CPU-modified, when it changed within NativeBankHotFrames frames (per-draw data rewritten by
-    // paths no flag sees), and once a frame (mode 1) for writers none of these see: semaphore and
-    // query writes, HLE. Mode 2 compares every page and counts what mode 1 would have missed.
+    // paths no flag sees), and with mode 1 once a frame for writers none of these see: semaphore
+    // and query writes, HLE (it found none in Fritchii's tests, so mode 3, the default, leaves it
+    // out). Mode 2 compares every page and counts what mode 1 would have missed.
     static_assert(Core::DevicePageFlags::AddressBits >=
                   Tegra::MaxwellDeviceTraits::device_virtual_bits);
     u64 mapped_size = 0;
@@ -1996,6 +1998,10 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
         memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
     }
     if (!verify && !Nx2Profile::Enabled()) {
+        return;
+    }
+    // The clock only every 1,024 binds (~100k binds a second at Castle Town; Fritchii 8b7bb3fab).
+    if ((stats.binds & 1023) != 0) {
         return;
     }
     const auto now = std::chrono::steady_clock::now();
