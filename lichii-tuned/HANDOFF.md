@@ -708,6 +708,8 @@ Own changes:
     "Error while loading ROM! (XXXX-YYYY) ... Please redump your files" dialog (the owner's
     dump works in every other build). Only the instrumented build differs (-fprofile-generate;
     `common/pgo_training.cpp` only writes profiles), so asked for its log and the dialog's code.
+- Run #29 (round 19, Windows only) built `pgo`, `pgo-lto` and `pgo-train` (artifacts
+  `lichii-tuned-r29-*`, 90/90/97 MB). Not tested yet.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
@@ -784,7 +786,7 @@ Own changes:
    (~144,000 slow accesses a second per core; #717's trap fast paths make them cheaper, not
    fewer), parallel command recording if per-draw work still dominates the back, area-load
    stalls (ASTC decode and uploads off the back thread, #166's NUP cache).
-2. Round 19's build: check the water at the screen's edges with the default (reactive 0.5),
+2. Round 19's build (run #29): check the water at the screen's edges with the default (reactive 0.5),
    ab-19 (round 18's mask) and ab-14 (no jitter); compare ab-20 (no kernel spins) with the
    default on the power-limited laptop (frame rate, guest core and back times). r28's
    bottlenecks: the back (20.0 ms a frame: 3.78 M methods/s, 1.12 M 3D register writes that
