@@ -896,6 +896,22 @@ Own changes:
     once per build (the stamp holds the build version). Fritchii says ~15 minutes on an 8-core
     desktop CPU for AMD. The gap is not explained yet; compare the r36 log's rate, or a
     Fritchii log from the same laptop.
+  - Not tested: the owner decided (2026-11-09) to restart the tuned fork on Fritchii instead
+    (below).
+- Owner, 2026-11-09, after running Fritchii v5.5 on the laptop: it "felt smoother than any of
+  our runs so far". Its log presents at a steady 60 fps ('nx2:vi2 last 600 presents: frame
+  16693 us', worst frame ~20 ms per 10 s, no in-game pipeline builds). Our r27/r28 ran ~33 ms
+  frames. Its preparation took 562 s for 120,093 pipelines, ~30% of them from AMD's driver
+  cache; assembling the recipe from the game files took another 714 s. Decision: start a new
+  branch from fritchii-v5.5 and bring our changes over in A/B-able groups:
+  - Radeon: FSR 4, with camera jitter off by default.
+  - Laptop CPU: core placement and spin/wait tweaks.
+  - Diagnostics, including the crash writer.
+  - Launchers.
+  The first build is plain Fritchii through our workflow (MSVC and clang+PGO). The owner also
+  reported that r35 in game still showed the bright shimmer where water meets the screen edges,
+  unchanged from r28. HANDOFF round 19 notes it was gone with ab-14 (no FSR 4 jitter), so
+  round 19's mask change did not fix it.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
