@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-09 (round 18), for the next Claude session.
+State of the work on 2026-11-09 (round 19), for the next Claude session.
 
 ## Goal
 
@@ -32,8 +32,8 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `281477eac` (merged in round 18;
-  `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `cbb512ee7` (merged in round 19, `281477eac`
+  in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
   push to `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with
@@ -72,11 +72,11 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (248 commits over upstream nx2
-  `281477eac`, which round 18 merged into it; pushing it doesn't trigger builds).
+- Source of the patch: branch `tuned4` of DahBard/Lichii (250 commits over upstream nx2
+  `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `281477eac`, as `tuned` does). The patch is `git diff --binary 281477eac tuned4` (236 files,
+  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (238 files,
   1.56 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
@@ -109,6 +109,22 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 19 (2026-11-09), after r28's water artifact:
+- `4f2e4a70f`: the effects mask Ocarina's temporal upscale builds (pixels changed after the fog
+  pass: glows, particles and, it turns out, water) is FSR's reactive and T&C mask, so FSR shows
+  the current frame there; under round 18's jitter that is a new sub-pixel sample each frame
+  and fine detail shimmered (the owner: textures where water meets the screen's edges, gone
+  with ab-14). The bias pass also carried last frame's marks along the motion vectors with the
+  history position clamped to the image, spreading an edge pixel's mark along the border while
+  the camera moved. Now history outside the frame is skipped, and jittered frames scale the
+  mask by `LICHII_FSR_REACTIVE` (default 0.5; 1 = round 18, ab-19). Unjittered (DLSS) frames
+  keep the full mask. Not confirmed on the game yet: if the edges still shimmer, try
+  `LICHII_FSR_REACTIVE=0`, then a frame dump of the water pass.
+- ab-20 turns #717's kernel spins off (`EDEN_NX2_KSPIN=0`, `EDEN_NX2_ARB_SPIN=0`): r28's
+  WaitForAddress time across the guest cores rose from ~35 to ~107 ms/s (the arbiter spin), on
+  a CPU that is power-limited all the time.
+- Upstream #932 merged (`646523fba`, a macOS build type fix).
 
 Round 18 (2026-11-09): upstream nx2 merged up to `281477eac`, camera jitter for FSR, and the
 ports deferred for their conflicts (#805, #717's guest CPU parts), done first as the owner
@@ -662,7 +678,36 @@ Own changes:
   - verify-r16: bank check missed 0 in every report; no mixed read differed (none checked).
 - Run #28 (round 18, Windows only; CachyOS skipped) built `pgo`, `pgo-lto` and `pgo-train`
   (artifacts `lichii-tuned-r28-pgo` 90 MB, `-pgo-lto` 90 MB, `-pgo-train` 97 MB): the first
-  real compile and link of #805, #717's CPU parts and the jitter together. Not tested yet.
+  real compile and link of #805, #717's CPU parts and the jitter together.
+- r28 (pgo-lto; logs perf, verify-r18, ab-14, ab-17, ab-18; 2026-11-09). The owner: "Smoothest
+  performance by far", with shimmering textures where water meets the screen's edges that
+  ab-14 (no jitter) didn't have (round 19's fix).
+  - Perf, whole log: 37.5 fps (r27 ~29), p50 24.8 ms, 1% low 6.0 (still building pipelines: the
+    owner's cache started empty in r27). Per frame: the back 20.0 ms (r27 22.7), guest core 5
+    20.0, cores 0/1/4/2/3 15.1-12.5 (r27: core 4 26.2, core 5 24.8), the front 10.8 (13.4).
+    Guest code over all six cores ~66 ms a frame (r27 ~105): #717's codegen and its Ocarina
+    patches, which also spread the game's heaviest thread over the cores (ab-17, patches off:
+    cores 4/5 back at 23.8/21.8 ms, core 4's guest code 762 ms/s instead of ~400; most likely
+    `EDEN_NX2_OOT_WIDE_AFFINITY`). Front waits on the back: list writers 50 ms/s (r27 282),
+    macro dma read gone (217), acquire 216 (159; more frames), new "map" 57 and "list copy
+    writers" 35; the front sleeps 320 ms/s. ab-18 (#805 off): the front 18.4 ms a frame, list
+    writers 268, macro dma read 122. ab-14 (no jitter): the same CPU times as perf.
+  - The back now: method 117 ms/s (3.78 M methods/s; 2.95 M 3D register writes, 1.12 M of them
+    the value already there, 0x586 alone 529 k/s), compute 75, other 91, bank check 84, uniform
+    buffers 49, update buffers 37, draw 37, read handles 33; texture memo: ~40% of draws
+    resolved from it. EDEN_NX2_SKIP_SAME is on, so the repeats only cost their dispatch.
+  - verify-r18: every count 0: no acquire "not met after the drain", 0 of 112,015 command lists
+    differed, list indirect 0 differ, texture memo and geometry scans 0 mismatches. The back
+    macro check sampled nothing ("0 checked against the old way" with
+    EDEN_NX2_BACK_MACRO_VERIFY=64).
+  - HWiNFO during play (ThinkBook 16 G7+ IAH, Lenovo Vantage at maximum): CPU package up to ~80 W,
+    system ~100 W, "Core Power Limit Exceeded" Yes 100% of the time, P-core effective clocks
+    2.6-3.3 GHz, E-cores 1.0-1.5 GHz, ~75 °C, no thermal throttling: power-limited, not
+    thermal. Every spin or wasted cycle on any core costs the bottleneck threads clock speed.
+  - pgo-train started through perf-trace.bat failed to load the game with the frontend's
+    "Error while loading ROM! (XXXX-YYYY) ... Please redump your files" dialog (the owner's
+    dump works in every other build). Only the instrumented build differs (-fprofile-generate;
+    `common/pgo_training.cpp` only writes profiles), so asked for its log and the dialog's code.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
@@ -739,20 +784,21 @@ Own changes:
    (~144,000 slow accesses a second per core; #717's trap fast paths make them cheaper, not
    fewer), parallel command recording if per-draw work still dominates the back, area-load
    stalls (ASTC decode and uploads off the back thread, #166's NUP cache).
-2. Round 18's build (run #28): compare the perf log with r27 (guest cores 4/5 26.2/24.8 ms, the back
-   22.7, the front's waits ~660 ms/s). #717's codegen should lower the guest cores' "guest
-   code" ms/s, #805 the front's waits; verify-r18 must log no difference, ab-15 to ab-18 tell a
-   regression from the piece that caused it. Then: the rest of #805 (upload reordering
-   ddf01f582/a0ecdb040, the read-download set) and #717's native Ocarina macros
-   (`macro_hle_oot.*`, the front's "macro" zone, ~76 ms/s), a recorded Ocarina PGO profile
-   (pgo-train is on again), the front's "resume pending" polling (~134 ms/s at ~80,000/s),
-   #579/#741's graphics warm-up only if graphics pipeline libraries work on RDNA 4
-   (AMD-Gfx-Drivers#126), the noinline switches after an A/B, #806 after an A/B at the Hyrule
-   Field spawn (grass), Vendichii's FSR 3 frame generation if the owner wants 60 shown frames
-   before 60 real ones. The owner's P-cores average ~3.0 GHz (max 4.2): ask for HWiNFO's power
-   limit and thermal flags while playing, Windows' Best performance mode, and the laptop's own
-   performance profile; with the panel off the Intel GPU stays idle and leaves the package
-   power to the CPU.
+2. Round 19's build: check the water at the screen's edges with the default (reactive 0.5),
+   ab-19 (round 18's mask) and ab-14 (no jitter); compare ab-20 (no kernel spins) with the
+   default on the power-limited laptop (frame rate, guest core and back times). r28's
+   bottlenecks: the back (20.0 ms a frame: 3.78 M methods/s, 1.12 M 3D register writes that
+   repeat the value, 0x586 alone 529 k/s; can the front drop them before they are queued?) and
+   guest core 5 (20.0 ms, ~640 ms/s of guest code). Then: the rest of #805 (upload reordering
+   ddf01f582/a0ecdb040, the read-download set), #717's native Ocarina macros
+   (`macro_hle_oot.*`), a recorded Ocarina PGO profile once the pgo-train load failure is
+   understood (needs its log), #579/#741's graphics warm-up only if graphics pipeline
+   libraries work on RDNA 4 (AMD-Gfx-Drivers#126), the noinline switches after an A/B, #806
+   after an A/B at the Hyrule Field spawn (grass), Vendichii's FSR 3 frame generation if the
+   owner wants 60 shown frames before 60 real ones. Power: the CPU is power-limited all the time
+   (~80 W package), so less spinning anywhere means higher clocks for the bottleneck threads;
+   a placement that puts the lighter guest cores on E-cores under the power limit is untested
+   (strict placement, all on P-cores, didn't help in r11/r18).
 3. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 4. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);

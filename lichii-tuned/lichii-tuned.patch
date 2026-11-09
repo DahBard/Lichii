@@ -1,9 +1,9 @@
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 000000000..87b1836f2
+index 000000000..32c7d0458
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,234 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -133,6 +133,12 @@ index 000000000..87b1836f2
 +   waits only for the words GPU work wrote, and lets the GPU read compute parameters it wrote
 +   itself; uploads are batched into fewer commands. ab-18 brings back round 17's behaviour,
 +   verify-r18 checks the shortcuts against the slow way while you play.
++ * Round 19: the shimmering textures where water meets the screen's edges with FSR's jitter
++   (round 18) are addressed. Pixels FSR is told to take from the current frame (glows,
++   particles and, as it turned out, water drawn after the fog) are taken half from the current
++   frame while jittering, so they keep some of their history (LICHII_FSR_REACTIVE, 0 to 1,
++   default 0.5; ab-19 brings round 18's full strength back), and that mask no longer spreads
++   along the screen's edges while the camera moves.
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -177,6 +183,11 @@ index 000000000..87b1836f2
 +                              backoff, wider core masks), logged like perf-trace.bat
 + ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
 +                              macro reads, list waits and uploads), logged like perf-trace.bat
++ ab-19-round18-reactive.bat   FSR's reactive mask at round 18's full strength on jittered
++                              frames (LICHII_FSR_REACTIVE=1), logged like perf-trace.bat
++ ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
++                              spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
++                              power-limited laptop, compare the frame rate with the default
 + verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
 +                              differences ("not met after the drain", "differing" and mismatch
 +                              counts should stay 0); slower
@@ -346,6 +357,18 @@ index 000000000..15e89c337
 +rem here, #805 caused it.
 +set LICHII_TUNED4_ACQUIRES=1&& set LICHII_TUNED4_DMA_READS=1&& set EDEN_NX2_BACK_MACROS=0&& set LICHII_LIST_WRITER_WAIT=all&& set EDEN_NX2_LIST_INDIRECT=0&& set LICHII_UPLOAD_BATCH=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-19-round18-reactive.bat b/dist/lichii-tuned/ab-19-round18-reactive.bat
+new file mode 100644
+index 000000000..0b3104ce6
+--- /dev/null
++++ b/dist/lichii-tuned/ab-19-round18-reactive.bat
+@@ -0,0 +1,6 @@
++@echo off
++rem FSR's reactive mask at full strength on jittered frames, as in round 18 (LICHII_FSR_REACTIVE=1),
++rem with the perf-trace logging. Round 19 halves it, which should calm the textures where water
++rem meets the screen's edges: if they shimmer here and not in the default, that was the cause.
++set LICHII_FSR_REACTIVE=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
++start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
 new file mode 100644
 index 000000000..09e1ff846
@@ -355,6 +378,19 @@ index 000000000..09e1ff846
 +@echo off
 +rem Windows places every thread.
 +set LICHII_CPU_POLICY=off
++start "" "%~dp0lichii.exe" %*
+diff --git a/dist/lichii-tuned/ab-20-no-kernel-spin.bat b/dist/lichii-tuned/ab-20-no-kernel-spin.bat
+new file mode 100644
+index 000000000..0b1f200fd
+--- /dev/null
++++ b/dist/lichii-tuned/ab-20-no-kernel-spin.bat
+@@ -0,0 +1,7 @@
++@echo off
++rem The emulated kernel's locks and address waits sleep at once instead of spinning first (round 18,
++rem upstream #717: up to 20 us for locks, 8 us for waits), with the perf-trace logging. On a
++rem power-limited laptop the spinning may cost more clock speed than it saves: compare the
++rem frame rate and the guest cores' times with the default.
++set EDEN_NX2_KSPIN=0&& set EDEN_NX2_ARB_SPIN=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-3-soft-placement.bat b/dist/lichii-tuned/ab-3-soft-placement.bat
 new file mode 100644
@@ -19738,10 +19774,10 @@ index 4262177b1..d3f1f5f04 100644
      vec2 pixels = vec2(0);
 diff --git a/src/video_core/host_shaders/ocarina_dlss_bias.comp b/src/video_core/host_shaders/ocarina_dlss_bias.comp
 new file mode 100644
-index 000000000..ecb4c98b6
+index 000000000..9a392186f
 --- /dev/null
 +++ b/src/video_core/host_shaders/ocarina_dlss_bias.comp
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,42 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +#version 450
 +
@@ -19750,7 +19786,7 @@ index 000000000..ecb4c98b6
 +layout(binding = 1) uniform sampler2D previous_effects;
 +layout(binding = 2) uniform sampler2D motion;
 +layout(binding = 3, r16f) uniform writeonly image2D bias;
-+layout(push_constant) uniform Controls { uint has_previous; } controls;
++layout(push_constant) uniform Controls { uint has_previous; float scale; } controls;
 +
 +float Nearby(sampler2D effects, ivec2 center) {
 +    ivec2 last = textureSize(effects, 0) - 1;
@@ -19773,9 +19809,16 @@ index 000000000..ecb4c98b6
 +    float value = Nearby(current_effects, pixel);
 +    if (controls.has_previous != 0) {
 +        vec2 history = vec2(pixel) + 0.5 + texelFetch(motion, pixel, 0).rg;
-+        value = max(value, Nearby(previous_effects, ivec2(floor(history))));
++        // History from outside the frame has no marks: clamped to the edge, an edge pixel's
++        // marks spread along the border while the camera moved.
++        if (all(greaterThanEqual(history, vec2(0.0))) &&
++            all(lessThan(history, vec2(textureSize(previous_effects, 0))))) {
++            value = max(value, Nearby(previous_effects, ivec2(floor(history))));
++        }
 +    }
-+    imageStore(bias, pixel, vec4(value));
++    // Under FSR's camera jitter a fully reactive pixel shows each frame's jittered samples on
++    // their own and shimmers (water near the screen's edges): the caller scales the mask down.
++    imageStore(bias, pixel, vec4(value * controls.scale));
 +}
 diff --git a/src/video_core/host_shaders/ocarina_dlss_effects.comp b/src/video_core/host_shaders/ocarina_dlss_effects.comp
 new file mode 100644
@@ -27418,7 +27461,7 @@ index 000000000..015b184ad
 +
 +} // namespace Vulkan
 diff --git a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
-index ecde60dea..82f22a6fe 100644
+index ecde60dea..b3e34ed56 100644
 --- a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
 +++ b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
 @@ -3,21 +3,31 @@
@@ -27519,7 +27562,7 @@ index ecde60dea..82f22a6fe 100644
                  logged = true;
              }
          });
-@@ -528,7 +539,71 @@ private:
+@@ -528,7 +539,76 @@ private:
      bool logged{};
  };
  
@@ -27544,8 +27587,12 @@ index ecde60dea..82f22a6fe 100644
 +        return result;
 +    }();
 +    static constexpr DescriptorBankInfo bank{.textures = Inputs, .images = 1, .score = Inputs + 1};
++    struct Controls {
++        u32 control;
++        f32 scale;
++    };
 +    static constexpr std::array push{
-+        VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(u32)}};
++        VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Controls)}};
 +
 +public:
 +    OcarinaEffectsPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool,
@@ -27553,8 +27600,9 @@ index ecde60dea..82f22a6fe 100644
 +        : ComputePass(device_, scheduler, pool, bindings, templates, bank, push, code) {}
 +
 +    void Record(Scheduler& scheduler, const void* descriptors, VkImage output, VkExtent2D extent,
-+                u32 control = 0) {
-+        scheduler.Record([this, descriptors, output, extent, control](vk::CommandBuffer cmd) {
++                u32 control = 0, f32 scale = 1.0f) {
++        const Controls controls{control, scale};
++        scheduler.Record([this, descriptors, output, extent, controls](vk::CommandBuffer cmd) {
 +            const VkMemoryBarrier inputs{
 +                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
 +                .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
@@ -27570,7 +27618,7 @@ index ecde60dea..82f22a6fe 100644
 +            device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptors);
 +            cmd.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
 +            cmd.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
-+            cmd.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, control);
++            cmd.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, controls);
 +            cmd.Dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
 +            // The game draws over or overwrites the inputs next.
 +            const VkMemoryBarrier complete{
@@ -27591,7 +27639,7 @@ index ecde60dea..82f22a6fe 100644
  
  vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                              VkImageUsageFlags usage) {
-@@ -575,22 +650,123 @@ struct OcarinaFrameSlot {
+@@ -575,22 +655,123 @@ struct OcarinaFrameSlot {
      std::unique_ptr<ActorOverlay> overlay;
  };
  
@@ -27720,7 +27768,7 @@ index ecde60dea..82f22a6fe 100644
      CameraMotionPass motion_pass;
      OcarinaColorPass color_pass;
      OcarinaColorPass output_pass;
-@@ -605,6 +781,10 @@ struct OcarinaLiveDlss::Impl {
+@@ -605,6 +786,10 @@ struct OcarinaLiveDlss::Impl {
      std::unique_ptr<OcarinaCompositePass> composite_pass;
      vk::Sampler linear_sampler;
      std::optional<u64> composited_frame;
@@ -27731,7 +27779,7 @@ index ecde60dea..82f22a6fe 100644
  
      VkSampler LinearSampler() {
          if (!linear_sampler) {
-@@ -623,17 +803,18 @@ struct OcarinaLiveDlss::Impl {
+@@ -623,17 +808,18 @@ struct OcarinaLiveDlss::Impl {
      }
  };
  
@@ -27757,7 +27805,7 @@ index ecde60dea..82f22a6fe 100644
      auto& state = *impl;
      constexpr VkExtent2D extent{2560, 1440};
      if (!state.native_scene_view) {
-@@ -645,14 +826,14 @@ void OcarinaLiveDlss::SaveSceneReference(VkImageView color) {
+@@ -645,14 +831,14 @@ void OcarinaLiveDlss::SaveSceneReference(VkImageView color) {
              state.device, state.scheduler, state.pool, OCARINA_DLSS_4K_REFERENCE_COMP_SPV);
      }
      state.queue.Acquire(state.scheduler, 2);
@@ -27775,7 +27823,7 @@ index ecde60dea..82f22a6fe 100644
      auto& state = *impl;
      if (state.composited_frame == frame) {
          return;
-@@ -668,34 +849,82 @@ void OcarinaLiveDlss::Composite4k(VkImageView native_composite, u64 frame) {
+@@ -668,34 +854,82 @@ void OcarinaLiveDlss::Composite4k(VkImageView native_composite, u64 frame) {
      state.scheduler.RequestOutsideRenderPassOperationContext();
      state.queue.Acquire(state.scheduler, 4);
      const auto sampler = state.LinearSampler();
@@ -27866,7 +27914,7 @@ index ecde60dea..82f22a6fe 100644
          return false;
      }
      state.scheduler.GetMasterSemaphore().Refresh();
-@@ -709,7 +938,13 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -709,7 +943,13 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
          *slot = std::make_unique<OcarinaFrameSlot>(state.device, state.allocator, extent);
      }
      auto& resources = **slot;
@@ -27881,7 +27929,7 @@ index ecde60dea..82f22a6fe 100644
      const ActorTransforms actor_transforms{
          current, previous, mesh.current_origin, mesh.previous_origin,
          {static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0, 0},
-@@ -736,10 +971,30 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -736,10 +976,38 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
      state.queue.AddImage(*resources.color_view);
      state.color_pass.Record(state.scheduler, state.queue.UpdateData(), *resources.color, extent);
  
@@ -27898,8 +27946,16 @@ index ecde60dea..82f22a6fe 100644
 +        state.queue.AddSampledImage(*effects.mark_views[previous_mark % 2], sampler);
 +        state.queue.AddSampledImage(*resources.motion_view, sampler);
 +        state.queue.AddImage(*effects.bias_view);
++        // LICHII_FSR_REACTIVE: the mask's strength on jittered frames (0 to 1, default 0.5).
++        static const f32 jittered_reactive = [] {
++            const char* const value = std::getenv("LICHII_FSR_REACTIVE");
++            const f32 parsed = value != nullptr ? static_cast<f32>(std::atof(value)) : 0.5f;
++            return std::isfinite(parsed) ? std::clamp(parsed, 0.0f, 1.0f) : 0.5f;
++        }();
++        const bool jittered = jitter[0] != 0.0f || jitter[1] != 0.0f;
 +        state.effects_bias_pass->Record(state.scheduler, state.queue.UpdateData(), *effects.bias,
-+                                        extent, has_previous ? 1 : 0);
++                                        extent, has_previous ? 1 : 0,
++                                        jittered ? jittered_reactive : 1.0f);
 +        bias_view = *effects.bias_view;
 +        bias_image = *effects.bias;
 +    }
@@ -27913,7 +27969,7 @@ index ecde60dea..82f22a6fe 100644
              .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,
                        VK_IMAGE_ASPECT_COLOR_BIT},
              .depth = {depth, depth_image, VK_FORMAT_D32_SFLOAT, DEPTH_RANGE, VK_IMAGE_ASPECT_DEPTH_BIT},
-@@ -752,10 +1007,69 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -752,10 +1020,69 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
              .reset = reset,
              .depth_inverted = false,
              .hdr = false,
@@ -27983,7 +28039,7 @@ index ecde60dea..82f22a6fe 100644
      // A resize can submit the inputs before recording evaluation, so keep the later tick.
      resources.tick = state.scheduler.CurrentTick();
      if (target) {
-@@ -763,9 +1077,9 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -763,9 +1090,9 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
          const bool same_size = output_extent.width == target_extent.width &&
                                 output_extent.height == target_extent.height;
          const auto output_sampler = same_size ? sampler : state.LinearSampler();
@@ -27995,7 +28051,7 @@ index ecde60dea..82f22a6fe 100644
                                          target_extent, frame, reset);
      }
      state.scheduler.InvalidateState();
-@@ -774,4 +1088,3 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -774,4 +1101,3 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
      return true;
  }
  } // namespace Vulkan

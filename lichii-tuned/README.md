@@ -5,7 +5,7 @@ Intel Core Ultra 7 255H (Arrow Lake-H: 6 P-cores, 8 E-cores, 2 low-power E-cores
 Radeon RX 9070 XT over OCuLink, tested with The Legend of Zelda: Ocarina of Time.
 
 - `lichii-tuned.patch` holds every source change on top of this branch's Lichii commit
-  (`281477eac`): the tuning itself, newer upstream commits, ports from other forks and the open
+  (`cbb512ee7`): the tuning itself, newer upstream commits, ports from other forks and the open
   pull requests listed in the package's `README-tuned.txt`. Its history is branch `tuned4`
   (backed up in `tuned4.bundle`).
 - `.github/workflows/lichii-tuned.yml` applies it and builds the Windows variants on every push
