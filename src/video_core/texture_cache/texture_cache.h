@@ -3286,7 +3286,8 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const int mode = RelocationMode();
             relocation_seen = true;
             ++relocation_candidates;
-            if (shape.guard != 0) {
+            if (shape.guard != 0 || relocation_guarded_addresses.contains(gpu_addr) ||
+                relocation_guarded_addresses.contains(old_gpu_addr)) {
                 ++relocation_guarded;
             } else {
                 if (!shape.candidate_logged) {
@@ -4665,6 +4666,7 @@ ImageId TextureCache<P>::RelocationCandidate(const ImageInfo& new_info, GPUVAddr
 template <class P>
 void TextureCache<P>::NoteRelocationGuard(ImageBase& image, RelocationGuard reason) {
     image.relocation_guard_noted |= reason;
+    relocation_guarded_addresses[image.gpu_addr] |= reason;
     RelocationShape& shape = relocation_shapes[RelocationShapeKey(image.info)];
     if ((shape.guard & reason) != 0) {
         return;

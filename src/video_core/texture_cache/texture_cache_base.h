@@ -625,6 +625,10 @@ private:
         bool relocated_logged{};
     };
     ::Common::unordered_map<u64, RelocationShape> relocation_shapes;
+    /// The guard by address too: Ocarina of Time draws every dialogue box's text into a render
+    /// target at one address, sized to the box. Per shape, each new box size was relocated once
+    /// before its guard tripped, and that box's text showed other images' contents.
+    ::Common::unordered_map<GPUVAddr, u8> relocation_guarded_addresses;
     /// Since the last report (TickFrame, every 600 frames once a candidate was seen).
     u64 relocation_candidates{};
     u64 relocation_guarded{};
