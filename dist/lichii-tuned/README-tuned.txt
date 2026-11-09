@@ -119,6 +119,14 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    resource polling. Each can be switched off: ab-15 turns all of it off, ab-16 only the code
    generation, ab-17 only the Ocarina patches (also in the game's Add-Ons). Left out: #717's
    atomic instructions (a reported crash at boot) and its thread pinning.
+ * Round 18, for the GPU threads (upstream pull request #805, "Ocarina of Time holds 60 fps on
+   AMD" on its author's PC): the front GPU thread no longer waits for the back one to finish
+   everything queued before it decides a semaphore wait, reads memory for a macro or reads a
+   command list the GPU wrote (r27: about 660 ms of every second of waiting). It keeps its own
+   view of the semaphores the GPU releases, runs memory-reading macros on the back thread,
+   waits only for the words GPU work wrote, and lets the GPU read compute parameters it wrote
+   itself; uploads are batched into fewer commands. ab-18 brings back round 17's behaviour,
+   verify-r18 checks the shortcuts against the slow way while you play.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -161,6 +169,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-16-round17-jit.bat        only #717's code generation off, logged like perf-trace.bat
  ab-17-no-oot-patches.bat     only the Ocarina patches off (zstd, string compares, poll
                               backoff, wider core masks), logged like perf-trace.bat
+ ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
+                              macro reads, list waits and uploads), logged like perf-trace.bat
+ verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
+                              differences ("not met after the drain", "differing" and mismatch
+                              counts should stay 0); slower
  verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
                               way on every use and logs differences ("missed" and "differed"
                               should stay 0); slower
