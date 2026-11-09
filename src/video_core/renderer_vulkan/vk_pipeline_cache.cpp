@@ -1689,7 +1689,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         // The checks below and disk_pipelines take the first record of a key: a later one with the
         // same key and stages is never built, whatever the device. Compared as stored, before
-        // the conversions and masking below, so only records any build would key alike go.
+        // the changes and masking below, so only records any build would key alike go.
         if (const auto [first, inserted] =
                 first_graphics.try_emplace(key.Hash(), record.end - sizeof(key), stages);
             !inserted && first->second.second == stages) {
@@ -1697,27 +1697,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         ++graphics_records;
 
-        // A key holds the driver that stored it, which never met a runtime key after a driver
-        // update (or in a cache shared from another driver), so every such pipeline was built
-        // again in game. Nothing builds from those fields: take this driver's. A record whose
-        // dynamic states differ from this device's is left out below, as Fritchii leaves it.
-        auto& fixed = key.state;
-        if (fixed.driver_id != dynamic_features.driver_id ||
-            fixed.driver_version != dynamic_features.driver_version) {
-            ++other_driver;
-            if (!RekeyForeignPipelines()) {
-                return;
-            }
-            fixed.driver_id = dynamic_features.driver_id;
-            fixed.driver_version = dynamic_features.driver_version;
-        }
-        // One key for every op while the logic op is off, as Refresh makes them.
-        if (fixed.extended_dynamic_state_2_logic_op == 0 &&
-            !dynamic_features.has_dynamic_state3_logic_op_enable &&
-            fixed.dynamic_state.logic_op_enable == 0) {
-            fixed.dynamic_state.logic_op.Assign(0);
-        }
-
+        // Made for a device with other dynamic states: left out, as Fritchii leaves it.
         const std::array<std::pair<bool, bool>, DropVertexInput - DropEds1 + 1> features{{
             {key.state.extended_dynamic_state != 0, dynamic_features.has_extended_dynamic_state},
             {key.state.extended_dynamic_state_2 != 0,
@@ -1738,6 +1718,26 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
                 dropped_with_feature[DropEds1 + index] += recorded ? 1 : 0;
                 return;
             }
+        }
+
+        // A key holds the driver that stored it, which never met a runtime key after a driver
+        // update (or in a cache shared from another driver), so every such pipeline was built
+        // again in game. Nothing builds from those fields: take this driver's.
+        auto& fixed = key.state;
+        if (fixed.driver_id != dynamic_features.driver_id ||
+            fixed.driver_version != dynamic_features.driver_version) {
+            ++other_driver;
+            if (!RekeyForeignPipelines()) {
+                return;
+            }
+            fixed.driver_id = dynamic_features.driver_id;
+            fixed.driver_version = dynamic_features.driver_version;
+        }
+        // One key for every op while the logic op is off, as Refresh makes them.
+        if (fixed.extended_dynamic_state_2_logic_op == 0 &&
+            !dynamic_features.has_dynamic_state3_logic_op_enable &&
+            fixed.dynamic_state.logic_op_enable == 0) {
+            fixed.dynamic_state.logic_op.Assign(0);
         }
 
         // Keys stored before they kept only the attribute types the programs read are looked up
@@ -1778,8 +1778,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
 
         const u64 hash = key.Hash();
-        // A key the conversions above changed (another driver's, another dynamic state form)
-        // takes the used-list age of the key as stored (Fritchii v5 ececc0bbd).
+        // A key changed above (this driver's fields, no op while the logic op is off) takes the
+        // used-list age of the key as stored (Fritchii v5 ececc0bbd).
         if (hash != stored_key_hash) {
             if (const auto used = used_pipelines.find(stored_key_hash);
                 used != used_pipelines.end()) {

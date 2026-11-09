@@ -163,8 +163,9 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    they are first drawn (about 15 minutes, once per GPU driver and build; Fritchii measured
    Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). As in Fritchii, a
    pipeline recorded for a GPU with other features is skipped, not converted (r34 and r35
-   converted them). Keep the recipes folder next to lichii.exe; other games' recipes can go
-   there too. EDEN_NX2_PRECOMPILE=0 turns it off. If a crash ends the preparation, the next
+   converted them), except Fritchii's own case: one recorded with a dynamic logic op while the
+   logic op is off is built with this driver's static one (most of the recipe on AMD). Keep the
+   recipes folder next to lichii.exe; other games' recipes can go there too. EDEN_NX2_PRECOMPILE=0 turns it off. If a crash ends the preparation, the next
    launch skips the pipelines it was building (upstream #999). Upstream #820's emulation of
    noperspective varyings is reverted, as in Fritchii (it also caused white fog at the Hyrule
    Field drawbridge there). r34's and r35's preparation crashed near its end because of
@@ -249,9 +250,10 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               EDEN_NX2_EXP29=0,
                               EDEN_NX2_INVALIDATE_BLOCKS=1, EDEN_NX2_SEC_RESERVE=0), logged like
                               perf-trace.bat
- ab-24-round19-render-targets.bat  no render target relocation, render-frame clock or cold sweep
-                              (EDEN_NX2_EXP43=0, EDEN_NX2_RENDER_CLOCK=0,
-                              EDEN_NX2_TC_COLD_FRAMES=0), logged like perf-trace.bat
+ ab-24-round19-render-targets.bat  no render target relocation or cold sweep
+                              (EDEN_NX2_EXP43=0, EDEN_NX2_TC_COLD_FRAMES=0; the render-frame
+                              clock stays on for the asynchronous shaders), logged like
+                              perf-trace.bat
  verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
                               verify ... differ", tombstone hits and the bank check's "without
                               the frame check (mode 3)" should stay 0); slower

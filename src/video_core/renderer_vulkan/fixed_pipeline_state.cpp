@@ -275,7 +275,7 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
     }
     dynamic_state.Refresh3(regs, features);
     // The op only matters while the logic op is on: with it off, any op makes the same pipeline,
-    // and caches recorded with a dynamic logic op (no op in their keys) meet these keys.
+    // and precompiled records made with a dynamic logic op (no op in their keys) meet these keys.
     if (!extended_dynamic_state_2_logic_op && !features.has_dynamic_state3_logic_op_enable &&
         dynamic_state.logic_op_enable == 0) {
         dynamic_state.logic_op.Assign(0);
