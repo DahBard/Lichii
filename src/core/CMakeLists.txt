@@ -396,6 +396,10 @@ add_library(core STATIC
     hle/kernel/svc/svc_thread_profiler.cpp
     hle/kernel/svc/svc_tick.cpp
     hle/kernel/svc/svc_transfer_memory.cpp
+    hle/kernel/svc/svc_nx2_oot_poll.cpp
+    hle/kernel/svc/svc_nx2_oot_poll.h
+    hle/kernel/svc/svc_nx2_zstd.cpp
+    hle/kernel/svc/svc_nx2_zstd.h
     hle/kernel/svc_common.h
     hle/kernel/svc_results.h
     hle/kernel/svc_types.h
