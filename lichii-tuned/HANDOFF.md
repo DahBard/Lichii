@@ -75,7 +75,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (299 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (304 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
@@ -160,6 +160,16 @@ is the next test.
   `lichii-tuned/recipes/OoT_v131072_cache_v54.nx2recipe` (1.8 MB; NX2RCP01, format 1, title
   0400486024DEC000, game version 131072, cache version 54), copied by the workflow into
   `recipes/` next to the executable (Windows and CachyOS); `e0b1f284f` notes it in the README.
+- r34 test (owner, 2026-11-09): the preparation crashed near its end. The log just stops at
+  568 s, mid-line, after ~1,700 'Patch topology not used with tessellation' warnings in its last
+  half minute: AMD's Windows driver building the recipe's tessellation pipelines. Fritchii 5.5
+  prepares the same recipe; it has reverted upstream #820 (noperspective varyings emulated as
+  perspective times Position.w), which its revert note suspects in an RX 6600 crash on a cached
+  tessellation pipeline. Fixed in r35: `b5e399c6a` reverts #820 as Fritchii 9b30eec8c does (also
+  Fritchii's white drawbridge fog), upstream #999 (`4218f2e08`, `2302bb211`) keeps a journal of
+  the builds in flight so a build a driver crash ended is skipped at the next launch, and
+  `d355c4620` names the recipe's records in it by their recorded key hash. Not confirmed from a
+  dump: if r35 still crashes, ask for %LOCALAPPDATA%\CrashDumps\lichii.exe.<pid>.dmp.
 - Later the same day (owner: merge what's new since the last check): upstream nx2 had merged 15
   pull requests past `cbb512ee7` (to `0ab7736df`). Taken: #961 (`fbf12eafd`, all-zero guest pages
   trimmed from the working set; Ocarina boots with ~7 GB of them) and #951 (`9d1aed504`,
@@ -804,7 +814,10 @@ Own changes:
 - Run #34 (round 20 with the Ocarina recipe in the package, Windows only): tuned4 `e0b1f284f`,
   built `pgo`, `pgo-lto` and `pgo-train` (success, 12 minutes; artifacts `lichii-tuned-r34-*`,
   92/92/99 MB, each 1.8 MB larger than r32's: `recipes/OoT_v131072_cache_v54.nx2recipe` next to
-  lichii.exe). Round 19 was skipped in testing; this is the next test.
+  lichii.exe). Crashed in the preparation (above).
+- Run #35 (r34 plus the preparation crash fix, Windows only): tuned4 `6102de6f2`. The agents'
+  Fritchii ports (branches r20-fritchii-core, r20-fritchii-shaders, r20-fritchii-rt) are under
+  review and not in it.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
