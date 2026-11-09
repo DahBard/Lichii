@@ -751,8 +751,8 @@ private:
     bool front_macros{};
     std::unique_ptr<u64[]> ring;
 
-    // Front side.
-    u64 write_position{};
+    // Keep the front's ring bookkeeping apart from fields accessed by the back.
+    alignas(128) u64 write_position{};
     u64 last_writer_position{};
     u64 last_barrier_position{};
     u32 last_barrier_source{};
@@ -818,8 +818,8 @@ private:
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
 
-    // Back side.
-    Tegra::Engines::EngineInterface* back_engine{};
+    // The back writes these on every engine switch and every entry.
+    alignas(128) Tegra::Engines::EngineInterface* back_engine{};
     u64 back_entry_start{}; ///< Where the entry the back runs starts (BackEntry)
 
     /// An entry's position as fenced writes name it: with this start of the split in the high
