@@ -435,6 +435,8 @@ public:
         u32 framebuffers_removed{};
         u32 framebuffers_scanned{}; ///< Framebuffer map entries RemoveFramebuffers looked at
         u32 framebuffers_created{};
+        u32 relocated_images{};     ///< Images moved instead of made (EDEN_NX2_EXP43 2-4)
+        u32 retired_images{};       ///< Predecessors deleted at once (EDEN_NX2_EXP43=1)
         u64 walk_ns{};              ///< JoinImages' overlap walk
         u64 create_ns{};            ///< Making the new image (vkCreateImage, memory)
         u64 refresh_ns{};           ///< Its upload (RefreshContents) or layout transition
@@ -607,6 +609,66 @@ private:
     ::Common::unordered_map<ImageViewId, boost::container::small_vector<FramebufferId, 4>>
         framebuffers_by_view;
     ::Common::unordered_map<FramebufferId, RenderTargets> framebuffer_keys;
+
+    /// Render target relocation (EDEN_NX2_EXP43, see RelocationMode). Per shape (format, size,
+    /// samples, levels, layers), sticky for the session: a shape whose GPU-written contents were
+    /// read in a later frame (sampled, rendered to without a clear) or read by the CPU never
+    /// relocates or retires early, since its predecessor's contents may still be wanted.
+    enum RelocationGuard : u8 {
+        GuardSampled = 1, ///< Sampled or copied from in a frame after the GPU wrote it
+        GuardLoaded = 2,  ///< Rendered to without a clear in a frame after the GPU wrote it
+        GuardCpuRead = 4, ///< Read by the CPU (GetFlushArea, DownloadMemory)
+    };
+    struct RelocationShape {
+        u8 guard{};
+        bool candidate_logged{};
+        bool relocated_logged{};
+    };
+    ::Common::unordered_map<u64, RelocationShape> relocation_shapes;
+    /// Since the last report (TickFrame, every 600 frames once a candidate was seen).
+    u64 relocation_candidates{};
+    u64 relocation_guarded{};
+    u64 relocation_relocated{};
+    u64 relocation_retired{};
+    u64 relocation_crowded{}; ///< Cleared targets over two or more images of their shape
+    bool relocation_seen{};
+
+    [[nodiscard]] static bool RelocationShaped(const ImageInfo& info) noexcept {
+        return info.type == ImageType::e2D && info.resources.levels == 1 &&
+               info.resources.layers == 1 && info.num_samples == 1;
+    }
+    [[nodiscard]] static u64 RelocationShapeKey(const ImageInfo& info) noexcept {
+        return (u64{static_cast<u32>(info.format) & 0xFF} << 56) |
+               (u64{info.num_samples & 0xF} << 52) |
+               (u64{static_cast<u32>(info.resources.levels) & 0xF} << 48) |
+               (u64{static_cast<u32>(info.resources.layers) & 0xFFF} << 36) |
+               (u64{info.size.width & 0x3FFFF} << 18) | (info.size.height & 0x3FFFF);
+    }
+    /// The predecessor among JoinImages' bad overlaps a new render target could take the place
+    /// of: the same single-level, single-layer 2D shape and layout, not written in this frame, a
+    /// drift of less than its size, nothing unusual about it (sparse, converted, aliased,
+    /// remapped, rescaled, CPU-read, a download queued, bound as another target of this clear,
+    /// registered in another channel). Else none.
+    [[nodiscard]] ImageId RelocationCandidate(const ImageInfo& new_info, GPUVAddr gpu_addr,
+                                              DAddr cpu_addr);
+    /// Moves the image to gpu_addr / cpu_addr in place of a new one; its VkImage, memory, views,
+    /// framebuffers and scale state stay.
+    void RelocateImage(ImageId image_id, GPUVAddr gpu_addr, DAddr cpu_addr);
+    /// Drops the image's overlapping_images links from the other images (DeleteImage, relocation).
+    void DropOverlapLinks(ImageId image_id);
+    /// Sets `reason` on the image's shape (once per image and reason; logs the shape's first).
+    void NoteRelocationGuard(ImageBase& image, RelocationGuard reason);
+    /// The cross-frame read check of PrepareImage.
+    void CheckCrossFrameUse(ImageBase& image, bool is_modification, bool invalidate) {
+        if (image.last_write_frame == frame_tick || image.last_write_frame == ~u64{0} ||
+            invalidate) {
+            return;
+        }
+        const RelocationGuard reason = is_modification ? GuardLoaded : GuardSampled;
+        if ((image.relocation_guard_noted & reason) == 0 && RelocationShaped(image.info)) {
+            NoteRelocationGuard(image, reason);
+        }
+    }
 
     /// Mark an image as modified from the GPU
     void MarkModification(ImageBase& image) noexcept;
