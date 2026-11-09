@@ -164,7 +164,11 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). Pipelines recorded on
    another GPU are converted for this one instead of skipped (Fritchii skips most of them on
    AMD's Windows driver). Keep the recipes folder next to lichii.exe; other games' recipes
-   can go there too. EDEN_NX2_PRECOMPILE=0 turns it off.
+   can go there too. EDEN_NX2_PRECOMPILE=0 turns it off. If a GPU driver crash ends the
+   preparation, the next launch skips the pipeline it was building (upstream #999), and r35
+   no longer crashes AMD's driver on the recipe's tessellation pipelines: upstream #820's
+   emulation of noperspective varyings is reverted, as in Fritchii (it also caused white fog at
+   the Hyrule Field drawbridge there).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
