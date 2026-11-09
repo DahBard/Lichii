@@ -368,6 +368,7 @@ struct ReportState {
     std::array<u64, static_cast<size_t>(Site::Count)> sync_ns{};
     u64 presents{};
     u64 present_ns{};
+    u64 landing_waits{};
 };
 inline ReportState g_report;
 
@@ -400,6 +401,7 @@ inline ReportState Snapshot(u64 now) {
     }
     state.presents = g_presents.load(std::memory_order_relaxed);
     state.present_ns = g_present_ns.load(std::memory_order_relaxed);
+    state.landing_waits = VideoCore::DownloadLanding::Waits();
     return std::exchange(g_report, state);
 }
 
@@ -577,6 +579,7 @@ inline void MaybeReport(bool split_active) {
         line += " none";
     }
     end_list();
+    line += fmt::format("; held by download landings {}", cur.landing_waits - old.landing_waits);
     const auto percent = [window](u64 ns) {
         return static_cast<double>(ns) * 100.0 / static_cast<double>(window);
     };
