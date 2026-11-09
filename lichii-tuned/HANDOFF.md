@@ -75,12 +75,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (293 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (298 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (272 files,
-  1.85 MB); check it
+  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (279 files,
+  1.89 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -154,6 +154,25 @@ is the next test.
   Fritchii: Ocarina's worst walking freezes on a first visit ~700-850 ms -> 40-70 ms. Not taken:
   #896's fast path (kept infos and SPIR-V) and canonical keys (they would re-key the disk cache);
   no checkpoint, so a skipped preparation starts over (the driver's cache answers what was built).
+  The summary line (`Precompiled pipelines: N of M prepared ...`) counts the records the disk cache
+  held and, per missing dynamic state, those this device can't build (`5387f2a61`, as Fritchii
+  v5.3's 1fa49c5c3 logs its skips).
+- Later the same day (owner: merge what's new since the last check): upstream nx2 had merged 15
+  pull requests past `cbb512ee7` (to `0ab7736df`). Taken: #961 (`fbf12eafd`, all-zero guest pages
+  trimmed from the working set; Ocarina boots with ~7 GB of them) and #951 (`9d1aed504`,
+  `EDEN_NX2_MEM_TRACE`; texture cache thresholds logged only when they change), with
+  `0c6d67079` (#951's PROCESS_MEMORY_COUNTERS_EX2 spelled out for older MinGW headers); #957 was
+  in already. Not taken: #1036 (shader cache v2 replaces the vulkan.fork-v54 cache and its
+  loader, which tuned4's preload-all, kept pipelines, record conversions, F2's robustness work and
+  the recipe preparation sit on: its own round), #949 and #979/#1014 (semaphore paths #805
+  rewrote; #949 is mostly #805's view), #1028 (#805's read-back; overlaps the download landing
+  and helps with reactive flushing, off here), #1016 (Fritchii's timer is in), #984, #923, #947
+  and the diagnostics #965, #975, #1039. Open #1032 (macro DMA reads of report slots without the
+  drain, Kokiri 42 -> 47 fps upstream) is what round 15's shadow and #805 already do (r28: the
+  front's macro read waits gone). Fritchii v5.3-v5.5: 9ea66c827 (AMD: recipe records with a
+  dynamic logic op) is what ConvertRecordedKey does; revision 5's EDS2 and dynamic vertex input
+  are this build's defaults (the owner's r28 log has them unchanged); the rest is UI, notes,
+  DLSS and NVIDIA.
 - Not ported yet: the three porting agents stopped at the weekly usage limit (resets
   2026-11-14 02:00 UTC). Their finished commits are in (branches `r20-fritchii-core`,
   `r20-fritchii-shaders`); EXP35 was half done and dropped. Still to port: EXP35=2 with EXP36,
@@ -774,8 +793,9 @@ Own changes:
   `lichii-tuned-r29-*`, 90/90/97 MB). Not tested yet.
 - Run #30 (round 20, Windows only) built `pgo`, `pgo-lto` and `pgo-train` from tuned4 `cfe4481f0`
   (success, 16 minutes). Superseded by run #31 before testing.
-- Run #31 (round 20 with Fritchii's shader preparation, Windows only): tuned4 `bd3ce79e8`. Round 19
-  was skipped in testing; this is the next test.
+- Run #31 (round 20 with Fritchii's shader preparation, Windows only): tuned4 `bd3ce79e8`.
+- Run #32 (round 20 with upstream #961, #951 and the preparation counts, Windows only): tuned4
+  `23a9407df`. Round 19 was skipped in testing; this is the next test.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
