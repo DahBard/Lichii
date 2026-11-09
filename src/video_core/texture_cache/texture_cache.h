@@ -68,16 +68,17 @@ using namespace Common::Literals;
 /// registered again; its VkImage, memory, views and framebuffers stay). 3 = as 2, and with
 /// several predecessors the most recently modified one moves (lets a chain made before stop
 /// growing and age out). 1 = retire early: the predecessor is deleted at once and a new image
-/// made. 0 = off: candidates are only counted. Never for a shape whose GPU-written contents were
-/// sampled or rendered to without a clear in a later frame, or read by the CPU (sticky per shape
-/// for the session: "Render target relocation guard (EXP43)"), nor for rescaled, sparse,
-/// converted or CPU-read images, ones with a download queued, bound as another target of the
-/// clear or in another channel. Logs each shape's first candidate and relocation and "Render
-/// target relocation (EXP43=n) last 600 frames". Read once, on first use.
+/// made. 0 = off: candidates are only counted. Default 3, as in Fritchii v5 (Castle Town live
+/// toggles there: 46.3 -> 49.3 fps, 21 loads without a washed-out scene). Never for a shape whose
+/// GPU-written contents were sampled or rendered to without a clear in a later frame, or read by
+/// the CPU (sticky per shape for the session: "Render target relocation guard (EXP43)"), nor for
+/// rescaled, sparse, converted or CPU-read images, ones with a download queued, bound as another
+/// target of the clear or in another channel. Logs each shape's first candidate and relocation
+/// and "Render target relocation (EXP43=n) last 600 frames". Read once, on first use.
 [[nodiscard]] inline int RelocationMode() {
     static const int mode = [] {
         const char* value = std::getenv("EDEN_NX2_EXP43");
-        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 0;
+        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 3;
     }();
     return mode;
 }
