@@ -75,7 +75,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (298 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (299 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
@@ -156,7 +156,10 @@ is the next test.
   no checkpoint, so a skipped preparation starts over (the driver's cache answers what was built).
   The summary line (`Precompiled pipelines: N of M prepared ...`) counts the records the disk cache
   held and, per missing dynamic state, those this device can't build (`5387f2a61`, as Fritchii
-  v5.3's 1fa49c5c3 logs its skips).
+  v5.3's 1fa49c5c3 logs its skips). The package ships the owner's copy of Fritchii's recipe,
+  `lichii-tuned/recipes/OoT_v131072_cache_v54.nx2recipe` (1.8 MB; NX2RCP01, format 1, title
+  0400486024DEC000, game version 131072, cache version 54), copied by the workflow into
+  `recipes/` next to the executable (Windows and CachyOS); `e0b1f284f` notes it in the README.
 - Later the same day (owner: merge what's new since the last check): upstream nx2 had merged 15
   pull requests past `cbb512ee7` (to `0ab7736df`). Taken: #961 (`fbf12eafd`, all-zero guest pages
   trimmed from the working set; Ocarina boots with ~7 GB of them) and #951 (`9d1aed504`,
@@ -795,7 +798,10 @@ Own changes:
   (success, 16 minutes). Superseded by run #31 before testing.
 - Run #31 (round 20 with Fritchii's shader preparation, Windows only): tuned4 `bd3ce79e8`.
 - Run #32 (round 20 with upstream #961, #951 and the preparation counts, Windows only): tuned4
-  `23a9407df`. Round 19 was skipped in testing; this is the next test.
+  `23a9407df`. Run #33 (a stamp file renamed apart from Fritchii's) was cancelled and its commit
+  dropped at the owner's request, in favour of shipping the recipe.
+- Run #34 (round 20 with the Ocarina recipe in the package, Windows only): tuned4 `e0b1f284f`.
+  Round 19 was skipped in testing; this is the next test.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds

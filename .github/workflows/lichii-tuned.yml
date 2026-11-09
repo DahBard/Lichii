@@ -299,8 +299,11 @@ jobs:
           done
           # README and A/B launchers (added by the patch).
           if [ -d "$GITHUB_WORKSPACE/dist/lichii-tuned" ]; then
-            cp "$GITHUB_WORKSPACE"/dist/lichii-tuned/* .
+            cp -r "$GITHUB_WORKSPACE"/dist/lichii-tuned/* .
           fi
+          # Precompile recipes (Fritchii's shader preparation reads <exe dir>/recipes).
+          mkdir -p recipes
+          cp "$GITHUB_WORKSPACE"/lichii-tuned/recipes/*.nx2recipe recipes/
 
       # Same packaging as upstream's MSVC build.
       - name: Package MSVC
@@ -312,8 +315,10 @@ jobs:
           }
           windeployqt --release --no-translations build/release/bin/lichii.exe
           if (Test-Path dist/lichii-tuned) {
-            Copy-Item dist/lichii-tuned/* build/release/bin/
+            Copy-Item -Recurse dist/lichii-tuned/* build/release/bin/
           }
+          New-Item -ItemType Directory -Force build/release/bin/recipes | Out-Null
+          Copy-Item lichii-tuned/recipes/*.nx2recipe build/release/bin/recipes/
 
       # AMD FSR 4 for Ocarina: the AMD FSR SDK's signed Vulkan loader and upscaler, which may be
       # redistributed in binary form with the SDK's license. Pinned to SDK v2.4.0 by hash.
@@ -617,6 +622,8 @@ jobs:
             cp dist/lichii-tuned/*.txt "$out/"
             python -I lichii-tuned/make_linux_launchers.py dist/lichii-tuned "$out"
           fi
+          mkdir -p "$out/recipes"
+          cp lichii-tuned/recipes/*.nx2recipe "$out/recipes/"
           cp lichii-tuned/README-cachyos.md "$out/"
           needed=" $(readelf -d "$out/lichii" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | tr '\n' ' ') "
           {
