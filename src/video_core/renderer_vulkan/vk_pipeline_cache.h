@@ -263,11 +263,14 @@ private:
                                                     const ShaderInfo* shader,
                                                     std::span<const u64> keep_pointers = {});
 
+    /// `may_defer`: a software HMMA program may build on deferred_workers on drivers that defer
+    /// them (Device::DefersSoftwareMatrixPipelines). False builds it now, for callers that drop
+    /// the pipeline at once (the precache jobs): a queued build would run on a freed pipeline.
     ComputePipelineCacheEntry CreateComputePipeline(ShaderPools& pools,
                                                      const ComputePipelineCacheKey& key,
                                                      Shader::Environment& env,
                                                      PipelineStatistics* statistics,
-                                                     bool build_in_parallel);
+                                                     bool build_in_parallel, bool may_defer = true);
 
     void SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                       const vk::PipelineCache& pipeline_cache, u32 cache_version);

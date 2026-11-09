@@ -2114,8 +2114,9 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                                     static const GuessMissing guess{};
                                     compute_env.SetGuessMissing(&guess);
                                     ShaderPools pools;
+                                    // Built here, not queued: the pipeline is dropped at once.
                                     return CreateComputePipeline(pools, key, compute_env, nullptr,
-                                                                 false)
+                                                                 false, false)
                                                .pipeline != nullptr;
                                 },
                                 key.unique_hash});
@@ -2465,8 +2466,9 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                             }
                             ShaderPools pools;
                             if (compute) {
+                                // Built here, not queued: the pipeline is dropped at once.
                                 return CreateComputePipeline(pools, compute_key, envs.front(),
-                                                             nullptr, false)
+                                                             nullptr, false, false)
                                            .pipeline != nullptr;
                             }
                             if (size_t reason = 0;
@@ -4122,7 +4124,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipe
 
 ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     ShaderPools& pools, const ComputePipelineCacheKey& key, Shader::Environment& env,
-    PipelineStatistics* statistics, bool build_in_parallel) try {
+    PipelineStatistics* statistics, bool build_in_parallel, bool may_defer) try {
     auto hash = key.Hash();
     if (device.HasBrokenCompute()) {
         LOG_ERROR(Render_Vulkan, "Skipping {:#016x}", hash);
@@ -4177,7 +4179,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         const auto name{fmt::format("Shader {:016x}", key.unique_hash)};
         spv_module.SetObjectNameEXT(name.c_str());
     }
-    const bool deferred = program.info.uses_software_matrix &&
+    const bool deferred = may_defer && program.info.uses_software_matrix &&
                           device.DefersSoftwareMatrixPipelines();
     Common::ThreadWorker* const thread_worker{deferred            ? &deferred_workers
                                               : build_in_parallel ? &workers
