@@ -2011,17 +2011,21 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
     }
     const auto& compared = stats.compared;
     const auto& changed = stats.changed;
+    // Verify (mode 2): "missed" are changes only its compare of every page found, which mode 1
+    // misses; mode 3 also misses those the frame check found (at least: a page it missed doesn't
+    // turn hot either).
     LOG_INFO(HW_GPU,
              "Native bank check (mode {}, 10 s): {} binds, {} new pages, {} skipped; compared / "
              "changed: collected CPU writes {} / {}, buffer cache writes {} / {}, recheck {} / {}, "
              "CPU-modified {} / {}, hot {} / {}, frame check {} / {}, verify only {} / {}; missed "
-             "{}",
+             "{}, without the frame check (mode 3) {}",
              mode, stats.binds, stats.pages_new, stats.pages_skipped, compared[BankCollected],
              changed[BankCollected], compared[BankWritten], changed[BankWritten],
              compared[BankRecheck], changed[BankRecheck], compared[BankCpuDirty],
              changed[BankCpuDirty], compared[BankHot], changed[BankHot], compared[BankFrame],
              changed[BankFrame], compared[BankNone], changed[BankNone],
-             verify ? changed[BankNone] : 0);
+             verify ? changed[BankNone] : 0,
+             verify ? changed[BankNone] + changed[BankFrame] : 0);
     stats = {};
     stats.last_log = now;
 }
