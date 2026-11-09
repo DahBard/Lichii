@@ -694,6 +694,22 @@ private:
     u64 tombstones_made{};
     u64 tombstone_overlap_reads{}; ///< New images read over one, not at its address
     u32 tombstone_hits_logged{};
+
+    /// Cold sweep (EDEN_NX2_TC_COLD_FRAMES=K, see TcColdFrames): a relocation-shaped image with
+    /// BadOverlap (a member of a drifted chain) untouched for K host frames, with no download
+    /// queued and not bound, is deleted in TickFrame (at most 16 a frame), so its VkImage goes
+    /// back to the image recycler instead of waiting for the collector. Never a GPU-written image
+    /// that may be read again: one that was itself read in a later frame or by the CPU, or of a
+    /// shape guarded as read by the CPU, and unless EDEN_NX2_TC_COLD_GUARDED=1 of a shape guarded
+    /// as sampled or rendered to without a clear in a later frame. JoinImages puts the chain
+    /// members it sees on the watch list.
+    void WatchColdImage(ImageId image_id);
+    void SweepColdImages();
+    std::vector<std::pair<ImageId, u64>> cold_watch; ///< Image, frame_tick it was put on
+    ::Common::unordered_set<ImageId> cold_watch_set;
+    u64 cold_deleted{};      ///< Since the last report
+    u64 cold_kept_guarded{}; ///< Dropped from the watch: GPU-written and guarded
+    u64 cold_kept_read{};    ///< Dropped from the watch: GPU-written and read later or by the CPU
     bool render_clock_live{};
     bool render_clock_enabled{}; ///< Last tick: the clock wanted (Resume on the way back on)
     bool render_clock_logged{};
