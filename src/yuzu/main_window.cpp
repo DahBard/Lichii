@@ -46,6 +46,7 @@
 #include "util/util.h"
 #include "yuzu/game/game_list.h"
 #include "yuzu/nup_dialogs.h"
+#include "yuzu/nx2_crash_dump.h"
 #include "yuzu/shader_warm_dialog.h"
 #include "video_core/nx2_precompile.h"
 #include "video_core/pipeline_cache_files.h"
@@ -2041,6 +2042,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         boot_in_progress = false;
         LOG_INFO(Frontend, "Launch finished: elapsed_ms={} running={}", boot_timer.elapsed(),
                  emulation_running);
+        // The GPU driver and the libraries a launch loads may have replaced the crash filter.
+        InstallNx2CrashDump();
         if (!emulation_running && !close_pending) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);

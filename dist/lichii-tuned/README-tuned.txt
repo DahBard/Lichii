@@ -169,6 +169,9 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    noperspective varyings is reverted, as in Fritchii (it also caused white fog at the Hyrule
    Field drawbridge there); r35's preparation still crashed near its end, which is being
    looked into.
+ * Crashes: this package writes lichii-crash-<pid>.txt and lichii-crash-<pid>.dmp to
+   %APPDATA%\eden\crash_dumps when Lichii crashes (EDEN_NX2_CRASH_DUMP=1 in nx2_switches.txt).
+   Send both with the log.
  * Round 20, more of Fritchii v5.2, each group with an A/B launcher that brings round 19 back:
    - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
      thread, so a new effect stalls the frame less; a draw whose pipeline is still building is
