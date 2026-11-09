@@ -55,6 +55,14 @@ public:
 
     void IncrementGuest(u32 syncpoint_id);
 
+    /// Called after every guest increment, on the incrementing thread: nx2:gsv answers the
+    /// driver's armed syncpoint waits with it at once instead of at its next 500 us poll
+    /// (EDEN_NX2_EXP37). The hook must be cheap and thread-safe.
+    using GuestIncrementHook = void (*)(void* context);
+    void SetGuestIncrementHook(GuestIncrementHook hook, void* context);
+    /// Removes the hook if `context` is its context, then returns once no hook call is under way.
+    void RemoveGuestIncrementHook(void* context);
+
     void IncrementHost(u32 syncpoint_id);
 
     void WaitGuest(u32 syncpoint_id, u32 expected_value);
@@ -89,6 +97,10 @@ private:
 
     std::mutex guard;
     u64 last_action_id{};
+    std::atomic<GuestIncrementHook> guest_increment_hook{};
+    std::atomic<void*> guest_increment_context{};
+    /// Hook calls under way (RemoveGuestIncrementHook waits for them).
+    std::atomic<u32> guest_increment_calls{};
     std::condition_variable wait_guest_cv;
     std::condition_variable wait_host_cv;
 };

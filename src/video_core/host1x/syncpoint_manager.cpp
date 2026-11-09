@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <thread>
+
 #include "common/logging.h"
 #include "video_core/host1x/syncpoint_manager.h"
 
@@ -63,6 +65,29 @@ void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
         return;
     }
     Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id]);
+    if (guest_increment_hook.load(std::memory_order_relaxed) != nullptr) {
+        // Counted before the hook is loaded again: a removal either sees the call or the call
+        // sees the removal.
+        guest_increment_calls.fetch_add(1, std::memory_order_seq_cst);
+        if (const auto hook = guest_increment_hook.load(std::memory_order_seq_cst)) {
+            hook(guest_increment_context.load(std::memory_order_relaxed));
+        }
+        guest_increment_calls.fetch_sub(1, std::memory_order_release);
+    }
+}
+
+void SyncpointManager::SetGuestIncrementHook(GuestIncrementHook hook, void* context) {
+    guest_increment_context.store(context, std::memory_order_relaxed);
+    guest_increment_hook.store(hook, std::memory_order_seq_cst);
+}
+
+void SyncpointManager::RemoveGuestIncrementHook(void* context) {
+    if (guest_increment_context.load(std::memory_order_relaxed) == context) {
+        guest_increment_hook.store(nullptr, std::memory_order_seq_cst);
+    }
+    while (guest_increment_calls.load(std::memory_order_seq_cst) != 0) {
+        std::this_thread::yield();
+    }
 }
 
 void SyncpointManager::IncrementHost(u32 syncpoint_id) {
