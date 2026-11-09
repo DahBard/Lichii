@@ -5,7 +5,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <thread>
+
+#include "common/nx2_address_wait.h"
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -41,7 +44,8 @@ public:
             return true;
         }
         std::uint32_t expected = 0;
-        if (!state.compare_exchange_strong(expected, 1, std::memory_order_acquire,
+        if (state.load(std::memory_order_relaxed) != 0 ||
+            !state.compare_exchange_strong(expected, 1, std::memory_order_acquire,
                                            std::memory_order_relaxed)) {
             return false;
         }
@@ -56,13 +60,28 @@ public:
         }
         owner.store(std::thread::id{}, std::memory_order_relaxed);
         if (state.exchange(0, std::memory_order_release) == 2) {
-            state.notify_one();
+            if (AddressWaits()) {
+                Nx2AddressWait::WakeOne(state);
+            } else {
+                state.notify_one();
+            }
         }
     }
 
 private:
     // About 10 microseconds of spinning before sleeping.
     static constexpr int SpinCount = 1024;
+
+    /// EDEN_NX2_CACHE_LOCK_WAIT: sleepers use Common::Nx2AddressWait (WaitOnAddress on Windows)
+    /// instead of std::atomic::wait, whose winpthreads condition variable made the unlocking GPU
+    /// thread block on a shared mutex and wake every sleeper of the slot.
+    static bool AddressWaits() {
+        static const bool enabled = [] {
+            const char* value = std::getenv("EDEN_NX2_CACHE_LOCK_WAIT");
+            return value == nullptr || value[0] != '0';
+        }();
+        return enabled;
+    }
 
     static void Pause() {
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
@@ -86,7 +105,11 @@ private:
         // 2: held with (possible) sleepers; taken this way it stays marked, so its unlock wakes
         // the next sleeper.
         while (state.exchange(2, std::memory_order_acquire) != 0) {
-            state.wait(2, std::memory_order_relaxed);
+            if (AddressWaits()) {
+                Nx2AddressWait::Wait(state, 2);
+            } else {
+                state.wait(2, std::memory_order_relaxed);
+            }
         }
     }
 
