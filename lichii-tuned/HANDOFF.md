@@ -75,12 +75,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (304 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (350 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (279 files,
-  1.89 MB); check it
+  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (324 files,
+  2.28 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -148,9 +148,13 @@ is the next test.
   Fritchii's Ocarina file is `OoT v131072 (cache v54).nx2recipe`) is assembled with the game's
   files into `precompiled.fork-v54.nx2prep`, and its records run as jobs of the loading-screen
   precache, on every CPU thread (Ask asks at launch; ~15 minutes the first time; then the stamp
-  `precompiled_prepared.fork-v54.txt` skips it for that file, driver, GPU and release). Records
-  made on another device go through `ConvertRecordedKey`, the disk cache loader's conversion,
-  where Fritchii skips them (zortos293/Lichii#1012: 116,036 of 120,124 on AMD's Windows driver).
+  `precompiled_prepared.fork-v54.txt` skips it for that file, driver, GPU and release).
+  - Records made for a device with other dynamic states are skipped, as in Fritchii. Only
+    Fritchii's two adjustments apply (its `RecordedKeyForThisDevice`): this driver's fields,
+    and 9ea66c827's static logic op for a record made with a dynamic logic op while the logic
+    op is off. That second one covers most of the recipe on AMD.
+  - r34 and r35 converted more (`ConvertRecordedKey`, plus round 17's loader conversion
+    `d92a29336`/`eb2b411de`). r36 dropped both at the owner's request (`ac88e58de`).
   Fritchii: Ocarina's worst walking freezes on a first visit ~700-850 ms -> 40-70 ms. Not taken:
   #896's fast path (kept infos and SPIR-V) and canonical keys (they would re-key the disk cache);
   no checkpoint, so a skipped preparation starts over (the driver's cache answers what was built).
@@ -160,16 +164,29 @@ is the next test.
   `lichii-tuned/recipes/OoT_v131072_cache_v54.nx2recipe` (1.8 MB; NX2RCP01, format 1, title
   0400486024DEC000, game version 131072, cache version 54), copied by the workflow into
   `recipes/` next to the executable (Windows and CachyOS); `e0b1f284f` notes it in the README.
-- r34 test (owner, 2026-11-09): the preparation crashed near its end. The log just stops at
-  568 s, mid-line, after ~1,700 'Patch topology not used with tessellation' warnings in its last
-  half minute: AMD's Windows driver building the recipe's tessellation pipelines. Fritchii 5.5
-  prepares the same recipe; it has reverted upstream #820 (noperspective varyings emulated as
-  perspective times Position.w), which its revert note suspects in an RX 6600 crash on a cached
-  tessellation pipeline. Fixed in r35: `b5e399c6a` reverts #820 as Fritchii 9b30eec8c does (also
-  Fritchii's white drawbridge fog), upstream #999 (`4218f2e08`, `2302bb211`) keeps a journal of
-  the builds in flight so a build a driver crash ended is skipped at the next launch, and
-  `d355c4620` names the recipe's records in it by their recorded key hash. Not confirmed from a
-  dump: if r35 still crashes, ask for %LOCALAPPDATA%\CrashDumps\lichii.exe.<pid>.dmp.
+- r34 test (owner, 2026-11-09): the preparation crashed near its end; the log just stops at
+  568 s, mid-line.
+  - r35 reverted #820 (`b5e399c6a`, as Fritchii 9b30eec8c does; it also removes Fritchii's white
+    drawbridge fog). It also added upstream #999's journal of builds in flight (`4218f2e08`,
+    `2302bb211`, `d355c4620`).
+  - That diagnosis was wrong. The ~1,700 'Patch topology not used with tessellation' warnings
+    come from the recipe's task+mesh pipelines: a mesh program sits in the TessellationEval
+    slot, and the recipe has no tessellation programs. #820 never touched those pipelines.
+  - r35 crashed too, 2,719 s into the preparation (44 minutes). WER reported BEX64, c0000005
+    with parameter 8 (an execute fault), fault module StackHash, 'PCH_DE_FROM_ntdll+0x1628A4'.
+    WER LocalDumps, set up by the owner, wrote no dump.
+  - The cause, found by r36's integration review and confirmed: on AMD's drivers a software
+    HMMA compute program builds on `deferred_workers` (bace6509e, an upstream pull request
+    Fritchii doesn't have). The precache's compute jobs and the recipe's 4,088 compute records
+    (the file's last; Ocarina's AA network around record 116,440) dropped the pipeline at
+    once. Its queued build then ran on freed memory, calling a std::function there.
+  - `91efbc685` builds them in the job. ComputePipeline still has no destructor that waits:
+    callers keep a pipeline until IsBuildTaskDone().
+  - Each r35 crash poisoned up to 16 innocent in-flight records for this driver
+    (precache-jobs.poison). This is harmless; deleting the file builds them again.
+  - `da111dfcf` adds EDEN_NX2_CRASH_DUMP to the GUI. It is on in the tuned nx2_switches.txt
+    and writes lichii-crash-<pid>.txt and .dmp to %APPDATA%\eden\crash_dumps, without admin
+    rights. It was tested under Wine with a thread pool callback into non-executable memory.
 - Later the same day (owner: merge what's new since the last check): upstream nx2 had merged 15
   pull requests past `cbb512ee7` (to `0ab7736df`). Taken: #961 (`fbf12eafd`, all-zero guest pages
   trimmed from the working set; Ocarina boots with ~7 GB of them) and #951 (`9d1aed504`,
@@ -183,19 +200,72 @@ is the next test.
   and the diagnostics #965, #975, #1039. Open #1032 (macro DMA reads of report slots without the
   drain, Kokiri 42 -> 47 fps upstream) is what round 15's shadow and #805 already do (r28: the
   front's macro read waits gone). Fritchii v5.3-v5.5: 9ea66c827 (AMD: recipe records with a
-  dynamic logic op) is what ConvertRecordedKey does; revision 5's EDS2 and dynamic vertex input
+  dynamic logic op) is in RecordedKeyForThisDevice (r36); revision 5's EDS2 and dynamic vertex input
   are this build's defaults (the owner's r28 log has them unchanged); the rest is UI, notes,
   DLSS and NVIDIA.
-- Not ported yet: the three porting agents stopped at the weekly usage limit (resets
-  2026-11-14 02:00 UTC). Their finished commits are in (branches `r20-fritchii-core`,
-  `r20-fritchii-shaders`); EXP35 was half done and dropped. Still to port: EXP35=2 with EXP36,
-  EXP60 and the revert of #700's accumulator half; EXP9=3 with 8b7bb3fab's node map; the EXP18=4
-  and EXP29=6 parts tuned4 lacks; EXP37; SEC_RESERVE; EXP42 and EXP43 (Fritchii: +3 fps each in
-  Castle Town) with b3396c01f, the render-frame clock and the cold sweep; d69ecefe3; the slow
-  clear log; async translation (on by default in v5.2); async discard mode 2; c62c15add,
-  166f173ab, fc6d4cab4 (prebuild streaming); #896's cheaper SSA reads.
-- Left out by choice: Fritchii's revert of #820 (its white fog was on an RTX 4080; r28 on the
-  RX 9070 XT, with #820, showed none), graphics pipeline libraries (Fritchii turns them off on
+- Fritchii v5.2's remaining items (r36): three agents ported them on branches
+  `r20-fritchii-core`, `r20-fritchii-shaders` and `r20-fritchii-rt`. Each branch was reviewed
+  area by area, with verifiers trying to refute every finding, then merged on
+  `r20-integration`. Every change has its switch, and ab-22/23/24 bring round 19 back per group.
+  - Guest memory:
+    - `3f0ce586f`: EXP35=2 with EXP36 and EXP60. The guest's reads and writes of cached memory
+      skip the caches' locks. A write to a clean page is collected and applied before the next
+      command list, acquire or accelerated copy.
+    - `33707525a`: #700's accumulator half is reverted; `EDEN_NX2_INVALIDATE_BLOCKS=1` keeps it.
+    - `78b9e52d8`: EXP9=3 with 8b7bb3fab's node map.
+    - `7f82adc67`: EXP18=4 and EXP29 & 4.
+    - `80515e067`: EXP37, off as in Fritchii.
+    - `daa657dc6`: SEC_RESERVE.
+    - Review fixes that go beyond Fritchii:
+      - `fd501a1d5`: Fritchii's c2d2f50d1 sizes a range from the block start, so it leaves out
+        bytes written mid-block. Ranges are now exact.
+      - `13dda6404`: a collected write that crosses the dirty managers' 2 KiB pages is split per
+        page instead of being cut short by a 32-bit shift.
+      - `4728e4d7d`: the apply runs before a list's work, SEM_EXECUTE and accelerated copies;
+        `910ec2b1e`: also when a Switch 2 SemaphoreOperation acquire is met or resumes (a draw
+        after an acquire the CPU released mid-list read the old host copy).
+      - `c4a576b92`: LICHII_BANK_CHECK=2 counts what mode 3 misses.
+  - Shaders:
+    - Async translation on two workers, on by default (`58412f763`, `72e5f19c9`), with
+      `d38567d97` (page table lock) and `5e3e8bf12` (environment snapshots;
+      `EDEN_NX2_ASYNC_TRANSLATE=2` checks them).
+    - Async discard mode 2 (`2f6e59a42`): with native_async_draws at Wait, a draw waiting for its
+      pipeline is skipped only into targets cleared in this render frame and a recent earlier
+      one.
+    - Prebuild streaming (`3f301266e`: c62c15add, 166f173ab, fc6d4cab4).
+    - #896's translation profiler (`ca992b6b3`). The cheaper SSA reads are off in Fritchii and
+      left out.
+  - Render targets:
+    - `8334d0ecf`: d69ecefe3.
+    - `49bce6d4c`, `0b56556f3`: the slow clear log.
+    - EXP43 relocation: `569b99fdf`; b3396c01f's guard by address in `ff8168795`; =3 by default
+      in `447ae09ff`; =4 tombstones in `a10bfaea1`, where `1ceae31ba` stops counting CPU reads
+      the moved image serves.
+    - The render-frame clock and cold sweep, on by default (`302832a36`, `dd6e29831`,
+      `17a9666a3`).
+    - `4cb87fe88`: EXP42 switches tuned4's image recycler, which already covers Fritchii's
+      VkImage pool.
+    - `cef2cef01`: churn counters.
+    - `7e9a2d80d`: async discard's clear frames count in render frames.
+  - Integration (`r20-integration`, fast-forwarded into tuned4): `b3d6e4904` (a shadowing
+    warning), `1ceae31ba` (EXP43=4 counted CPU reads the moved image serves), `d520eea69` (a
+    comment), `910ec2b1e` (above). Then a review of the combined branches (the acquire fix, r35's
+    journal and recipe against the shaders branch, guest memory against render targets, the
+    defaults and launchers) confirmed two defects. One was the preparation crash below
+    (`91efbc685`). The other was ab-23 leaving reads lock-free (`ae609615c` sets EXP36=1;
+    verify-r20 now names the bank check's mode 3 count). `e9226a635` lets ab-24 keep the
+    render-frame clock (mode 2 async discard counts clears by it) and puts the disk cache
+    loader's flag check before its driver count. F1's 7 unit tests pass under ASan and UBSan.
+  - Known lows, reported by the reviews but not verified or fixed:
+    - A pipeline translated asynchronously classifies storage-buffer pointers on the worker,
+      possibly well after the draw, and they are not checked again when the draw adopts it.
+    - Mode 2 judges a draw only by its render targets.
+    - EXP9=3 skips the per-frame compare, so a bank page changed only by a writer that sets no
+      flag (semaphore, QMD or query releases, texture write-backs) can stay stale;
+      LICHII_BANK_CHECK=2 (verify-r20) counts such misses.
+    - While the render-frame clock is not live, a present tick between two clears in one frame
+      makes a target look recurring.
+- Left out by choice: graphics pipeline libraries (Fritchii turns them off on
   AMD's Windows driver), the shader warm-up (#579, needs them), #896's precompiled fast path and
   canonical keys (they would re-key the disk cache), UI, branding and settings revisions.
 - Shader precompile (the owner: under a minute after deleting the shaders, expected ~15): r18's
@@ -816,9 +886,10 @@ Own changes:
   92/92/99 MB, each 1.8 MB larger than r32's: `recipes/OoT_v131072_cache_v54.nx2recipe` next to
   lichii.exe). Crashed in the preparation (above).
 - Run #35 (r34 plus the preparation crash fix, Windows only): tuned4 `6102de6f2`, built `pgo`,
-  `pgo-lto` and `pgo-train` (success, 9 minutes; artifacts `lichii-tuned-r35-*`). The agents'
-  Fritchii ports (branches r20-fritchii-core, r20-fritchii-shaders, r20-fritchii-rt) are under
-  review and not in it.
+  `pgo-lto` and `pgo-train` (success, 9 minutes; artifacts `lichii-tuned-r35-*`), without the
+  agents' Fritchii ports.
+- Run #36 (round 20's Fritchii ports, the preparation crash fix, recorded pipelines from
+  another device skipped as in Fritchii, the GUI crash writer; Windows only): tuned4 `e9226a635`.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
@@ -900,7 +971,13 @@ Own changes:
    spins) and ab-21 (round 19's timer wait) against the default on the power-limited laptop
    (frame rate, guest core and back times); the front's list writer and drain waits after #980
    and #911; pgo-train should load the game now: record a session with it for an Ocarina
-   profile. After 2026-11-14: port the Fritchii items listed under round 20. r28's
+   profile. r36: first, does the shader preparation finish? (The 'Precompiled pipelines: N of
+   M prepared' line in the log; if it crashes, the two files in %APPDATA%\eden\crash_dumps.)
+   Then round 20's Fritchii ports: the default against ab-22 (shaders), ab-23
+   (guest memory) and ab-24 (render targets), each logged like perf-trace (frame rate, back
+   and guest core times, the slow clear and churn lines), and verify-r20 for a while (its
+   'differ' count, its tombstone hits and the bank check's 'without the frame check (mode 3)'
+   count must stay 0). r28's
    bottlenecks: the back (20.0 ms a frame: 3.78 M methods/s, 1.12 M 3D register writes that
    repeat the value, 0x586 alone 529 k/s; can the front drop them before they are queued?) and
    guest core 5 (20.0 ms, ~640 ms/s of guest code). Then: the rest of #805 (upload reordering
