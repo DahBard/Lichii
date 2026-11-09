@@ -815,7 +815,8 @@ Own changes:
   built `pgo`, `pgo-lto` and `pgo-train` (success, 12 minutes; artifacts `lichii-tuned-r34-*`,
   92/92/99 MB, each 1.8 MB larger than r32's: `recipes/OoT_v131072_cache_v54.nx2recipe` next to
   lichii.exe). Crashed in the preparation (above).
-- Run #35 (r34 plus the preparation crash fix, Windows only): tuned4 `6102de6f2`. The agents'
+- Run #35 (r34 plus the preparation crash fix, Windows only): tuned4 `6102de6f2`, built `pgo`,
+  `pgo-lto` and `pgo-train` (success, 9 minutes; artifacts `lichii-tuned-r35-*`). The agents'
   Fritchii ports (branches r20-fritchii-core, r20-fritchii-shaders, r20-fritchii-rt) are under
   review and not in it.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
