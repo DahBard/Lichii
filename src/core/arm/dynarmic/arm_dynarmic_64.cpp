@@ -23,6 +23,28 @@ namespace Core {
 
 using namespace Common::Literals;
 
+namespace {
+
+/// The JIT switches below: unset means on, a value starting with '0' turns it off.
+bool Nx2EnvOn(const char* name) {
+    const char* value = std::getenv(name);
+    return value == nullptr || value[0] != '0';
+}
+
+/// EDEN_NX2_JIT_DISPATCH: unset (or "1") gives a 4-way set associative fast dispatch table of 2^16
+/// entries (1 MiB per core instead of 16 MiB), "0" the old direct-mapped 2^20 table, a number
+/// 8-24 that many bits, 4-way.
+u32 Nx2DispatchBits() {
+    const char* value = std::getenv("EDEN_NX2_JIT_DISPATCH");
+    if (value == nullptr || value[0] == '\0' || (value[0] == '1' && value[1] == '\0')) {
+        return 16;
+    }
+    const long bits = std::strtol(value, nullptr, 10);
+    return bits >= 8 && bits <= 24 ? u32(bits) : 0;
+}
+
+} // Anonymous namespace
+
 DynarmicCallbacks64::DynarmicCallbacks64(ArmDynarmic64& parent, Kernel::KProcess* process)
     : m_parent{parent}, m_memory(process->GetMemory())
     , m_process(process), m_debugger_enabled{parent.m_system.DebuggerEnabled()}
@@ -209,11 +231,24 @@ void DynarmicCallbacks64::ExceptionRaised(u64 pc, Dynarmic::A64::Exception excep
         }
     }
     switch (exception) {
-    case Dynarmic::A64::Exception::WaitForInterrupt:
     case Dynarmic::A64::Exception::WaitForEvent:
+    case Dynarmic::A64::Exception::Yield: {
+        // A guest spin-wait hint: pause briefly, as GetCNTPCT does for polling loops.
+        // EDEN_NX2_HINT_PAUSE=0 turns it off.
+        static const bool hint_pause = Nx2EnvOn("EDEN_NX2_HINT_PAUSE");
+        if (hint_pause) {
+#if defined(_M_X64) || defined(__x86_64__)
+            _mm_pause();
+            _mm_pause();
+#elif defined(__aarch64__)
+            asm volatile("yield");
+#endif
+        }
+        return;
+    }
+    case Dynarmic::A64::Exception::WaitForInterrupt:
     case Dynarmic::A64::Exception::SendEvent:
     case Dynarmic::A64::Exception::SendEventLocal:
-    case Dynarmic::A64::Exception::Yield:
         LOG_TRACE(Core_ARM, "ExceptionRaised(exception = {}, pc = {:08X}, code = {:08X}, cached = {:08X})", std::size_t(exception), pc, m_memory.Read32(pc), MemoryReadCode(pc).value_or(0));
         return;
     case Dynarmic::A64::Exception::NoExecuteFault:
@@ -494,6 +529,48 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
         config.fastmem_pointer = std::nullopt;
         config.fastmem_exclusive_access = false;
     }
+#if defined(ARCHITECTURE_x86_64)
+    // zortos293/Lichii#717's code generation switches, all on unless set to 0. Load-acquires and
+    // DMB LD/ST are LICHII_JIT_TSO above.
+    if (Settings::values.cpu_accuracy.GetValue() != Settings::CpuAccuracy::Paranoid) {
+        // An evicted value goes to a free callee-saved GPR instead of a stack slot.
+        static const bool spill_to_gpr = Nx2EnvOn("EDEN_NX2_JIT_SPILL_GPR");
+        config.spill_to_free_gpr = spill_to_gpr;
+        // No per-block %rbp frame: three instructions per block that nothing reads.
+        static const bool no_frame = Nx2EnvOn("EDEN_NX2_JIT_NO_FRAME");
+        config.omit_block_frame = no_frame;
+        // An operand that is overwritten but still needed is copied to a free register instead of
+        // being evicted.
+        static const bool scratch_copy = Nx2EnvOn("EDEN_NX2_JIT_SCRATCH_COPY");
+        config.scratch_copy_to_free_reg = scratch_copy;
+        // ldr/str [xN, #imm]: the immediate goes into the fastmem addressing mode.
+        static const bool fold_addr = Nx2EnvOn("EDEN_NX2_JIT_FOLD_ADDR");
+        config.fold_address_offsets = fold_addr;
+        // W-register writes and zero-extends of values a 32-bit instruction produced skip the
+        // second `mov r32, r32`.
+        static const bool zext = Nx2EnvOn("EDEN_NX2_JIT_ZEXT");
+        config.elide_redundant_zext = zext;
+        // Unlinked exits jump to one shared stub per target: 5/6-byte patch sites.
+        static const bool compact_exits = Nx2EnvOn("EDEN_NX2_JIT_COMPACT_EXITS");
+        config.compact_block_exits = compact_exits;
+        // Fault and abort paths and exit stubs go to a cold region at the end of the code cache.
+        static const bool far_code = Nx2EnvOn("EDEN_NX2_JIT_FAR_CODE");
+        config.far_code = far_code;
+        // Halt checks on links to lower PCs and indirect branches instead of every link
+        // (multicore only: no cycle counting there).
+        static const bool backedge_halt = Nx2EnvOn("EDEN_NX2_JIT_BACKEDGE_HALT");
+        config.halt_check_on_back_edges = backedge_halt && !config.enable_cycle_counting;
+        // A 32-entry return stack buffer (EDEN_NX2_JIT_RSB32=0 keeps 8).
+        static const bool rsb32 = Nx2EnvOn("EDEN_NX2_JIT_RSB32");
+        config.rsb_size = rsb32 ? 32 : 8;
+        static const u32 dispatch_bits = Nx2DispatchBits();
+        config.fast_dispatch_table_bits = dispatch_bits;
+        config.fast_dispatch_set_associative = dispatch_bits != 0;
+        // Branches, CSEL and CBZ/TBZ read the host flags the instruction before them left.
+        static const bool reuse_flags = Nx2EnvOn("EDEN_NX2_JIT_FLAGS");
+        config.reuse_host_flags = reuse_flags && !config.enable_cycle_counting;
+    }
+#endif
     m_jit.emplace(config);
 }
 
