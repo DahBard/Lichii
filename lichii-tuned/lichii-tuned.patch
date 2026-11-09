@@ -15345,7 +15345,7 @@ index 158d472c0..68d329200 100644
  
  #define ASSERT_REG_POSITION(field_name, position)                                                  \
 diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
-index 1169526e2..60fd3e3d4 100644
+index 1169526e2..28d3d3e28 100644
 --- a/src/video_core/engines/maxwell_3d.cpp
 +++ b/src/video_core/engines/maxwell_3d.cpp
 @@ -7,10 +7,17 @@
@@ -16303,7 +16303,7 @@ index 1169526e2..60fd3e3d4 100644
  #else
          const auto result =
              engine.native_interpreter.Execute(engine.native_code, start, fs.parameters, read, emit);
-@@ -1490,14 +2066,400 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
+@@ -1490,14 +2066,403 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
      fs.parameters.clear();
      if (fs.draw_pending) {
          fs.draw_pending = false;
@@ -16680,13 +16680,16 @@ index 1169526e2..60fd3e3d4 100644
 +    }
 +    fs.regs[end_method] = draw->end;
 +    fs.vertex_arguments_unknown = 3;
-+    split.Defer([this, &system, arguments, device = *device, end = draw->end] {
-+        DrawFromGpuArguments(system, arguments, device, end);
-+    });
++    // A draw: guest memory it writes through the caches only (FrontNoteWrites).
++    split.Defer(
++        [this, &system, arguments, device_address = *device, end = draw->end] {
++            DrawFromGpuArguments(system, arguments, device_address, end);
++        },
++        VideoCommon::GpuSplit::Writes::Caches);
 +    // The end of the macro, as FrontRunMacro ends it (its writes include draw manager methods).
 +    fs.draw_pending = false;
 +    split.Defer([this, system_ptr = &system] { FinishFrontMacro(*system_ptr); },
-+                VideoCommon::GpuSplit::FastDrawNeutral);
++                VideoCommon::GpuSplit::Writes::Caches, VideoCommon::GpuSplit::FastDrawNeutral);
 +    return true;
 +}
 +
@@ -16705,7 +16708,7 @@ index 1169526e2..60fd3e3d4 100644
  void Maxwell3D::FrontTrackInstanceLoop(FrontState& fs, u32 method, u32 value) {
      switch (method) {
      case MAXWELL3D_REG_INDEX(draw.begin):
-@@ -1540,12 +2502,79 @@ bool Maxwell3D::FrontSkipsLoopWrite(FrontState& fs, u32 method, u32 value, bool
+@@ -1540,12 +2505,79 @@ bool Maxwell3D::FrontSkipsLoopWrite(FrontState& fs, u32 method, u32 value, bool
      return method != MAXWELL3D_REG_INDEX(draw.end) || fs.instance_loop;
  }
  
@@ -16789,7 +16792,7 @@ index 1169526e2..60fd3e3d4 100644
      const u32 words = std::min<u32>(count, 0x1000);
      const size_t read_bytes = size_t{words} * sizeof(u32);
      std::vector<u32> diag_before;
-@@ -1554,37 +2583,79 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+@@ -1554,37 +2586,79 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
          memory_manager.ReadBlockUnsafe(source, diag_before.data(), read_bytes);
      }
      VideoCommon::Nx2Profile::CountDmaRead(macro);
@@ -16894,7 +16897,7 @@ index 1169526e2..60fd3e3d4 100644
          if (method == 0x158) {
              fs.parameters.push_back(word);
          } else if (ram + i < native_data_ram.size()) {
-@@ -1593,6 +2664,12 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+@@ -1593,6 +2667,12 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
          if (!diag_before.empty() && diag_before[i] != word) {
              ++changed;
          }
@@ -16907,7 +16910,7 @@ index 1169526e2..60fd3e3d4 100644
      }
      if (Tegra::Nx2CmdPageDiag::g_enabled) {
          bool gpu_written = false;
-@@ -1604,6 +2681,216 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+@@ -1604,6 +2684,216 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
      }
  }
  
@@ -17124,7 +17127,7 @@ index 1169526e2..60fd3e3d4 100644
  void Maxwell3D::FrontVerify(VideoCommon::GpuSplit& split, FrontState& fs) {
      split.Drain(VideoCommon::DrainSite::FrontVerify);
      static u64 checks{};
-@@ -1617,6 +2904,18 @@ void Maxwell3D::FrontVerify(VideoCommon::GpuSplit& split, FrontState& fs) {
+@@ -1617,6 +2907,18 @@ void Maxwell3D::FrontVerify(VideoCommon::GpuSplit& split, FrontState& fs) {
                                 ? shadow_state.reg_array[method]
                                 : value;
      }
@@ -17143,7 +17146,7 @@ index 1169526e2..60fd3e3d4 100644
      static u64 control_differences{};
      if ((fs.control != shadow_state.shadow_ram_control ||
           fs.shadow[MAXWELL3D_REG_INDEX(shadow_ram_control)] != shadow_state.reg_array[MAXWELL3D_REG_INDEX(shadow_ram_control)] ||
-@@ -1663,6 +2962,7 @@ void Maxwell3D::FrontVerify(VideoCommon::GpuSplit& split, FrontState& fs) {
+@@ -1663,6 +2965,7 @@ void Maxwell3D::FrontVerify(VideoCommon::GpuSplit& split, FrontState& fs) {
  }
  
  void Maxwell3D::FinishFrontMacro(Core::System& system) {

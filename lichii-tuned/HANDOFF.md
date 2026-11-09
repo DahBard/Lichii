@@ -75,7 +75,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (288 commits over upstream nx2
+- Source of the patch: branch `tuned4` of DahBard/Lichii (289 commits over upstream nx2
   `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
@@ -762,6 +762,8 @@ Own changes:
     `common/pgo_training.cpp` only writes profiles), so asked for its log and the dialog's code.
 - Run #29 (round 19, Windows only) built `pgo`, `pgo-lto` and `pgo-train` (artifacts
   `lichii-tuned-r29-*`, 90/90/97 MB). Not tested yet.
+- Run #30 (round 20, Windows only): `pgo`, `pgo-lto` and `pgo-train` from tuned4 `cfe4481f0`.
+  Round 19 was skipped in testing; this is the next test.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
