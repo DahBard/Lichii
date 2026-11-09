@@ -1863,10 +1863,25 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
         const size_t precompiled_built = static_cast<size_t>(
             std::count(built.begin() + static_cast<std::ptrdiff_t>(precompiled_first), built.end(),
                        u8{1}));
+        std::string unbuildable;
+        size_t unbuildable_total = 0;
+        if (precompiled_counts) {
+            for (size_t index = 0; index < PrecompiledCounts::reasons.size(); ++index) {
+                if (const size_t count = precompiled_counts->unbuildable[index].load()) {
+                    unbuildable += fmt::format("{}{} {}", unbuildable.empty() ? "" : ", ", count,
+                                               PrecompiledCounts::reasons[index]);
+                    unbuildable_total += count;
+                }
+            }
+        }
+        const size_t total = jobs.size() - precompiled_first;
         LOG_INFO(Render_Vulkan,
-                 "Precompiled pipelines: {} of {} prepared (the others failed or can't be built "
-                 "on this device)",
-                 precompiled_built, jobs.size() - precompiled_first);
+                 "Precompiled pipelines: {} of {} prepared ({} already in the disk cache), {} not "
+                 "buildable on this device{}{}{}, {} failed",
+                 precompiled_built, total,
+                 precompiled_counts ? precompiled_counts->known.load() : 0, unbuildable_total,
+                 unbuildable.empty() ? "" : " (", unbuildable, unbuildable.empty() ? "" : ")",
+                 total - precompiled_built - unbuildable_total);
         std::ofstream stamp_file(precompiled->first, std::ios::binary | std::ios::trunc);
         stamp_file << precompiled->second;
     }
@@ -1893,7 +1908,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
 }
 
 bool PipelineCache::ConvertRecordedKey(GraphicsPipelineCacheKey& key,
-                                       std::span<FileEnvironment> envs) const {
+                                       std::span<FileEnvironment> envs, size_t* reason) const {
     // As LoadDiskResources converts the disk cache's records (keep the two alike): this driver,
     // and the form this device gives the states it sets dynamically. Fritchii skips a record made
     // for another device instead: 116,036 of 120,124 on AMD's Windows driver (zortos293/Lichii
@@ -1960,10 +1975,13 @@ bool PipelineCache::ConvertRecordedKey(GraphicsPipelineCacheKey& key,
         {fixed.color_write_enable_dynamic != 0, dynamic_features.has_color_write_enable},
         {fixed.dynamic_vertex_input != 0, dynamic_features.has_dynamic_vertex_input},
     }};
-    if (std::ranges::any_of(features, [](const auto& feature) {
-            return feature.first != feature.second;
-        })) {
-        return false;
+    for (size_t index = 0; index < features.size(); ++index) {
+        if (features[index].first != features[index].second) {
+            if (reason != nullptr) {
+                *reason = index;
+            }
+            return false;
+        }
     }
     if (fixed.dynamic_vertex_input != 0) {
         std::array<u64, Maxwell::MaxShaderProgram> attribute_masks;
@@ -1977,11 +1995,15 @@ bool PipelineCache::ConvertRecordedKey(GraphicsPipelineCacheKey& key,
         fixed.attribute_types = VideoCommon::KeyedAttributeTypes(
             fixed.attribute_types, key.unique_hashes, attribute_masks);
     }
-    if (fixed.provoking_vertex_last != 0 && !dynamic_features.has_provoking_vertex_last_mode) {
+    if ((fixed.provoking_vertex_last != 0 && !dynamic_features.has_provoking_vertex_last_mode) ||
+        (fixed.xfb_enabled != 0 && fixed.provoking_vertex_last != 0 &&
+         !dynamic_features.has_provoking_vertex_tf_preserve)) {
+        if (reason != nullptr) {
+            *reason = features.size();
+        }
         return false;
     }
-    return fixed.xfb_enabled == 0 || fixed.provoking_vertex_last == 0 ||
-           dynamic_features.has_provoking_vertex_tf_preserve;
+    return true;
 }
 
 std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddPrecompiledJobs(
@@ -2086,8 +2108,10 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     }
     // Graphics pipelines the disk cache holds were built at boot already.
     const auto known = std::make_shared<const std::unordered_set<u64>>(disk_pipelines);
+    const auto counts = std::make_shared<PrecompiledCounts>();
+    precompiled_counts = counts;
     for (const u64 offset : record_offsets) {
-        jobs.push_back({0, [this, path, env_index, known, offset]() -> bool {
+        jobs.push_back({0, [this, path, env_index, known, counts, offset]() -> bool {
                             std::ifstream in(path, std::ios::binary);
                             in.exceptions(std::ifstream::failbit);
                             in.seekg(static_cast<std::streamoff>(offset));
@@ -2122,10 +2146,13 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                                                              nullptr, false)
                                            .pipeline != nullptr;
                             }
-                            if (!ConvertRecordedKey(record_key, envs)) {
+                            if (size_t reason = 0;
+                                !ConvertRecordedKey(record_key, envs, &reason)) {
+                                ++counts->unbuildable[reason];
                                 return false;
                             }
                             if (known->contains(record_key.Hash())) {
+                                ++counts->known;
                                 return true;
                             }
                             boost::container::static_vector<Shader::Environment*,

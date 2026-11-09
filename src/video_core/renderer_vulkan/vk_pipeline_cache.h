@@ -220,9 +220,22 @@ private:
     std::optional<std::pair<std::filesystem::path, std::string>> AddPrecompiledJobs(
         u64 title_id, std::vector<PrecacheJob>& jobs, std::stop_token stop_loading);
     /// A recorded graphics key in this device's form, converted as LoadDiskResources converts the
-    /// disk cache's records. False when this device can't build it.
+    /// disk cache's records. False when this device can't build it; `reason` is then the index
+    /// of what it lacks in PrecompiledCounts::unbuildable.
     [[nodiscard]] bool ConvertRecordedKey(GraphicsPipelineCacheKey& key,
-                                          std::span<VideoCommon::FileEnvironment> envs) const;
+                                          std::span<VideoCommon::FileEnvironment> envs,
+                                          size_t* reason = nullptr) const;
+    /// What the last precompiled preparation's records came to, for its log line (as Fritchii
+    /// v5.3 logs its skips, 1fa49c5c3).
+    struct PrecompiledCounts {
+        static constexpr std::array<const char*, 8> reasons{
+            "EDS1",          "EDS2",         "EDS2 logic op",        "EDS3 blend",
+            "EDS3 enables",  "color write enable", "dynamic vertex input", "provoking vertex",
+        };
+        std::atomic<size_t> known{}; ///< Graphics pipelines the disk cache held (built at boot)
+        std::array<std::atomic<size_t>, reasons.size()> unbuildable{};
+    };
+    std::shared_ptr<PrecompiledCounts> precompiled_counts;
 
     const Device& device;
     Scheduler& scheduler;
