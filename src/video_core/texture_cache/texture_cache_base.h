@@ -436,6 +436,7 @@ public:
         u32 framebuffers_removed{};
         u32 framebuffers_scanned{}; ///< Framebuffer map entries RemoveFramebuffers looked at
         u32 framebuffers_created{};
+        u32 pooled_images{};        ///< New images that took a recycled VkImage (EDEN_NX2_EXP42)
         u32 relocated_images{};     ///< Images moved instead of made (EDEN_NX2_EXP43 2-4)
         u32 retired_images{};       ///< Predecessors deleted at once (EDEN_NX2_EXP43=1)
         u64 walk_ns{};              ///< JoinImages' overlap walk

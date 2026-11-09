@@ -2886,6 +2886,17 @@ void TextureCacheRuntime::LogMemoryStatistics() const {
     Vulkan::LogMemoryStatistics(device);
 }
 
+void TextureCacheRuntime::LogImageRecycler() {
+    const auto stats = vk::ImageRecycler::TakeStats();
+    if (stats.taken + stats.missed + stats.kept + stats.dropped == 0) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan,
+             "Image recycler (EXP42) last 600 frames: {} taken, {} missed, {} kept, {} dropped; "
+             "holds {} images, {} MiB",
+             stats.taken, stats.missed, stats.kept, stats.dropped, stats.images, stats.bytes >> 20);
+}
+
 void TextureCacheRuntime::LogMemoryTrace() {
     LOG_INFO(Render_Vulkan, "Memory trace: staging upload {} MiB, download {} MiB, device {} MiB",
              staging_buffer_pool.CachedBytes(MemoryUsage::Upload) >> 20,

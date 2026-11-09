@@ -1954,15 +1954,16 @@ void RasterizerVulkan::Clear(u32 layer_count) {
             const auto& s = *clear_tc_stats;
             const auto ns_us = [](u64 ns) { return ns / 1000; };
             LOG_INFO(Render_Vulkan,
-                     "Slow clear texture cache: {} joins, {} created, {} relocated, {} retired, "
-                     "{} deleted, {} overlaps walked ({} bad), {} KiB uploaded; framebuffers {} "
-                     "created, {} removed, {} scanned, {} in the map; {} images; walk {} us, "
-                     "create {} us, upload {} us, delete {} us, framebuffers {} us",
-                     s.joins, s.images_created, s.relocated_images, s.retired_images,
-                     s.images_deleted, s.overlaps_walked, s.bad_overlaps, s.uploaded_bytes >> 10,
-                     s.framebuffers_created, s.framebuffers_removed, s.framebuffers_scanned,
-                     s.framebuffer_map_size, s.image_count, ns_us(s.walk_ns), ns_us(s.create_ns),
-                     ns_us(s.refresh_ns), ns_us(s.delete_ns), ns_us(s.framebuffer_ns));
+                     "Slow clear texture cache: {} joins, {} created ({} pooled), {} relocated, {} "
+                     "retired, {} deleted, {} overlaps walked ({} bad), {} KiB uploaded; "
+                     "framebuffers {} created, {} removed, {} scanned, {} in the map; {} images; "
+                     "walk {} us, create {} us, upload {} us, delete {} us, framebuffers {} us",
+                     s.joins, s.images_created, s.pooled_images, s.relocated_images,
+                     s.retired_images, s.images_deleted, s.overlaps_walked, s.bad_overlaps,
+                     s.uploaded_bytes >> 10, s.framebuffers_created, s.framebuffers_removed,
+                     s.framebuffers_scanned, s.framebuffer_map_size, s.image_count,
+                     ns_us(s.walk_ns), ns_us(s.create_ns), ns_us(s.refresh_ns),
+                     ns_us(s.delete_ns), ns_us(s.framebuffer_ns));
         }
     };
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -41,6 +42,17 @@
 
 namespace Vulkan {
 namespace {
+
+/// EDEN_NX2_EXP42, Fritchii's VkImage pool for deleted render targets, which the image recycler
+/// covers (vk::ImageRecycler: every deleted device-local image, kept for the next image of its
+/// create info): 1 (default) recycles, 0 makes and frees every image as before the recycler.
+bool RecyclerEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_EXP42");
+        return value == nullptr || value[0] == '\0' || std::atoi(value) != 0;
+    }();
+    return enabled;
+}
 
 // Helpers translating MemoryUsage to flags/usage
 
@@ -306,11 +318,12 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
     VmaAllocationInfo alloc_info{};
     // An image of the same create info released before is taken from the recycler instead
     // (vk::ImageRecycler).
-    const u64 recycle_key = vk::ImageRecycler::KeyOf(ci, dedicated);
+    const u64 recycle_key = RecyclerEnabled() ? vk::ImageRecycler::KeyOf(ci, dedicated) : 0;
     if (recycle_key != 0 && vk::ImageRecycler::Take(recycle_key, allocator, handle, allocation)) {
         image = vk::Image(handle, ci.usage, *device.GetLogical(), allocator, allocation,
                           device.GetDispatchLoader());
         image.SetRecycleKey(recycle_key);
+        image.MarkRecycled();
         return VK_SUCCESS;
     }
     const u64 texels = u64{ci.extent.width} * ci.extent.height * ci.extent.depth * ci.arrayLayers;

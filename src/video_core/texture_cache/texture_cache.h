@@ -779,6 +779,11 @@ void TextureCache<P>::TickFrame() {
     }
     TickRenderClock();
     TickRelocationTombstones();
+    if (frame_tick % 600 == 0) {
+        if constexpr (requires { runtime.LogImageRecycler(); }) {
+            runtime.LogImageRecycler();
+        }
+    }
 
     if constexpr (IMPLEMENTS_ASYNC_DOWNLOADS) {
         for (auto& buffer : async_buffers_death_ring) {
@@ -3613,6 +3618,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     const auto create_start = std::chrono::steady_clock::now();
     const ImageId new_image_id = slot_images.insert(runtime, new_info, gpu_addr, cpu_addr);
     rt_stats.create_ns += NsSince(create_start);
+    if constexpr (requires(const Image& image) { image.FromPool(); }) {
+        rt_stats.pooled_images += slot_images[new_image_id].FromPool() ? 1 : 0;
+    }
     if constexpr (requires(const Image& image) { image.OutOfMemory(); }) {
         if (slot_images[new_image_id].OutOfMemory()) {
             // Left out of the cache: lookups see no image (a null view) and make it again once
