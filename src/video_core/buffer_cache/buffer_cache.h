@@ -19,6 +19,7 @@
 #include <vector>
 #include <fmt/ranges.h>
 
+#include "common/nx2_experiment.h"
 #include "common/range_sets.inc"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/multi_range_refresh.h"
@@ -3176,9 +3177,21 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
 
 template <class P>
 void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-    if (buffer_id != NULL_BUFFER_ID) {
-        lru_cache.Touch(buffer.getLRUID(), frame_tick);
+    if (buffer_id == NULL_BUFFER_ID) {
+        return;
     }
+    // EDEN_NX2_EXP18 & 4 (Fritchii, from zortos293/Lichii#641 5d5d3bdd3d; default 4): the
+    // buffer's own field instead of its LRU node, a cache miss, for every bind of the frame. A
+    // second touch in the same frame changed nothing (LeastRecentlyUsedCache::Touch keeps a tick
+    // that is not older). Bits 1 and 2 (binding memos) are not ported.
+    static const bool once_a_frame = (Common::ReadNx2Experiment(18, 4) & 4) != 0;
+    if (once_a_frame) {
+        if (buffer.lru_touched_tick == frame_tick) {
+            return;
+        }
+        buffer.lru_touched_tick = frame_tick;
+    }
+    lru_cache.Touch(buffer.getLRUID(), frame_tick);
 }
 
 template <class P>
