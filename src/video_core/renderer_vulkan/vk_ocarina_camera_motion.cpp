@@ -560,8 +560,12 @@ class OcarinaEffectsPass final : public ComputePass {
         return result;
     }();
     static constexpr DescriptorBankInfo bank{.textures = Inputs, .images = 1, .score = Inputs + 1};
+    struct Controls {
+        u32 control;
+        f32 scale;
+    };
     static constexpr std::array push{
-        VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(u32)}};
+        VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Controls)}};
 
 public:
     OcarinaEffectsPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool,
@@ -569,8 +573,9 @@ public:
         : ComputePass(device_, scheduler, pool, bindings, templates, bank, push, code) {}
 
     void Record(Scheduler& scheduler, const void* descriptors, VkImage output, VkExtent2D extent,
-                u32 control = 0) {
-        scheduler.Record([this, descriptors, output, extent, control](vk::CommandBuffer cmd) {
+                u32 control = 0, f32 scale = 1.0f) {
+        const Controls controls{control, scale};
+        scheduler.Record([this, descriptors, output, extent, controls](vk::CommandBuffer cmd) {
             const VkMemoryBarrier inputs{
                 .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
                 .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
@@ -586,7 +591,7 @@ public:
             device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptors);
             cmd.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
             cmd.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
-            cmd.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, control);
+            cmd.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, controls);
             cmd.Dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
             // The game draws over or overwrites the inputs next.
             const VkMemoryBarrier complete{
@@ -984,8 +989,16 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
         state.queue.AddSampledImage(*effects.mark_views[previous_mark % 2], sampler);
         state.queue.AddSampledImage(*resources.motion_view, sampler);
         state.queue.AddImage(*effects.bias_view);
+        // LICHII_FSR_REACTIVE: the mask's strength on jittered frames (0 to 1, default 0.5).
+        static const f32 jittered_reactive = [] {
+            const char* const value = std::getenv("LICHII_FSR_REACTIVE");
+            const f32 parsed = value != nullptr ? static_cast<f32>(std::atof(value)) : 0.5f;
+            return std::isfinite(parsed) ? std::clamp(parsed, 0.0f, 1.0f) : 0.5f;
+        }();
+        const bool jittered = jitter[0] != 0.0f || jitter[1] != 0.0f;
         state.effects_bias_pass->Record(state.scheduler, state.queue.UpdateData(), *effects.bias,
-                                        extent, has_previous ? 1 : 0);
+                                        extent, has_previous ? 1 : 0,
+                                        jittered ? jittered_reactive : 1.0f);
         bias_view = *effects.bias_view;
         bias_image = *effects.bias;
     }

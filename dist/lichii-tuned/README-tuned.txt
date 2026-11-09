@@ -127,6 +127,12 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    waits only for the words GPU work wrote, and lets the GPU read compute parameters it wrote
    itself; uploads are batched into fewer commands. ab-18 brings back round 17's behaviour,
    verify-r18 checks the shortcuts against the slow way while you play.
+ * Round 19: the shimmering textures where water meets the screen's edges with FSR's jitter
+   (round 18) are addressed. Pixels FSR is told to take from the current frame (glows,
+   particles and, as it turned out, water drawn after the fog) are taken half from the current
+   frame while jittering, so they keep some of their history (LICHII_FSR_REACTIVE, 0 to 1,
+   default 0.5; ab-19 brings round 18's full strength back), and that mask no longer spreads
+   along the screen's edges while the camera moves.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -171,6 +177,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               backoff, wider core masks), logged like perf-trace.bat
  ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
                               macro reads, list waits and uploads), logged like perf-trace.bat
+ ab-19-round18-reactive.bat   FSR's reactive mask at round 18's full strength on jittered
+                              frames (LICHII_FSR_REACTIVE=1), logged like perf-trace.bat
+ ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
+                              spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
+                              power-limited laptop, compare the frame rate with the default
  verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
                               differences ("not met after the drain", "differing" and mismatch
                               counts should stay 0); slower
