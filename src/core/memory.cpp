@@ -25,7 +25,6 @@
 #include "common/common_types.h"
 #include "common/heap_tracker.h"
 #include "common/logging.h"
-#include "common/nx2_experiment.h"
 #include "common/page_table.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -79,9 +78,11 @@ static bool SysSlotEnabled() {
 /// 2; 43.0 -> 46.5 fps standing). 1 = only pages no GPU write ever marked (Nx2MayBeGpuWritten, bits
 /// that never clear), 2 = every page (OnCPUWrite collected the writes of GPU-modified ones
 /// already), 0 = as before. A collected write reaches the caches at the GPU thread's next
-/// InvalidateGPUCache (fences, flushes), not at once. Switch 2 titles only.
+/// InvalidateGPUCache, not at once. Switch 2 titles only.
+/// The GPU applies collected writes before each command list, after semaphore acquires and before
+/// accelerated DMA (Core::g_writes_collected), so draws and copies don't read the old host copies.
 static bool CollectsUnasked(DAddr address, u64 size) {
-    static const int mode = Common::ReadNx2Experiment(35, 2);
+    const int mode = Core::Nx2CollectMode();
     return mode != 0 && Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
            (mode == 2 || !Tegra::Nx2MayBeGpuWritten(address, size));
 }

@@ -120,6 +120,8 @@ struct GPU::Impl {
                 writes.emplace_back(address, size);
             }
         });
+        // Before the gather: a write recorded after it sets the flag again.
+        Core::g_writes_collected.exchange(false, std::memory_order_acq_rel);
         system.GatherGPUDirtyMemory(callback_writes);
         if (!writes.empty()) {
             renderer->ReadRasterizer()->OnCacheInvalidations(writes);

@@ -62,7 +62,7 @@ class StateTracker;
 
 class AccelerateDMA : public Tegra::Engines::AccelerateDMAInterface {
 public:
-    explicit AccelerateDMA(BufferCache& buffer_cache, TextureCache& texture_cache,
+    explicit AccelerateDMA(Tegra::GPU& gpu, BufferCache& buffer_cache, TextureCache& texture_cache,
                            Scheduler& scheduler);
 
     bool BufferCopy(GPUVAddr start_address, GPUVAddr end_address, u64 amount) override;
@@ -81,6 +81,10 @@ private:
                             const Tegra::DMA::BufferOperand& src,
                             const Tegra::DMA::ImageOperand& dst);
 
+    /// EDEN_NX2_EXP35: applies the guest writes collected since the last gather.
+    void ApplyCollectedWrites();
+
+    Tegra::GPU& gpu;
     BufferCache& buffer_cache;
     TextureCache& texture_cache;
     Scheduler& scheduler;

@@ -12,9 +12,23 @@
 #include <utility>
 #include <vector>
 
+#include "common/nx2_experiment.h"
 #include "core/device_memory_manager.h"
 
 namespace Core {
+
+/// EDEN_NX2_EXP35 (Fritchii v5.2, default 2): guest writes of cached memory are collected here for
+/// the GPU thread instead of being applied to its caches at once (Core::Memory's
+/// HandleRasterizerWrite): 1 = writes to pages no GPU write ever marked, 2 = all, 0 = off.
+[[nodiscard]] inline int Nx2CollectMode() {
+    static const int mode = Common::ReadNx2Experiment(35, 2);
+    return mode;
+}
+
+/// Set when a dirty memory manager records a new write, cleared when GPU::InvalidateGPUCache takes
+/// them: with EDEN_NX2_EXP35 the GPU applies them before each command list, after semaphore
+/// acquires and before accelerated DMA while it is set (DmaPusher::ApplyCollectedWrites).
+inline std::atomic<bool> g_writes_collected{};
 
 class GPUDirtyMemoryManager {
 public:
@@ -119,6 +133,7 @@ private:
                     std::scoped_lock lk(guard);
                     back_buffer.emplace_back(tmp);
                     current.exchange(t, std::memory_order_relaxed);
+                    NoteCollected();
                     return;
                 }
                 tmp.address = t.address;
@@ -130,6 +145,14 @@ private:
             tmp.mask |= t.mask;
         } while (!current.compare_exchange_weak(original, tmp, std::memory_order_release,
                                                 std::memory_order_relaxed));
+        NoteCollected();
+    }
+
+    /// Writes already pending set it when they were recorded: only new ones store.
+    static void NoteCollected() noexcept {
+        if (!g_writes_collected.load(std::memory_order_acquire)) {
+            g_writes_collected.store(true, std::memory_order_release);
+        }
     }
 
     template <typename Func>

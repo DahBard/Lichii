@@ -18,6 +18,7 @@
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "core/memory.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/dma_pusher.h"
@@ -165,7 +166,26 @@ bool DmaPusher::CanResumeAcquire() {
     return puller.CanResumeAcquire(*this);
 }
 
+void DmaPusher::ApplyCollectedWrites() {
+    if (Core::Nx2CollectMode() == 0 || !Core::g_writes_collected.load(std::memory_order_acquire)) {
+        return;
+    }
+    const auto apply = [gpu = &system.GPU()] {
+        if (Core::g_writes_collected.load(std::memory_order_acquire)) {
+            gpu->InvalidateGPUCache();
+        }
+    };
+    if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+        split.Defer(apply, VideoCommon::GpuSplit::Writes::Caches);
+    } else {
+        apply();
+    }
+}
+
 void DmaPusher::DispatchCalls() {
+    // The guest wrote what this list's draws, dispatches and copies read before it submitted the
+    // list, or before it released the semaphore a resumed channel waited for.
+    ApplyCollectedWrites();
     // The sub-index is kept: a channel suspended on a semaphore resumes inside its command list.
     dma_state.is_last_call = true;
     while (system.IsPoweredOn()) {

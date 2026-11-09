@@ -36,6 +36,7 @@
 #include "common/nx2_experiment.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/gpu_wait_stats.h"
@@ -437,7 +438,7 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       pipeline_cache(device_memory, device, scheduler, descriptor_pool, guest_descriptor_queue,
                      descriptor_buffer_ring, render_pass_cache, buffer_cache, texture_cache,
                      gpu.ShaderNotify()),
-      accelerate_dma(buffer_cache, texture_cache, scheduler),
+      accelerate_dma(gpu, buffer_cache, texture_cache, scheduler),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       frame_dump(device, memory_allocator, scheduler) {
     scheduler.SetQueryCache(query_cache);
@@ -3832,16 +3833,27 @@ void RasterizerVulkan::FlushWork() {
     }
 }
 
-AccelerateDMA::AccelerateDMA(BufferCache& buffer_cache_, TextureCache& texture_cache_,
-                             Scheduler& scheduler_)
-    : buffer_cache{buffer_cache_}, texture_cache{texture_cache_}, scheduler{scheduler_} {}
+AccelerateDMA::AccelerateDMA(Tegra::GPU& gpu_, BufferCache& buffer_cache_,
+                             TextureCache& texture_cache_, Scheduler& scheduler_)
+    : gpu{gpu_}, buffer_cache{buffer_cache_}, texture_cache{texture_cache_},
+      scheduler{scheduler_} {}
+
+void AccelerateDMA::ApplyCollectedWrites() {
+    // A copy from memory the guest wrote since its command list began (Core::Memory collected the
+    // writes, EDEN_NX2_EXP35) would take the old host copy, and its destination would keep it.
+    if (Core::Nx2CollectMode() != 0 && Core::g_writes_collected.load(std::memory_order_acquire)) {
+        gpu.InvalidateGPUCache();
+    }
+}
 
 bool AccelerateDMA::BufferClear(GPUVAddr src_address, u64 amount, u32 value) {
+    ApplyCollectedWrites();
     std::scoped_lock lock{buffer_cache.mutex};
     return buffer_cache.DMAClear(src_address, amount, value);
 }
 
 bool AccelerateDMA::BufferCopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount) {
+    ApplyCollectedWrites();
     std::scoped_lock lock{buffer_cache.mutex};
     const Tegra::Nx2ListStats::WriterScope list_writer{Tegra::Nx2ListStats::Writer::Copy,
                                                        src_address};
@@ -3858,6 +3870,7 @@ template <bool IS_IMAGE_UPLOAD>
 bool AccelerateDMA::DmaBufferImageCopy(const Tegra::DMA::ImageCopy& copy_info,
                                        const Tegra::DMA::BufferOperand& buffer_operand,
                                        const Tegra::DMA::ImageOperand& image_operand) {
+    ApplyCollectedWrites();
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
     const auto image_id = texture_cache.DmaImageId(image_operand, IS_IMAGE_UPLOAD);
     if (image_id == VideoCommon::NULL_IMAGE_ID) {
