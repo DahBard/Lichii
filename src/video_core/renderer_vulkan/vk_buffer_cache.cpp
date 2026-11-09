@@ -28,6 +28,13 @@
 
 namespace Vulkan {
 namespace {
+// LICHII_UPLOAD_BATCH=0: every in-order upload from the stream buffer records its own command
+// and pair of barriers, as before upload batching.
+const bool g_upload_batching = [] {
+    const char* value = std::getenv("LICHII_UPLOAD_BATCH");
+    return value == nullptr || value[0] != '0';
+}();
+
 void HostReadBarrier(vk::CommandBuffer cmdbuf) {
     const VkMemoryBarrier barrier{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -489,11 +496,17 @@ void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
     if (master.IsFree(tick)) {
         return;
     }
+    // The split's front waits for the GPU: the back runs meanwhile what the front sent, also the
+    // entries since the front's last publish, which it does not see yet (fewer than 256 words).
+    auto& split = VideoCommon::GpuSplit::Get();
+    const bool front = !VideoCommon::GpuSplit::OnBackThread() && split.Active();
+    if (front) {
+        split.Publish();
+    }
     // The copy's submission may be deferred (Scheduler::DeferFlush): the split's front asks the
     // back for it rather than waiting for the back's next submission. If the back has stopped,
     // nothing else uses the scheduler and Wait submits it.
-    if (!scheduler.IsSubmitted(tick) && VideoCommon::GpuSplit::Get().Active() &&
-        !VideoCommon::GpuSplit::OnBackThread()) {
+    if (!scheduler.IsSubmitted(tick) && front) {
         VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::ListSubmitWait};
         if (!scheduler.WaitSubmitted(tick)) {
             scheduler.Wait(tick);
@@ -557,6 +570,14 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
     }
 
     scheduler.RequestOutsideRenderPassOperationContext();
+    if (g_upload_batching && barrier && src_buffer == staging_pool.StreamBuf() &&
+        !vk_copies.empty()) {
+        // An upload in order, with these barriers. Runs of them (Ocarina of Time's inline writes
+        // into GPU-written pages: ~600 a frame) go in one command between one pair of them.
+        scheduler.RecordUpload(src_buffer, dst_buffer,
+                               std::span<const VkBufferCopy>(vk_copies.data(), vk_copies.size()));
+        return;
+    }
     scheduler.Record([src_buffer, dst_buffer, vk_copies, barrier](vk::CommandBuffer cmdbuf) {
         if (barrier) {
             cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER,
@@ -564,8 +585,11 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
         }
         cmdbuf.CopyBuffer(src_buffer, dst_buffer, vk_copies);
         if (barrier) {
+            // Later transfers too: a reordered upload of the same bytes in a later
+            // submission has no barrier of its own before it.
             cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   vk::PIPELINE_STAGE_GRAPHICS_COMPUTE, 0, WRITE_BARRIER);
+                                   vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER, 0,
+                                   WRITE_BARRIER);
         }
     });
 }

@@ -102,6 +102,7 @@ add_library(video_core STATIC
     macro_memo.h
     macro_turing.h
     fence_manager.h
+    front_qmd.h
     gpu.cpp
     gpu.h
     gpu_timestamp.h
@@ -109,6 +110,7 @@ add_library(video_core STATIC
     gpu_split.h
     gpu_thread.cpp
     gpu_thread.h
+    gpu_wait_stats.h
     guest_memory.h
     invalidation_accumulator.h
     memory_manager.cpp
@@ -120,8 +122,13 @@ add_library(video_core STATIC
     nx2_cmdpage_diag.h
     nx2_debug_control.cpp
     nx2_debug_control.h
+    nx2_drain_check.h
+    nx2_entry_check.h
     nx2_fast_draw.cpp
     nx2_fast_draw.h
+    nx2_list_indirect.h
+    nx2_list_indirect_stats.h
+    nx2_list_stats.h
     nx2_profile.h
     nx2_perf.h
     nx2_download_trace.h
@@ -176,6 +183,8 @@ add_library(video_core STATIC
     renderer_vulkan/framebuffer_limits.h
     renderer_vulkan/maxwell_to_vk.cpp
     renderer_vulkan/maxwell_to_vk.h
+    renderer_vulkan/nx2_list_slots.cpp
+    renderer_vulkan/nx2_list_slots.h
     renderer_vulkan/pipeline_build.h
     renderer_vulkan/pipeline_build_trace.h
     renderer_vulkan/pipeline_helper.h
@@ -233,6 +242,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_rasterizer.cpp
     renderer_vulkan/vk_rasterizer.h
     renderer_vulkan/submission_policy.h
+    renderer_vulkan/upload_batch.h
     renderer_vulkan/vk_render_pass_cache.cpp
     renderer_vulkan/vk_render_pass_cache.h
     renderer_vulkan/vk_resource_pool.cpp

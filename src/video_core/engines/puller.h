@@ -85,8 +85,25 @@ public:
         bool reported;
         u32 unmet_polls{}; ///< polls answered from guest memory, unmet
         std::chrono::steady_clock::time_point last_drain{}; ///< of the back, for this acquire
+        /// GpuSplit::LastWriterPosition when the acquire was sent: compute and copy work before
+        /// it may release the word without the front's knowing (QMD releases).
+        u64 writers_before{};
+        /// A flush of the word out of the buffer cache, sent to the split's back: until the back
+        /// ran it, memory may hold an older value than the cache.
+        std::optional<u64> flush_position{};
+        /// GpuSplit::Position when the acquire was sent, and whether the fence work was sent
+        /// since: once the back ran everything before the acquire and it still waits, as after
+        /// the drain this replaces.
+        u64 sent_at{};
+        bool fences_released{};
+        /// CanResumeAcquire found it met: the channel resumes when it runs next, without
+        /// asking again (Control::Scheduler asks before it runs a suspended channel).
+        bool met{};
+        bool flushed{}; ///< TEST (EDEN_NX2_ACQUIRE_STATS): a flush was sent for it
 
         [[nodiscard]] bool Matches(u32 current) const;
+        /// Whether it waits for the word to reach `value` (greater or equal).
+        [[nodiscard]] bool WaitsToReach() const;
     };
 
     [[nodiscard]] bool HasPendingAcquire() const {
@@ -152,6 +169,11 @@ private:
     void ProcessSemaphoreRelease(DmaPusher& dma_pusher);
     void ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher);
     void ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument);
+    /// Decides a Switch 2 acquire from the split's view of the semaphore words: passes it, or
+    /// suspends the channel on it. False when the view doesn't apply (drain as before).
+    bool AcquireWithoutDrain(DmaPusher& dma_pusher, PendingAcquire& acquire);
+    /// CanResumeAcquire for an acquire the view decides, at `device`.
+    bool PollWithoutDrain(DmaPusher& dma_pusher, u64 device);
     [[nodiscard]] bool ExecuteMethodOnEngine(DmaPusher& dma_pusher, u32 method);
 
     std::optional<PendingAcquire> pending_acquire;
@@ -163,7 +185,7 @@ private:
     std::unordered_map<GPUVAddr, QueuedRelease> queued_releases;
     /// Whether no queued write or undownloaded GPU write can change the semaphore at `address`.
     bool StableSemaphore(DmaPusher& dma_pusher, GPUVAddr address);
-    void NoteRelease(GPUVAddr address, u32 payload);
+    void NoteQueuedRelease(GPUVAddr address, u32 payload);
     /// The payload of this channel's queued release at `address`, if it is still queued and is
     /// the last write to it before what is sent now.
     std::optional<u32> OwnQueuedRelease(DmaPusher& dma_pusher, GPUVAddr address);

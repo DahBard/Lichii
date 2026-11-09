@@ -3293,14 +3293,58 @@ private:
 
     void ProcessMacro(Core::System& system, u32 method, const u32* base_start, u32 amount, bool is_last_call);
 
-    u32 ProcessShadowRam(u32 method, u32 argument);
+    /// The value a write leaves in the register, as the shadow RAM mode has it: the argument
+    /// (tracked in shadow_state when tracking), or the shadow copy when replaying.
+    u32 ProcessShadowRam(u32 method, u32 argument) {
+        const auto control = shadow_state.shadow_ram_control;
+        if (control == Regs::ShadowRamControl::Track ||
+            control == Regs::ShadowRamControl::TrackWithFilter) {
+            return shadow_state.reg_array[method] = argument;
+        }
+        if (control == Regs::ShadowRamControl::Replay) {
+            return shadow_state.reg_array[method];
+        }
+        return argument;
+    }
 
-    void ProcessDirtyRegisters(u32 method, u32 argument);
+    /// Stores a register's value and sets its dirty flags. Defined here, as the hot method paths
+    /// call it for nearly every write.
+    void ProcessDirtyRegisters(u32 method, u32 argument) {
+        // The instances after the first are drawn together once their loop ends, and they must
+        // see the state they were begun with: NVN's draw macros reset the base instance (and its
+        // copy in c[0][0x644]) right after the loop, before the macro returns.
+        if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method))
+            [[unlikely]] {
+            draw_manager.DrawDeferred(*this, true);
+        }
+        if (VideoCommon::Nx2FastDraw::Enabled() && regs.reg_array[method] != argument &&
+            !IsFastDrawParameter(method)) {
+            VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Register, method);
+        }
+        regs.reg_array[method] = argument;
+        for (const auto& table : dirty.tables) {
+            dirty.flags[table[method]] = true;
+        }
+    }
+
+    /// CallMethodFast for a state register (not in execution_mask): a write of the value the
+    /// register holds changes nothing (EDEN_NX2_SKIP_SAME=0 keeps it).
+    void WriteStateRegister(u32 method, u32 method_argument) {
+        const u32 argument = ProcessShadowRam(method, method_argument);
+        if (!SkipSameValueWrites() || regs.reg_array[method] != argument) {
+            ProcessDirtyRegisters(method, argument);
+        }
+    }
 
     void ConsumeSinkImpl(Core::System& system) override;
 
     void ProcessMethodCall(u32 method, u32 argument, u32 nonshadow_argument, bool is_last_call);
 
+    /// CallMethod after the split's checks: CallMethodFast, or CallMethodSlow where it can't.
+    void DispatchMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call);
+    /// CallMethod with EDEN_NX2_GPU_PROFILE: DispatchMethod, counted and timed.
+    void ProfiledCallMethod(Core::System& system, u32 method, u32 method_argument,
+                            bool is_last_call);
     /// CallMethod with every check, for the cases and tools CallMethodFast leaves out.
     void CallMethodSlow(Core::System& system, u32 method, u32 method_argument, bool is_last_call);
     void CallMethodFast(u32 method, u32 method_argument, bool is_last_call);
@@ -3401,6 +3445,12 @@ private:
         return value == nullptr || value[0] != '0';
     }();
     const bool perf_verify = VideoCommon::Nx2Perf::Verify();
+    // EDEN_NX2_DMA_READ_VERIFY=1: a macro DMA read the front makes without draining the split
+    // (FrontDmaRead) drains it anyway and has the caches write the words out, as every read
+    // did before, and the macro gets those words. The front counts the reads whose words
+    // differ from the ones it read first and logs the counts every 10 s, the first 16 reads
+    // with their words. The differences must stay 0. Read per engine, as the switch above.
+    const bool dma_read_verify = std::getenv("EDEN_NX2_DMA_READ_VERIFY") != nullptr;
     /// Parameters that have been submitted to the macro call so far.
     std::vector<u32> macro_params;
 
@@ -3424,15 +3474,26 @@ private:
     void FrontWrite(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 argument,
                     bool is_last_call, bool from_macro);
     void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
+    bool FrontRunOnBack(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state,
+                        const MacroEngine& engine, u32 start);
+    std::vector<std::pair<u32, u32>> FrontRunTheOldWay(VideoCommon::GpuSplit& split,
+                                                       const FrontState& state, u32 start);
+    u32 FrontRegister(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
+    bool FrontTakeOver(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
     void FrontTrackInstanceLoop(FrontState& state, u32 method, u32 value);
     bool FrontSkipsLoopWrite(FrontState& state, u32 method, u32 value, bool shadow_kept);
+    void FrontNoteWrites(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
+                         u32 amount);
     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
                       u32 count);
-    void FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 amount,
-                         const u32* values);
+    std::span<const u32> FrontDmaReadTuned4(VideoCommon::GpuSplit& split, FrontState& state,
+                                            u32 macro, u32 method, GPUVAddr source, u32 words);
+    void FrontTrackWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method,
+                          u32 amount, const u32* values);
     /// Calls func(index, device address) for `count` words from `begin`, while it returns true.
     template <typename Func>
     bool DeviceWords(GPUVAddr begin, u32 count, Func&& func);
+    void FrontNoteReport(VideoCommon::GpuSplit& split, const FrontState& state);
     void FrontVerify(VideoCommon::GpuSplit& split, FrontState& state);
     void FinishFrontMacro(Core::System& system);
     std::unique_ptr<FrontState> front;

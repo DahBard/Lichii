@@ -22,6 +22,7 @@
 #include "common/settings.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_split.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
@@ -296,9 +297,17 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     };
     u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
     u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
+    // The GPU thread split's back entry this report came in: the front counts the report in
+    // memory once its operation ran with a fence (GpuSplit::NoteFencedWrite).
+    const std::optional<u64> split_entry = VideoCommon::GpuSplit::Get().BackEntry();
     std::function<void()> operation([this, streamer, query_base = query, query_location,
                                      pointer, pointer_timestamp, cpu_addr, addr,
-                                     asid = gpu_memory->GetID(), counter_type] {
+                                     asid = gpu_memory->GetID(), counter_type, split_entry] {
+        SCOPE_EXIT {
+            if (split_entry) {
+                VideoCommon::GpuSplit::Get().NoteFencedWrite(*split_entry);
+            }
+        };
         if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
             if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Discard)) {
                 LOG_INFO(HW_GPU,
@@ -333,7 +342,10 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
             u32 value = static_cast<u32>(query_base->value);
             std::memcpy(pointer, &value, sizeof(value));
         }
-        Tegra::Nx2SemaphoreWaiters::Get().OnWrite(cpu_addr, static_cast<u32>(query_base->value));
+        Tegra::Nx2SemaphoreWaiters::Get().OnWrite(
+            cpu_addr, static_cast<u32>(query_base->value),
+            counter_type == QueryType::Payload ? Tegra::Nx2SemaphoreWaiters::Source::PayloadRelease
+                                               : Tegra::Nx2SemaphoreWaiters::Source::QueryResult);
         if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Write)) {
             const bool wide = True(query_base->flags & QueryFlagBits::HasTimestamp);
             LOG_INFO(HW_GPU,
@@ -359,7 +371,8 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
             } else {
                 std::memcpy(pointer, &payload, sizeof(payload));
             }
-            Tegra::Nx2SemaphoreWaiters::Get().OnWrite(cpu_addr, payload);
+            Tegra::Nx2SemaphoreWaiters::Get().OnWrite(
+                cpu_addr, payload, Tegra::Nx2SemaphoreWaiters::Source::PayloadRelease);
             if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Write)) {
                 LOG_INFO(HW_GPU,
                          "DKB_QUERY write n={} path=immediate as={} gpu={:#x} device={:#x} type={} "

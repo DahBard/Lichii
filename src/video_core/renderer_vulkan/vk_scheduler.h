@@ -41,6 +41,7 @@ class Device;
 class Framebuffer;
 class GraphicsPipeline;
 class StateTracker;
+class UploadBatch;
 
 struct QueryCacheParams;
 
@@ -201,12 +202,22 @@ public:
         on_submit = std::move(func);
     }
 
+    /// An upload in order: copies into dst after the work recorded before them and before the
+    /// work recorded after them (the barriers of an in-order buffer copy). Uploads with no other
+    /// command between them share one command and one pair of barriers, unless one would write
+    /// bytes another writes, or a buffer another reads. Call outside a render pass.
+    void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
+
     /// Send work to a separate thread.
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer, vk::CommandBuffer>
     void RecordWithUploadBuffer(T&& command) {
         if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
+        }
+        if (uploads_pending) {
+            // Uploads recorded before this command go before it.
+            FlushUploads();
         }
         if (chunk->Record(command)) {
             return;
@@ -383,6 +394,8 @@ private:
         bool Record(T& command) {
             using FuncType = TypedCommand<T>;
             static_assert(sizeof(FuncType) < sizeof(data), "Lambda is too large");
+            // The offset is aligned within data, so data itself must be aligned at least as much.
+            static_assert(alignof(FuncType) <= DataAlignment, "Lambda needs more alignment");
 
             command_offset = Common::AlignUp(command_offset, alignof(FuncType));
             if (command_offset > sizeof(data) - sizeof(FuncType)) {
@@ -418,7 +431,13 @@ private:
 
         size_t command_offset = 0;
         bool submit = false;
-        alignas(std::max_align_t) std::array<u8, 0x8000> data{};
+        /// Commands are constructed in data at offsets aligned for their type. Some hold
+        /// alignas(16) members (the ASTC decoder pass's BlockLinearSwizzle2DParams), and
+        /// std::max_align_t is only 8 on MSVC and clang-cl, so data asks for 16 itself rather
+        /// than depending on where the members before it happen to end.
+        static constexpr size_t DataAlignment =
+            alignof(std::max_align_t) > 16 ? alignof(std::max_align_t) : 16;
+        alignas(DataAlignment) std::array<u8, 0x8000> data{};
     };
 
     struct State {
@@ -525,6 +544,12 @@ private:
     bool trace_gpu_sampling{};
     bool trace_gpu_pending{};
     bool trace_gpu_failed{};
+
+    /// RecordUpload's copies not recorded yet; uploads_pending while it holds any.
+    std::unique_ptr<UploadBatch> upload_batch;
+    bool uploads_pending{};
+    /// Records the pending uploads as one command.
+    void FlushUploads();
 
     VideoCommon::QueryCacheBase<QueryCacheParams>* query_cache = nullptr;
 
