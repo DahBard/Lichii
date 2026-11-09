@@ -889,7 +889,13 @@ Own changes:
   `pgo-lto` and `pgo-train` (success, 9 minutes; artifacts `lichii-tuned-r35-*`), without the
   agents' Fritchii ports.
 - Run #36 (round 20's Fritchii ports, the preparation crash fix, recorded pipelines from
-  another device skipped as in Fritchii, the GUI crash writer; Windows only): tuned4 `e9226a635`.
+  another device skipped as in Fritchii, the GUI crash writer; Windows only): tuned4 `e9226a635`,
+  built `pgo`, `pgo-lto` and `pgo-train` (success, 30 minutes; artifacts `lichii-tuned-r36-*`,
+  92/92/99 MB).
+  - Test first: does the preparation finish? Same pipelines as r35, so expect ~45-50 minutes
+    once per build (the stamp holds the build version). Fritchii says ~15 minutes on an 8-core
+    desktop CPU for AMD. The gap is not explained yet; compare the r36 log's rate, or a
+    Fritchii log from the same laptop.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
