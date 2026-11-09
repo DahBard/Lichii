@@ -12,11 +12,14 @@
 #include <cstddef>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include "common/container/unordered_map.h"
 #include <vector>
@@ -183,10 +186,13 @@ private:
 
     void QueueVulkanPipelineCacheFlush();
 
-    /// Queues one write of the driver pipeline cache file on the serialization thread, with no
-    /// throttle. For the end of a precache: its builds never reach the timed flush, which counts
-    /// only pipelines built during play.
-    void QueueVulkanPipelineCacheSave();
+    /// Writes the driver pipeline cache on the serialization thread, unless a write is queued
+    /// already (`again_if_busy`: then one more follows it, for a save that must hold the latest
+    /// builds, such as the end of a precache). Callable from any thread.
+    void QueueVulkanPipelineCacheSave(bool again_if_busy);
+    /// True (and `last` set to now) when a write of the driver cache is due since `last`.
+    [[nodiscard]] bool VulkanPipelineCacheSaveDue(
+        std::chrono::steady_clock::time_point& last) const;
 
     /// One build of the shader precache: builds a pipeline and destroys it, true when it built.
     struct PrecacheJob {
@@ -252,6 +258,12 @@ private:
     /// (used_pipelines) are built at boot; the rest are built when first needed, and not stored
     /// again. Each built pipeline holds driver memory (title 1: 6.5k cached, a quarter used).
     std::unordered_set<u64> disk_pipelines;
+    /// Disk cache records the translation rejected since the last report: the first few are
+    /// logged, the rest counted (ReportDiskRecordFailures, after the boot build, the precache
+    /// and, for the background prebuild, at exit).
+    std::atomic<size_t> disk_record_failures{};
+    void NoteDiskRecordFailure(std::string_view kind, u64 hash, const char* reason);
+    void ReportDiskRecordFailures();
     std::unordered_map<u64, u8> used_pipelines; ///< Key hash -> sessions since it was last used
     std::unordered_set<const GraphicsPipeline*> used_this_session;
     std::filesystem::path used_pipelines_filename;
@@ -264,6 +276,10 @@ private:
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};
     std::atomic_bool flush_in_flight{};
+    std::atomic_bool save_again{};
+    /// When the background prebuild last queued a driver cache write.
+    std::mutex background_save_mutex;
+    std::chrono::steady_clock::time_point background_last_save{};
 
     /// Requested first when the cache is destroyed, to stop a rewrite of the disk cache: Android
     /// and yuzu_cmd load with a stop token that never stops
@@ -275,6 +291,9 @@ private:
     Common::ThreadWorker serialization_thread;
     DynamicFeatures dynamic_features;
     PipelinePrebuild<GraphicsPipelineCacheKey, GraphicsPipeline> background_pipelines;
+    /// Stops the background prebuild when the load's stop token is requested (emulation stops).
+    /// Reset first in the destructor: it uses background_pipelines.
+    std::optional<std::stop_callback<std::function<void()>>> loading_stop_callback;
 };
 
 } // namespace Vulkan

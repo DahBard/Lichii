@@ -100,15 +100,35 @@ public:
             entry = std::move(it->second);
             entries.erase(it);
             entry->claimed = true;
+            if (entry->pipeline) {
+                ++taken;
+            }
         }
         return std::move(entry->pipeline);
     }
 
-    void Stop() {
-        {
-            std::scoped_lock lock{mutex};
-            stopped = true;
+    struct Usage {
+        size_t taken;  ///< Prebuilt pipelines draws took
+        size_t unused; ///< Prebuilt pipelines no draw took (so far)
+    };
+    [[nodiscard]] Usage GetUsage() {
+        std::scoped_lock lock{mutex};
+        size_t unused = 0;
+        for (const auto& [key, entry] : entries) {
+            unused += entry->pipeline ? 1 : 0;
         }
+        return {taken, unused};
+    }
+
+    /// Builds not started yet are dropped, without waiting for those in progress. Callable from
+    /// any thread (the loading stop callback).
+    void RequestStop() {
+        std::scoped_lock lock{mutex};
+        stopped = true;
+    }
+
+    void Stop() {
+        RequestStop();
         workers.reset();
         tasks.clear();
         entries.clear();
@@ -118,6 +138,7 @@ private:
     EmissionBudget budget;
     const size_t capture_limit;
     size_t captured_bytes{};
+    size_t taken{};
     bool started{};
     bool stopped{};
     std::mutex mutex;
