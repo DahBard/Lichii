@@ -474,15 +474,17 @@ inline void Report(const char* thread_name = "GPU thread") {
     const auto counter = [&data](Counter which) {
         return static_cast<double>(data.counters[static_cast<size_t>(which)]);
     };
+    const double window_ns = static_cast<double>(window);
     if (counter(Counter::LatePublishes) != 0 || counter(Counter::ResnapshotWords) != 0 ||
         counter(Counter::EarlyPublishes) != 0) {
         // TEST: the back idle while words it could run waited on the front.
         line += fmt::format(" | publishes to an idle back late by {:.1f} ms ({:.0f}/s), early "
                             "{:.0f}/s | resnapshot words {:.0f}/s",
-                            counter(Counter::LatePublishTicks) * 1000.0 / window_ticks,
-                            counter(Counter::LatePublishes) * 1e9 / window,
-                            counter(Counter::EarlyPublishes) * 1e9 / window,
-                            counter(Counter::ResnapshotWords) * 1e9 / window);
+                            counter(Counter::LatePublishTicks) * 1000.0 /
+                                static_cast<double>(window_ticks),
+                            counter(Counter::LatePublishes) * 1e9 / window_ns,
+                            counter(Counter::EarlyPublishes) * 1e9 / window_ns,
+                            counter(Counter::ResnapshotWords) * 1e9 / window_ns);
     }
     std::string drains;
     for (size_t i = 0; i < data.drain_count.size(); ++i) {
@@ -511,7 +513,7 @@ inline void Report(const char* thread_name = "GPU thread") {
         for (size_t i = 0; i < data.fine_counters.size(); ++i) {
             if (data.fine_counters[i] != 0) {
                 fine += fmt::format(" {} {:.0f},", fine_counter_names[i],
-                                    static_cast<double>(data.fine_counters[i]) * 1e9 / window);
+                                    static_cast<double>(data.fine_counters[i]) * 1e9 / window_ns);
             }
         }
         if (!fine.empty()) {
