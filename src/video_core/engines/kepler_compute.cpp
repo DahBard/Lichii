@@ -18,6 +18,7 @@
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
 #include "common/logging.h"
+#include "common/nx2_experiment.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "shader_recompiler/exception.h"
@@ -516,11 +517,18 @@ void KeplerCompute::CallMethod(Core::System& system, u32 method, u32 method_argu
 
     switch (method) {
     case KEPLER_COMPUTE_REG_INDEX(exec_upload): {
-        UploadInfo info{.upload_address = upload_address,
-                        .exec_address = upload_state.ExecTargetAddress(),
-                        .copy_size = upload_state.GetUploadSize(),
-                        .was_dirty = upload_dirty};
-        uploads.push_back(info);
+        // EDEN_NX2_EXP29 & 4 (Fritchii bc83af560, zortos293/Lichii#717's
+        // EDEN_NX2_DROP_NATIVE_UPLOADS; default 6): only the launch case below reads the list, and
+        // native mode never gets there (ProcessNativeMethod takes 0xaf), so it grew by one entry
+        // per exec all session.
+        static const bool drop_native = (Common::ReadNx2Experiment(29, 6) & 4) != 0;
+        if (!native_mode || !drop_native) {
+            UploadInfo info{.upload_address = upload_address,
+                            .exec_address = upload_state.ExecTargetAddress(),
+                            .copy_size = upload_state.GetUploadSize(),
+                            .was_dirty = upload_dirty};
+            uploads.push_back(info);
+        }
         upload_state.ProcessExec(regs.exec_upload.linear != 0);
         break;
     }

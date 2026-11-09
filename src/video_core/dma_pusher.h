@@ -172,6 +172,10 @@ public:
 
     void DispatchCalls();
 
+    /// EDEN_NX2_EXP35: guest writes of cached memory are only collected (Core::Memory). When some
+    /// were since the GPU last applied them, the commands sent after this apply them first.
+    void ApplyCollectedWrites();
+
     /// Switch 2: true while the channel is suspended, on a semaphore acquire or on the GPU's copy
     /// of a command list it reads next.
     [[nodiscard]] bool HasPendingAcquire() const {

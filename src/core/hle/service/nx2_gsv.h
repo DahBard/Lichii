@@ -30,6 +30,7 @@
 #include "common/div_ceil.h"
 #include "common/dkb_frame_trace.h"
 #include "common/game_presets.h"
+#include "common/nx2_experiment.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -3672,6 +3673,10 @@ public:
     }
 
     ~INx2GraphicsSystemSession() override {
+        if (m_syncpt_poll_now) {
+            system.Host1x().GetSyncpointManager().RemoveGuestIncrementHook(this);
+            system.CoreTiming().UnscheduleEvent(m_syncpt_poll_now);
+        }
         if (m_syncpt_poll) {
             system.CoreTiming().UnscheduleEvent(m_syncpt_poll);
         }
@@ -3857,6 +3862,25 @@ private:
             m_syncpt_events[0] = m_context.CreateEvent("nx2:gsv:SyncptRequest");
             m_syncpt_events[1] = m_context.CreateEvent("nx2:gsv:SyncptNotify");
         }
+        // EDEN_NX2_EXP37=1 (Fritchii f85bef3a6, off): the driver's armed waits were answered only
+        // by the 500 us poll, so the guest's syncpoint value reached the shared page up to 500 us
+        // late and Ocarina of Time's present poll slept up to 1 ms more. A guest increment then
+        // queues one poll at once, on the same timing thread (once the notify event exists).
+        static const bool poll_on_increment = Common::ReadNx2Experiment(37, 0) != 0;
+        if (poll_on_increment && m_syncpt_memory != nullptr && !m_syncpt_poll_now) {
+            m_syncpt_poll_now = Core::Timing::CreateEvent(
+                "nx2:gsv:SyncptPollNow",
+                [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+                    m_syncpt_poll_now_pending.store(false, std::memory_order_release);
+                    PollSyncpts();
+                    return std::nullopt;
+                });
+            system.Host1x().GetSyncpointManager().SetGuestIncrementHook(
+                [](void* context) {
+                    static_cast<INx2GraphicsSystemSession*>(context)->OnGuestIncrement();
+                },
+                this);
+        }
         IPC::ResponseBuilder rb{ctx, 2, 2, 0};
         rb.Push(ResultSuccess);
         rb.PushCopyObjects(ctx, *m_syncpt_events[0]); // signalled by the client
@@ -3876,6 +3900,15 @@ private:
             }
         }
         return changed;
+    }
+
+    /// A guest syncpoint was incremented (any thread): poll at once (EDEN_NX2_EXP37), at most one
+    /// poll pending.
+    void OnGuestIncrement() {
+        if (m_syncpt_poll_now_pending.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        system.CoreTiming().ScheduleEvent(std::chrono::nanoseconds{0}, m_syncpt_poll_now);
     }
 
     // Answers every armed wait: the value page is current, so the client rechecks its threshold
@@ -4373,6 +4406,9 @@ private:
     u64 m_syncpt_ro{};
     u32 m_syncpt_count{};
     std::shared_ptr<Core::Timing::EventType> m_syncpt_poll;
+    /// EDEN_NX2_EXP37: PollSyncpts at once after a guest syncpoint increment (OnGuestIncrement).
+    std::shared_ptr<Core::Timing::EventType> m_syncpt_poll_now;
+    std::atomic<bool> m_syncpt_poll_now_pending{};
 };
 
 } // namespace Service

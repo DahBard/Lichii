@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "common/container/unordered_map.h"
+#include <boost/unordered/unordered_node_map.hpp>
 #include <boost/container/static_vector.hpp>
 #include <boost/container/small_vector.hpp>
 
@@ -515,7 +516,9 @@ public:
         u64 changed_frame = ~u64{0};
         bool recheck = false;
     };
-    std::unordered_map<DAddr, NativeBankPage> native_indirect_page_snapshots;
+    /// A node map (Fritchii 8b7bb3fab): std::unordered_map's lookups were ~2% of the split's back
+    /// at Castle Town (600k a second), and the 4 KiB entries stay put when it grows.
+    boost::unordered_node_map<DAddr, NativeBankPage> native_indirect_page_snapshots;
     /// A bank page that changed within this many frames is compared on every bind.
     static constexpr u64 NativeBankHotFrames = 120;
     /// Why bank pages were compared and which of them had changed, by the first reason that

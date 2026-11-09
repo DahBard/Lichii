@@ -40,6 +40,7 @@
 #include "video_core/gpu_wait_stats.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2.h"
 #include "video_core/rasterizer_download_area.h"
 
 namespace Core::Memory {
@@ -68,6 +69,22 @@ static bool SysSlotEnabled() {
         return value == nullptr || value[0] != '0';
     }();
     return enabled;
+}
+
+/// EDEN_NX2_EXP35 (Fritchii v5.2 a34e72fec, e423d1bd1; default 2): a guest write of cached memory
+/// is collected for the GPU thread as one into GPU-written memory is, instead of asking
+/// GPU::OnCPUWrite under both caches' locks, which the split's back holds through its draws
+/// (Fritchii, Castle Town: guest-core write lock spinning 6.1% -> 0.7% of busy with 1, -> 0 with
+/// 2; 43.0 -> 46.5 fps standing). 1 = only pages no GPU write ever marked (Nx2MayBeGpuWritten, bits
+/// that never clear), 2 = every page (OnCPUWrite collected the writes of GPU-modified ones
+/// already), 0 = as before. A collected write reaches the caches at the GPU thread's next
+/// InvalidateGPUCache, not at once. Switch 2 titles only.
+/// The GPU applies collected writes before each command list, after semaphore acquires and before
+/// accelerated DMA (Core::g_writes_collected), so draws and copies don't read the old host copies.
+static bool CollectsUnasked(DAddr address, u64 size) {
+    const int mode = Core::Nx2CollectMode();
+    return mode != 0 && Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
+           (mode == 2 || !Tegra::Nx2MayBeGpuWritten(address, size));
 }
 
 static inline bool AddressSpaceContains(const Common::PageTable& table, const Common::ProcessAddress addr, const std::size_t size) {
@@ -1046,12 +1063,17 @@ struct Memory::Impl {
             // It is often the case the games like to access wildly different addresses. Hence why I propose
             // we should let the compiler just do it's thing...
             if (current_area.last_address != subaddress) {
-                // Short circuit the need to check for address/size
-                const u64 check_start = VideoCommon::GpuWaitStats::Now();
-                auto const do_collection = (address != 0 && size != 0)
-                    && system.GPU().OnCPUWrite(address, size);
-                VideoCommon::GpuWaitStats::AddWriteCheck(core, VideoCommon::GpuWaitStats::Now() -
-                                                                   check_start);
+                bool do_collection = address != 0 && size != 0 && CollectsUnasked(address, size);
+                if (do_collection) {
+                    VideoCommon::GpuWaitStats::CountWriteCollect(core);
+                } else {
+                    // Short circuit the need to check for address/size
+                    const u64 check_start = VideoCommon::GpuWaitStats::Now();
+                    do_collection = (address != 0 && size != 0) &&
+                                    system.GPU().OnCPUWrite(address, size);
+                    VideoCommon::GpuWaitStats::AddWriteCheck(
+                        core, VideoCommon::GpuWaitStats::Now() - check_start);
+                }
                 if (do_collection) {
                     current_area.last_address = subaddress;
                 } else {

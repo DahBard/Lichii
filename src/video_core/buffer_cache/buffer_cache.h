@@ -19,6 +19,7 @@
 #include <vector>
 #include <fmt/ranges.h>
 
+#include "common/nx2_experiment.h"
 #include "common/range_sets.inc"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/multi_range_refresh.h"
@@ -595,6 +596,11 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
         const DAddr diff = base_address - *cpu_src_address;
         const DAddr new_base_address = *cpu_dest_address + diff;
         tmp_intervals.push_back({new_base_address, size});
+        // Marked before QueueFenceDownload arms a read trap: a trapped read answered without the
+        // caches' locks (RasterizerVulkan::GetFlushArea) must find the mark.
+        if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+            Tegra::Nx2MarkGpuWritten(new_base_address, size);
+        }
         QueueFenceDownload(new_base_address, size);
     };
     gpu_modified_ranges.ForEachInRange(*cpu_src_address, amount, mirror);
@@ -605,7 +611,6 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
         gpu_modified_ranges.Add(pair.first, pair.second);
         GpuWaitStats::NoteGpuWrite(pair.first, pair.second, GpuWaitStats::WriteSite::DmaCopy);
         if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
-            Tegra::Nx2MarkGpuWritten(pair.first, pair.second);
             Nx2NoteListWrite(buffer_b, pair.first, pair.second);
         }
     }
@@ -1657,17 +1662,18 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     // the memory tracker, leaving stale host contents, so check such a bank on every bind: games
     // rewrite per-draw data between draws, and checking once per frame left it stale for a frame
     // now and then (white flashes in Ocarina of Time, Eglantine 031e07436c).
-    // LICHII_BANK_CHECK (Fritchii v4's EDEN_NX2_EXP9, which it also reads): 1 (default) compares
-    // only the pages that may have changed (CheckNativeBankPagesTracked), 2 compares every page
-    // and logs what 1 would have missed, 3 is 1 without the once-a-frame compare, 0 compares
-    // every page on every bind as before: ~650,000 pages a second in Ocarina (r23), 99.7%
-    // unchanged.
+    // LICHII_BANK_CHECK (Fritchii's EDEN_NX2_EXP9, which it also reads): 1 compares only the
+    // pages that may have changed (CheckNativeBankPagesTracked), 3 (default, as Fritchii v5) is
+    // 1 without the once-a-frame compare of every page, which never found a change there
+    // (Castle Town: uniform buffers 135.6 -> 97.9 ms/s of the split's back, 40.8 -> 42.3 fps),
+    // 2 compares every page and logs what 1 would have missed, 0 compares every page on every
+    // bind as before: ~650,000 pages a second in Ocarina (r23), 99.7% unchanged.
     static const int bank_check_mode = [] {
         const char* value = std::getenv("LICHII_BANK_CHECK");
         if (value == nullptr || value[0] == '\0') {
             value = std::getenv("EDEN_NX2_EXP9");
         }
-        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 1;
+        return value != nullptr && value[0] != '\0' ? std::atoi(value) : 3;
     }();
     const bool native_bank = has_host_buffer &&
                              (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
@@ -1919,8 +1925,9 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
     // Compare a page when such a write or one the buffer cache saw flagged it, when it was
     // flagged at the previous bind (the write's bytes may land after the compare), when it is
     // CPU-modified, when it changed within NativeBankHotFrames frames (per-draw data rewritten by
-    // paths no flag sees), and once a frame (mode 1) for writers none of these see: semaphore and
-    // query writes, HLE. Mode 2 compares every page and counts what mode 1 would have missed.
+    // paths no flag sees), and with mode 1 once a frame for writers none of these see: semaphore
+    // and query writes, HLE (it found none in Fritchii's tests, so mode 3, the default, leaves it
+    // out). Mode 2 compares every page and counts what mode 1 would have missed.
     static_assert(Core::DevicePageFlags::AddressBits >=
                   Tegra::MaxwellDeviceTraits::device_virtual_bits);
     u64 mapped_size = 0;
@@ -1994,23 +2001,31 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
     if (!verify && !Nx2Profile::Enabled()) {
         return;
     }
+    // The clock only every 1,024 binds (~100k binds a second at Castle Town; Fritchii 8b7bb3fab).
+    if ((stats.binds & 1023) != 0) {
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     if (now - stats.last_log < std::chrono::seconds{10}) {
         return;
     }
     const auto& compared = stats.compared;
     const auto& changed = stats.changed;
+    // Verify (mode 2): "missed" are changes only its compare of every page found, which mode 1
+    // misses; mode 3 also misses those the frame check found (at least: a page it missed doesn't
+    // turn hot either).
     LOG_INFO(HW_GPU,
              "Native bank check (mode {}, 10 s): {} binds, {} new pages, {} skipped; compared / "
              "changed: collected CPU writes {} / {}, buffer cache writes {} / {}, recheck {} / {}, "
              "CPU-modified {} / {}, hot {} / {}, frame check {} / {}, verify only {} / {}; missed "
-             "{}",
+             "{}, without the frame check (mode 3) {}",
              mode, stats.binds, stats.pages_new, stats.pages_skipped, compared[BankCollected],
              changed[BankCollected], compared[BankWritten], changed[BankWritten],
              compared[BankRecheck], changed[BankRecheck], compared[BankCpuDirty],
              changed[BankCpuDirty], compared[BankHot], changed[BankHot], compared[BankFrame],
              changed[BankFrame], compared[BankNone], changed[BankNone],
-             verify ? changed[BankNone] : 0);
+             verify ? changed[BankNone] : 0,
+             verify ? changed[BankNone] + changed[BankFrame] : 0);
     stats = {};
     stats.last_log = now;
 }
@@ -2571,9 +2586,14 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
     gpu_modified_ranges.Add(device_addr, size);
-    QueueFenceDownload(device_addr, size);
-    if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+    const bool nx2 = Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+    // Marked before QueueFenceDownload arms a read trap: a trapped read answered without the
+    // caches' locks (RasterizerVulkan::GetFlushArea) must find the mark.
+    if (nx2) {
         Tegra::Nx2MarkGpuWritten(device_addr, size);
+    }
+    QueueFenceDownload(device_addr, size);
+    if (nx2) {
         Nx2NoteListWrite(buffer_id, device_addr, size);
     }
 }
@@ -3161,9 +3181,21 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
 
 template <class P>
 void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-    if (buffer_id != NULL_BUFFER_ID) {
-        lru_cache.Touch(buffer.getLRUID(), frame_tick);
+    if (buffer_id == NULL_BUFFER_ID) {
+        return;
     }
+    // EDEN_NX2_EXP18 & 4 (Fritchii, from zortos293/Lichii#641 5d5d3bdd3d; default 4): the
+    // buffer's own field instead of its LRU node, a cache miss, for every bind of the frame. A
+    // second touch in the same frame changed nothing (LeastRecentlyUsedCache::Touch keeps a tick
+    // that is not older). Bits 1 and 2 (binding memos) are not ported.
+    static const bool once_a_frame = (Common::ReadNx2Experiment(18, 4) & 4) != 0;
+    if (once_a_frame) {
+        if (buffer.lru_touched_tick == frame_tick) {
+            return;
+        }
+        buffer.lru_touched_tick = frame_tick;
+    }
+    lru_cache.Touch(buffer.getLRUID(), frame_tick);
 }
 
 template <class P>

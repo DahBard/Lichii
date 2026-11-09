@@ -12,9 +12,23 @@
 #include <utility>
 #include <vector>
 
+#include "common/nx2_experiment.h"
 #include "core/device_memory_manager.h"
 
 namespace Core {
+
+/// EDEN_NX2_EXP35 (Fritchii v5.2, default 2): guest writes of cached memory are collected here for
+/// the GPU thread instead of being applied to its caches at once (Core::Memory's
+/// HandleRasterizerWrite): 1 = writes to pages no GPU write ever marked, 2 = all, 0 = off.
+[[nodiscard]] inline int Nx2CollectMode() {
+    static const int mode = Common::ReadNx2Experiment(35, 2);
+    return mode;
+}
+
+/// Set when a dirty memory manager records a new write, cleared when GPU::InvalidateGPUCache takes
+/// them: with EDEN_NX2_EXP35 the GPU applies them before each command list, after semaphore
+/// acquires and before accelerated DMA while it is set (DmaPusher::ApplyCollectedWrites).
+inline std::atomic<bool> g_writes_collected{};
 
 class GPUDirtyMemoryManager {
 public:
@@ -26,27 +40,15 @@ public:
     ~GPUDirtyMemoryManager() = default;
 
     void Collect(PAddr address, size_t size) {
-        TransformAddress t = BuildTransform(address, size);
-        TransformAddress tmp, original;
-        do {
-            tmp = current.load(std::memory_order_acquire);
-            original = tmp;
-            if (tmp.address != t.address) {
-                if (IsValid(tmp.address)) {
-                    std::scoped_lock lk(guard);
-                    back_buffer.emplace_back(tmp);
-                    current.exchange(t, std::memory_order_relaxed);
-                    return;
-                }
-                tmp.address = t.address;
-                tmp.mask = 0;
-            }
-            if ((tmp.mask | t.mask) == tmp.mask) {
-                return;
-            }
-            tmp.mask |= t.mask;
-        } while (!current.compare_exchange_weak(original, tmp, std::memory_order_release,
-                                                std::memory_order_relaxed));
+        // A transform covers one page_size page: a write reaching past its page (a whole-page
+        // WriteBlock, or a few bytes across the boundary) is collected a page at a time, or its
+        // mask would be cut at the page end (an over-wide mask shifted by a negative amount).
+        while (size != 0) {
+            const size_t chunk = (std::min)(size, page_size - (address & page_mask));
+            CollectInPage(address, chunk);
+            address += chunk;
+            size -= chunk;
+        }
     }
 
     /// Calls `callback` for each write collected and not yet applied, without consuming them: those
@@ -118,6 +120,40 @@ private:
         u32 address;
         u32 mask;
     };
+
+    /// Collect, for a write within one page_size page.
+    void CollectInPage(PAddr address, size_t size) {
+        TransformAddress t = BuildTransform(address, size);
+        TransformAddress tmp, original;
+        do {
+            tmp = current.load(std::memory_order_acquire);
+            original = tmp;
+            if (tmp.address != t.address) {
+                if (IsValid(tmp.address)) {
+                    std::scoped_lock lk(guard);
+                    back_buffer.emplace_back(tmp);
+                    current.exchange(t, std::memory_order_relaxed);
+                    NoteCollected();
+                    return;
+                }
+                tmp.address = t.address;
+                tmp.mask = 0;
+            }
+            if ((tmp.mask | t.mask) == tmp.mask) {
+                return;
+            }
+            tmp.mask |= t.mask;
+        } while (!current.compare_exchange_weak(original, tmp, std::memory_order_release,
+                                                std::memory_order_relaxed));
+        NoteCollected();
+    }
+
+    /// Writes already pending set it when they were recorded: only new ones store.
+    static void NoteCollected() noexcept {
+        if (!g_writes_collected.load(std::memory_order_acquire)) {
+            g_writes_collected.store(true, std::memory_order_release);
+        }
+    }
 
     template <typename Func>
     static void ForEachRun(const TransformAddress& transform, Func&& callback) {

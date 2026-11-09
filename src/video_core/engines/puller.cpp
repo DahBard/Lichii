@@ -982,6 +982,9 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         NoteRelease(dma_pusher, address, payload, VideoCommon::QueryPropertiesFlags::IsAFence);
         return;
     }
+    // The work after an acquire may read what the guest wrote before it released the semaphore
+    // (an NVN event): with EDEN_NX2_EXP35 those writes are only collected so far.
+    dma_pusher.ApplyCollectedWrites();
     // Acquires: never block the GPU thread on them; they are checked for the warning below only.
     const auto ready = [operation, payload](u32 value) {
         return operation == 0   ? value == payload
