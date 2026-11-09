@@ -2038,6 +2038,9 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     // indices in stage order, then the key. Records are read again when built.
     auto env_index = std::make_shared<std::vector<std::pair<u64, u64>>>();
     std::vector<u64> record_offsets;
+    // Each record's key hash as recorded: its name in the precache journal, so a record a driver
+    // crash ended is skipped at the next launch (precache_journal.h).
+    std::vector<std::pair<u64, bool>> record_ids;
     try {
         std::ifstream in(path, std::ios::binary);
         in.exceptions(std::ifstream::failbit);
@@ -2068,6 +2071,7 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
             return std::nullopt;
         }
         record_offsets.reserve(record_count);
+        record_ids.reserve(record_count);
         std::array<u32, Maxwell::MaxShaderProgram> ids{};
         for (u32 i = 0; i < record_count; ++i) {
             record_offsets.push_back(static_cast<u64>(in.tellg()));
@@ -2087,8 +2091,15 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                 LOG_ERROR(Render_Vulkan, "Precompiled pipeline file {} is damaged", path_text);
                 return std::nullopt;
             }
-            in.seekg(compute ? sizeof(ComputePipelineCacheKey) : sizeof(GraphicsPipelineCacheKey),
-                     std::ios::cur);
+            if (compute) {
+                ComputePipelineCacheKey key{};
+                in.read(reinterpret_cast<char*>(&key), sizeof(key));
+                record_ids.emplace_back(key.unique_hash, true);
+            } else {
+                GraphicsPipelineCacheKey key{};
+                in.read(reinterpret_cast<char*>(&key), sizeof(key));
+                record_ids.emplace_back(key.Hash(), false);
+            }
         }
     } catch (const std::ios_base::failure& e) {
         LOG_ERROR(Render_Vulkan, "Cannot read precompiled pipelines from {}: {}", path_text,
@@ -2099,8 +2110,11 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     const auto known = std::make_shared<const std::unordered_set<u64>>(disk_pipelines);
     const auto counts = std::make_shared<PrecompiledCounts>();
     precompiled_counts = counts;
-    for (const u64 offset : record_offsets) {
-        jobs.push_back({0, [this, path, env_index, known, counts, offset]() -> bool {
+    for (size_t record = 0; record < record_offsets.size(); ++record) {
+        const u64 offset = record_offsets[record];
+        const auto [record_id, record_compute] = record_ids[record];
+        jobs.push_back({record_compute ? 0 : record_id,
+                        [this, path, env_index, known, counts, offset]() -> bool {
                             std::ifstream in(path, std::ios::binary);
                             in.exceptions(std::ifstream::failbit);
                             in.seekg(static_cast<std::streamoff>(offset));
@@ -2153,7 +2167,8 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                             const auto pipeline = CreateGraphicsPipeline(
                                 pools, record_key, MakeSpan(env_ptrs), nullptr, false);
                             return pipeline != nullptr && !pipeline->Failed();
-                        }});
+                        },
+                        record_compute ? record_id : 0});
     }
     LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} records of {} to prepare",
              record_offsets.size(), path_text);
