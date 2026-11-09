@@ -3723,6 +3723,12 @@ void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_load
     pipeline_cache.LoadDiskResources(title_id, stop_loading, callback);
 }
 
+void RasterizerVulkan::StopBackgroundWork() {
+    // EDEN_NX2_ASYNC_TRANSLATE's threads read guest memory through the channels' memory
+    // managers, which the services destroy before the GPU is.
+    pipeline_cache.StopTranslations();
+}
+
 void RasterizerVulkan::FlushWork() {
 #ifdef __ANDROID__
     static constexpr bool android = true;

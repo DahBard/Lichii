@@ -239,6 +239,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_pipeline_cache.h
     renderer_vulkan/vk_pipeline_cache_records.cpp
     renderer_vulkan/vk_pipeline_cache_records.h
+    renderer_vulkan/vk_pipeline_translate_queue.cpp
+    renderer_vulkan/vk_pipeline_translate_queue.h
     renderer_vulkan/vk_present_manager.cpp
     renderer_vulkan/vk_present_manager.h
     renderer_vulkan/vk_host_pacer.cpp

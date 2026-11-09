@@ -58,6 +58,7 @@
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_records.h"
+#include "video_core/renderer_vulkan/vk_pipeline_translate_queue.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
@@ -378,8 +379,14 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
 }
 
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 2> runtime_spirv_ns{};
+/// Set while a translation thread builds (EDEN_NX2_ASYNC_TRANSLATE).
+thread_local bool t_translate_worker{};
 
 void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point begin) {
+    if (t_translate_worker) {
+        // SPIR-V a translation thread emits itself is the workers' time, not the GPU thread's.
+        thread = 1;
+    }
     const auto elapsed = std::chrono::steady_clock::now() - begin;
     runtime_spirv_ns[thread].fetch_add(
         std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(),
@@ -402,10 +409,38 @@ struct FrameTally {
     std::chrono::steady_clock::duration builds{};
     RuntimeBuildSplit split{};
     u32 count{};
+    /// EDEN_NX2_ASYNC_TRANSLATE: translations queued (their environments and snapshots).
+    std::chrono::steady_clock::duration queued_time{};
+    u32 queued{};
 };
 FrameTally frame_tally;
-/// Pipeline lookups skipped for unbuilt pipelines this session (BuiltPipeline).
+/// Pipeline lookups skipped for unbuilt pipelines this session (BuiltPipeline), and for
+/// pipelines still translating (EDEN_NX2_ASYNC_TRANSLATE).
 std::atomic<u64> skipped_lookups{};
+
+void NoteSkippedLookup() {
+    if ((skipped_lookups.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+        // Counts lookups, not draws: a draw state can look its pipeline up more than once.
+        LOG_INFO(Render_Vulkan, "Async shaders: {} pipeline lookups skipped for unbuilt pipelines",
+                 skipped_lookups.load(std::memory_order_relaxed));
+    }
+}
+
+/// EDEN_NX2_ASYNC_TRANSLATE: translations in flight at most (each holds its constant buffer
+/// copies until translated), how long a draw that must not be skipped waits for one before
+/// building its pipeline itself, unusable translations of a key before it is built on the GPU
+/// thread for good, and the age at which a translation is taken for wedged.
+constexpr size_t MaxTranslationsInFlight = 64;
+constexpr std::chrono::milliseconds TranslateWaitCap{50};
+constexpr u32 MaxTranslateFailures = 2;
+constexpr std::chrono::seconds TranslateSweepAge{5};
+
+/// EDEN_NX2_ASYNC_TRANSLATE_THREADS: translation threads (2 by default, 1 to 8).
+size_t TranslateThreads() {
+    const char* const value = std::getenv("EDEN_NX2_ASYNC_TRANSLATE_THREADS");
+    const int threads = value != nullptr ? std::atoi(value) : 2;
+    return static_cast<size_t>(std::clamp(threads, 1, 8));
+}
 
 /// "pipeline=<key hash> s<stage>:<shader hash> ...", as the runtime pipeline lines print them
 std::string PipelineShaders(const GraphicsPipelineCacheKey& key) {
@@ -418,13 +453,29 @@ std::string PipelineShaders(const GraphicsPipelineCacheKey& key) {
     return shaders;
 }
 
-vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& profile,
-                                 const Shader::RuntimeInfo& runtime_info,
-                                 Shader::IR::Program& program, Shader::Backend::Bindings& binding,
-                                 u64 shader_hash, size_t stage_index,
-                                 std::span<const u32> reference = {}) {
-    const auto code =
-        EmitPipelineShader(profile, runtime_info, program, binding, shader_hash, reference);
+/// EDEN_NX2_SPIRV_SELFCHECK=1: throws (the pipeline is dropped, as one the translation rejects)
+/// when the emitted SPIR-V uses an id it never defines or its own result, before the driver gets
+/// it. Off: nothing.
+void SelfCheckSpirv(std::span<const u32> code, u64 shader_hash, const char* stage) {
+    if (!SpirvSelfCheck()) {
+        return;
+    }
+    if (std::string problem = FindSpirvIdProblem(code); !problem.empty()) {
+        LOG_ERROR(Render_Vulkan,
+                  "SPIR-V self-check (EDEN_NX2_SPIRV_SELFCHECK=1): shader {:016x} {}: {}; its "
+                  "pipeline is dropped instead of handed to the driver",
+                  shader_hash, stage, problem);
+        throw Shader::LogicError("SPIR-V self-check failed for shader {:016x} {}", shader_hash,
+                                 stage);
+    }
+}
+
+/// The shader module of a stage from its finished SPIR-V.
+vk::ShaderModule BuildStageModule(const Device& device, std::span<const u32> code,
+                                  u64 shader_hash, size_t stage_index) {
+    static constexpr std::array stage_names{"vertex", "tess_control", "tess_eval", "geometry",
+                                           "fragment"};
+    SelfCheckSpirv(code, shader_hash, stage_names[stage_index]);
     device.SaveShader(code);
     vk::ShaderModule module{BuildShader(device, code)};
 
@@ -433,8 +484,6 @@ vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& p
     const bool should_log = GPU::Logging::IsActive();
     const bool should_dump = Settings::values.gpu_log_shader_dumps.GetValue();
     if (should_log || should_dump) {
-        static constexpr std::array stage_names{"vertex", "tess_control", "tess_eval", "geometry",
-                                               "fragment"};
         const std::string shader_name =
             fmt::format("shader_{:016x}_{}", shader_hash, stage_names[stage_index]);
         if (should_log) {
@@ -455,12 +504,25 @@ vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& p
     return module;
 }
 
+vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& profile,
+                                 const Shader::RuntimeInfo& runtime_info,
+                                 Shader::IR::Program& program, Shader::Backend::Bindings& binding,
+                                 u64 shader_hash, size_t stage_index,
+                                 std::span<const u32> reference = {}) {
+    const auto code =
+        EmitPipelineShader(profile, runtime_info, program, binding, shader_hash, reference);
+    return BuildStageModule(device, code, shader_hash, stage_index);
+}
+
 struct DeferredStages {
     std::unique_ptr<EmissionBudget::Reservation> reservation;
     std::shared_ptr<ShaderPools> pools;
     std::array<Shader::IR::Program, Maxwell::MaxShaderProgram> programs;
     std::array<std::optional<Shader::RuntimeInfo>, Maxwell::MaxShaderStage> runtime_infos;
     std::array<std::vector<u32>, Maxwell::MaxShaderStage> reference_spirv;
+    /// SPIR-V emitted already (EDEN_NX2_ASYNC_TRANSLATE=2 records it on the translating thread):
+    /// such a stage is built from these words, never emitted from its program a second time.
+    std::array<std::vector<u32>, Maxwell::MaxShaderStage> emitted_spirv;
 };
 
 size_t GetTotalPipelineWorkers() {
@@ -769,6 +831,33 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         device.SupportsProvokingVertexLastMode();
     dynamic_features.has_provoking_vertex_tf_preserve =
         device.SupportsTransformFeedbackProvokingVertexPreservation();
+
+    // EDEN_NX2_ASYNC_TRANSLATE=1/2: new pipelines of draws that may be skipped are translated on
+    // threads of their own. It relies on the asynchronous shaders' draw skipping.
+    if (VideoCommon::AsyncTranslateWorkers()) {
+        if (use_asynchronous_shaders) {
+            const size_t threads = TranslateThreads();
+            translate_queue = std::make_unique<TranslateQueue>(
+                threads, MaxTranslationsInFlight,
+                [this](TranslationJob& job) { TranslateOnWorker(job); },
+                [this](std::unique_ptr<GraphicsPipeline> pipeline) {
+                    RetireTranslatedPipeline(std::move(pipeline));
+                });
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_ASYNC_TRANSLATE={}: new pipelines of draws that may be skipped are "
+                     "translated on {} threads{}",
+                     VideoCommon::AsyncTranslateMode(), threads,
+                     VideoCommon::AsyncTranslateMode() == 2
+                         ? ", and on the GPU thread too to compare (verify mode)"
+                         : "");
+        } else {
+            LOG_WARNING(Render_Vulkan, "EDEN_NX2_ASYNC_TRANSLATE needs asynchronous shaders; "
+                                       "translating on the GPU thread");
+        }
+    } else if (VideoCommon::AsyncTranslateMode() == 3) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_ASYNC_TRANSLATE=3: GPU-thread translations use "
+                                "environment snapshots, checked against the live state");
+    }
 }
 
 namespace {
@@ -886,6 +975,8 @@ void DestroyPipelinesWithProgress(Container& pipelines) {
 PipelineCache::~PipelineCache() {
     // The stop callback goes first: it uses background_pipelines.
     loading_stop_callback.reset();
+    // Its threads build with the members below (a translation in progress finishes).
+    translate_queue.reset();
     serialization_stop.request_stop();
     background_pipelines.RequestStop();
     if (const auto usage = background_pipelines.GetUsage(); usage.taken != 0 || usage.unused != 0) {
@@ -910,6 +1001,17 @@ PipelineCache::~PipelineCache() {
     Common::NoteShutdownProgress();
     DestroyPipelinesWithProgress(graphics_cache);
     DestroyPipelinesWithProgress(evicted_pipelines);
+    DestroyPipelinesWithProgress(retired_translations);
+}
+
+void PipelineCache::StopTranslations() {
+    if (!translate_queue) {
+        return;
+    }
+    // The GPU threads stopped, so nothing enqueues or adopts anymore and the retired pipelines
+    // can be handed over here.
+    translate_queue->Shutdown();
+    translate_queue.reset();
 }
 
 void PipelineCache::NoteDiskRecordFailure(std::string_view kind, u64 hash, const char* reason) {
@@ -2362,7 +2464,20 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
         ReportNewPipelineKey(graphics_key);
         pipeline = background_pipelines.Take(graphics_key);
         if (!pipeline) {
+            // EDEN_NX2_ASYNC_TRANSLATE=1/2: a draw that may be skipped has its new pipeline
+            // translated on a translation thread, and is skipped (as for an unbuilt pipeline)
+            // until it is ready. The entry stays empty meanwhile.
+            if (translate_queue && EnqueueTranslation()) {
+                NoteTranslateSkip();
+                return nullptr;
+            }
             pipeline = CreateGraphicsPipeline();
+        }
+    } else if (!pipeline && translate_queue) {
+        bool pending{};
+        pipeline = AdoptTranslation(pending);
+        if (pending) {
+            return nullptr;
         }
     }
     if (!pipeline) {
@@ -2410,10 +2525,11 @@ void ReportWorstFrame() {
     const auto describe = [&](const Frame& frame) {
         return fmt::format("{} pipelines built on the GPU thread in {:.1f} ms ({:.1f} ms "
                            "environments, {:.1f} ms translation), {:.1f} ms of draws held, {} "
-                           "lookups skipped",
+                           "lookups skipped, {} translations queued in {:.1f} ms",
                            frame.tally.count, ms(frame.tally.builds),
                            ms(frame.tally.split.environments), ms(frame.tally.split.translation),
-                           ms(frame.held), frame.skipped);
+                           ms(frame.held), frame.skipped, frame.tally.queued,
+                           ms(frame.tally.queued_time));
     };
     const auto now = std::chrono::steady_clock::now();
     const auto held_total = GraphicsPipeline::HoldTimeTotal();
@@ -2456,6 +2572,14 @@ void PipelineCache::TickFrame() {
     ++frame_count;
     ReportWorstFrame();
     ReportAsyncDiscard();
+    if (translate_queue) {
+        TickTranslations();
+    }
+    // A retired translation's build may still be queued on the pipeline workers: destroying it
+    // now would wait for that build, or run it here on the GPU thread.
+    std::erase_if(retired_translations, [this](const auto& entry) {
+        return scheduler.IsFree(entry.first) && entry.second->IsBuilt();
+    });
     native_wait_budget_us =
         static_cast<s64>(Settings::values.native_pipeline_wait_ms.GetValue()) * 1000;
     while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first)) {
@@ -2664,14 +2788,22 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     discard_decision.skip = discard;
     NoteDiscardDecision(discard, discard_decision.targets);
     if (discard) {
-        if ((skipped_lookups.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
-            // Counts lookups, not draws: a draw state can look its pipeline up more than once.
-            LOG_INFO(Render_Vulkan,
-                     "Async shaders: {} pipeline lookups skipped for unbuilt pipelines",
-                     skipped_lookups.load(std::memory_order_relaxed));
-        }
+        NoteSkippedLookup();
     }
     return discard ? nullptr : pipeline;
+}
+
+bool PipelineCache::DrawMayBeSkipped() {
+    // A bounded wait (native_async_draws = Bounded) may end in a skip too: the translation runs
+    // off the GPU thread, and the budget is spent on the driver compile once it is adopted.
+    return PendingDrawAction() != NativeDrawAction::Wait;
+}
+
+void PipelineCache::NoteTranslateSkip() {
+    discard_decision.skip = true;
+    NoteDiscardDecision(true, discard_decision.targets);
+    NoteSkippedLookup();
+    ++translate_stats.skipped;
 }
 
 void PipelineCache::NoteDiscardDecision(bool skip, const VideoCommon::DrawTargets& targets) {
@@ -2738,7 +2870,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     ShaderPools& pools, const GraphicsPipelineCacheKey& key,
     std::span<Shader::Environment* const> envs, PipelineStatistics* statistics,
     bool build_in_parallel, std::shared_ptr<ShaderPools> emit_pools,
-    std::unique_ptr<EmissionBudget::Reservation> reservation) try {
+    std::unique_ptr<EmissionBudget::Reservation> reservation, TranslationRecord* record) try {
     auto hash = key.Hash();
     LOG_DEBUG(Render_Vulkan, "{:#016x}", hash);
     size_t env_index{0};
@@ -3014,6 +3146,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     std::array<vk::ShaderModule, Maxwell::MaxShaderStage> modules;
     std::array<std::optional<Shader::RuntimeInfo>, Maxwell::MaxShaderStage> deferred_runtime_infos;
     std::array<std::vector<u32>, Maxwell::MaxShaderStage> reference_spirv;
+    std::array<std::vector<u32>, Maxwell::MaxShaderStage> deferred_spirv;
 
     const Shader::IR::Program* previous_stage{};
     Shader::Backend::Bindings binding;
@@ -3061,6 +3194,34 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                            static_cast<std::streamsize>(code.size() * sizeof(u32)));
             }
         }
+        if (record) {
+            // EDEN_NX2_ASYNC_TRANSLATE=2: this stage's SPIR-V, emitted once and used for the
+            // record and for the pipeline alike. EmitSPIRV changes the program it emits: the flag
+            // of an operation (GetZeroFromOp, GetSignFromOp, GetCarryFromOp, GetOverflowFromOp,
+            // GetSparseFromOp, GetInBoundsFromOp) gets its id from the operation's emitter and is
+            // turned into a Void, cut from the operation. A second emission of the same program
+            // never defines those flags again, and their users read the ids of the first one:
+            // ids the module never defines, and a driver crash.
+            const auto begin = std::chrono::steady_clock::now();
+            record->spirv[stage_index] = EmitSPIRV(profile, runtime_info, program, binding);
+            if (record->translate_only) {
+                previous_stage = &program;
+                continue;
+            }
+            if (emit_pools) {
+                // The workers build the module from these words (DeferredStages).
+                deferred_runtime_infos[stage_index] = runtime_info;
+                deferred_spirv[stage_index] = record->spirv[stage_index];
+            } else {
+                modules[stage_index] = BuildStageModule(device, record->spirv[stage_index],
+                                                        key.unique_hashes[index], stage_index);
+            }
+            if (build_in_parallel) {
+                AddRuntimeSpirvTime(0, begin);
+            }
+            previous_stage = &program;
+            continue;
+        }
         if (emit_pools) {
             deferred_runtime_infos[stage_index] = runtime_info;
             if (VideoCommon::Nx2Perf::Verify()) {
@@ -3076,6 +3237,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         }
         previous_stage = &program;
     }
+    if (record) {
+        record->complete = true;
+        if (record->translate_only) {
+            return nullptr;
+        }
+    }
     std::function<std::array<vk::ShaderModule, Maxwell::MaxShaderStage>()> emit_stages;
     if (emit_pools) {
         auto job = std::make_shared<DeferredStages>();
@@ -3084,6 +3251,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         job->programs = std::move(programs);
         job->runtime_infos = std::move(deferred_runtime_infos);
         job->reference_spirv = std::move(reference_spirv);
+        job->emitted_spirv = std::move(deferred_spirv);
         for (size_t stage = 0; stage < infos.size(); ++stage) {
             if (infos[stage]) {
                 infos[stage] = &job->programs[stage + 1].info;
@@ -3094,7 +3262,11 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             std::array<vk::ShaderModule, Maxwell::MaxShaderStage> stage_modules;
             Shader::Backend::Bindings stage_binding;
             for (size_t stage = 0; stage < stage_modules.size(); ++stage) {
-                if (job->runtime_infos[stage]) {
+                if (!job->emitted_spirv[stage].empty()) {
+                    // Emitted already: a program is emitted once (see the record in the loop).
+                    stage_modules[stage] = BuildStageModule(device, job->emitted_spirv[stage],
+                                                            hashes[stage + 1], stage);
+                } else if (job->runtime_infos[stage]) {
                     stage_modules[stage] =
                         EmitShaderModule(device, profile, *job->runtime_infos[stage],
                                          job->programs[stage + 1], stage_binding,
@@ -3123,6 +3295,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
 
 } catch (const Shader::Exception& exception) {
     auto hash = key.Hash();
+    if (record != nullptr && record->translate_only) {
+        // The verify mode's GPU-thread translation: the worker logs and dumps this failure.
+        LOG_DEBUG(Render_Vulkan, "Verify translation of {}: {}", PipelineShaders(key),
+                  exception.what());
+        return nullptr;
+    }
     if (!build_in_parallel) {
         // A disk cache record: one another (or an older) build stored can lack what this
         // translator asks for (merged packs: "Uncached storage pointer classification", 144
@@ -3295,13 +3473,20 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
     if (!pipeline || pipeline_cache_filename.empty()) {
         return pipeline;
     }
-    if (disk_pipelines.contains(graphics_key.Hash())) {
+    StoreRuntimeGraphicsPipeline(graphics_key, environments.envs);
+    return pipeline;
+}
+
+void PipelineCache::StoreRuntimeGraphicsPipeline(
+    const GraphicsPipelineCacheKey& key,
+    const std::array<GraphicsEnvironment, Maxwell::MaxShaderProgram>& environments) {
+    if (disk_pipelines.contains(key.Hash())) {
         // In the disk cache already, only not built at boot.
         QueueVulkanPipelineCacheFlush();
-        return pipeline;
+        return;
     }
-    disk_pipelines.insert(graphics_key.Hash());
-    serialization_thread.QueueWork([this, key = graphics_key, envs = std::move(environments.envs)] {
+    disk_pipelines.insert(key.Hash());
+    serialization_thread.QueueWork([this, key, envs = environments] {
         boost::container::static_vector<const GenericEnvironment*, Maxwell::MaxShaderProgram>
             env_ptrs;
         for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
@@ -3313,7 +3498,325 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
                           host_info.EnvironmentReadProperties());
     });
     QueueVulkanPipelineCacheFlush();
-    return pipeline;
+}
+
+namespace {
+// EDEN_NX2_ASYNC_TRANSLATE=2: translations compared and how many differed, logged every 10 s by
+// TickTranslations; the first 8 differences are logged by the translation thread that found them.
+std::atomic<u64> verify_compared{};
+std::atomic<u64> verify_differing{};
+std::atomic<u32> verify_logged{};
+
+/// The worker's translation against the GPU thread's: the SPIR-V of each stage word for word,
+/// then the reads each environment recorded. Empty when they match.
+std::string CompareTranslations(const TranslationJob& job) {
+    const TranslationRecord& reference = *job.reference;
+    const TranslationRecord& record = *job.record;
+    if (reference.complete != record.complete) {
+        return fmt::format("the translation {} on the GPU thread and {} on its thread",
+                           reference.complete ? "completed" : "failed",
+                           record.complete ? "completed" : "failed");
+    }
+    for (size_t stage = 0; stage < record.spirv.size(); ++stage) {
+        const auto& expected = reference.spirv[stage];
+        const auto& got = record.spirv[stage];
+        if (expected == got) {
+            continue;
+        }
+        const auto [mismatch, unused] = std::ranges::mismatch(expected, got);
+        return fmt::format("stage {} SPIR-V: {} words on the GPU thread, {} on its thread, first "
+                           "difference at word {}",
+                           stage, expected.size(), got.size(),
+                           std::distance(expected.begin(), mismatch));
+    }
+    for (size_t index = 0; index < job.envs.size(); ++index) {
+        if (job.key.unique_hashes[index] == 0) {
+            continue;
+        }
+        if (std::string difference = job.envs[index].FirstReadDifference(job.reference_envs[index]);
+            !difference.empty()) {
+            return fmt::format("program {} reads: {}", index, difference);
+        }
+    }
+    return {};
+}
+} // Anonymous namespace
+
+bool PipelineCache::EnqueueTranslation() {
+    if (!DrawMayBeSkipped() || translate_sync_only.contains(graphics_key)) {
+        return false;
+    }
+    if (translate_queue->InFlight() >= MaxTranslationsInFlight) {
+        ++translate_stats.full;
+        return false;
+    }
+    const auto begin = std::chrono::steady_clock::now();
+    auto job = std::make_unique<TranslationJob>();
+    job->key = graphics_key;
+    job->native = maxwell3d->GetNativeMacroEngine().native_turing;
+    job->enqueued = begin;
+    GraphicsEnvironments environments;
+    translate_stats.snapshot_bytes +=
+        GetGraphicsEnvironments(environments, graphics_key.unique_hashes, true);
+    // A copy (environments declare a destructor, so they have no moves); the snapshot is shared.
+    job->envs = environments.envs;
+    if (VideoCommon::AsyncTranslateMode() == 2) {
+        // Verify mode: the same draw translated here from the live state too, as the GPU thread
+        // would have, for the translation thread to compare with its own (SPIR-V and reads).
+        // Pools of its own: nothing else on the GPU thread holds IR in them.
+        GraphicsEnvironments live;
+        GetGraphicsEnvironments(live, graphics_key.unique_hashes);
+        job->reference = std::make_unique<TranslationRecord>();
+        job->reference->translate_only = true;
+        if (!verify_pools) {
+            verify_pools = std::make_unique<ShaderPools>();
+        }
+        verify_pools->ReleaseContents();
+        [[maybe_unused]] const auto none =
+            CreateGraphicsPipeline(*verify_pools, graphics_key, live.Span(), nullptr, true,
+                                   nullptr, nullptr, job->reference.get());
+        job->reference_envs = live.envs;
+        job->record = std::make_unique<TranslationRecord>();
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+    translate_stats.enqueue_time += elapsed;
+    frame_tally.queued_time += elapsed;
+    ++frame_tally.queued;
+    if (!translate_queue->Enqueue(std::move(job))) {
+        ++translate_stats.full;
+        return false;
+    }
+    ++translate_stats.queued;
+    return true;
+}
+
+std::unique_ptr<GraphicsPipeline> PipelineCache::AdoptTranslation(bool& pending) {
+    pending = false;
+    if (!translate_queue->Contains(graphics_key)) {
+        // Not translating: a key that made no pipeline, which stays empty as before.
+        return nullptr;
+    }
+    auto job = translate_queue->Take(graphics_key);
+    if (!job) {
+        if (DrawMayBeSkipped()) {
+            NoteTranslateSkip();
+            pending = true;
+            return nullptr;
+        }
+        // A draw that must not be skipped (a full-screen pass) needs a pipeline a skippable draw
+        // queued: wait a little for it, then build it here. Never a near match.
+        NoteDiscardDecision(false, discard_decision.targets);
+        const auto begin = std::chrono::steady_clock::now();
+        job = translate_queue->Wait(graphics_key, TranslateWaitCap);
+        ++translate_stats.waits;
+        translate_stats.wait_time += std::chrono::steady_clock::now() - begin;
+        if (!job) {
+            translate_queue->Abandon(graphics_key);
+            ++translate_stats.fallbacks;
+            return CreateGraphicsPipeline();
+        }
+    }
+    bool retry{};
+    auto pipeline = AdoptJob(std::move(job), retry);
+    if (!retry) {
+        return pipeline;
+    }
+    // Not usable: translate again from a fresh snapshot of this draw, or build it here.
+    if (!translate_sync_only.contains(graphics_key) && DrawMayBeSkipped() &&
+        EnqueueTranslation()) {
+        ++translate_stats.requeued;
+        NoteTranslateSkip();
+        pending = true;
+        return nullptr;
+    }
+    ++translate_stats.fallbacks;
+    return CreateGraphicsPipeline();
+}
+
+std::unique_ptr<GraphicsPipeline> PipelineCache::AdoptJob(std::unique_ptr<TranslationJob> job,
+                                                          bool& retry) {
+    retry = false;
+    switch (job->outcome) {
+    case TranslationJob::Outcome::Built:
+        if (std::ranges::all_of(job->envs, [](GraphicsEnvironment& env) {
+                return env.TextureReadsStillMatch();
+            })) {
+            const auto ready = std::chrono::steady_clock::now() - job->enqueued;
+            ++translate_stats.adopted;
+            translate_stats.translation_time += job->translation;
+            translate_stats.ready_total += ready;
+            translate_stats.ready_max = (std::max)(translate_stats.ready_max, ready);
+            translate_failures.erase(job->key);
+            auto pipeline = std::move(job->pipeline);
+            if (!pipeline_cache_filename.empty()) {
+                StoreRuntimeGraphicsPipeline(job->key, job->envs);
+            }
+            return pipeline;
+        }
+        ++translate_stats.stale;
+        break;
+    case TranslationJob::Outcome::Retry:
+        ++translate_stats.gave_up;
+        break;
+    case TranslationJob::Outcome::Differs:
+        // Verify mode: a snapshot gap (logged by the translation thread). Built on the GPU
+        // thread from the live state, now and from then on.
+        ++translate_stats.differs;
+        translate_sync_only.insert(job->key);
+        break;
+    case TranslationJob::Outcome::NoPipeline:
+    case TranslationJob::Outcome::Pending:
+        ++translate_stats.no_pipeline;
+        // A pipeline made before a failure on its thread is retired, not destroyed here.
+        translate_queue->Discard(std::move(job));
+        return nullptr;
+    }
+    retry = true;
+    if (++translate_failures[job->key] >= MaxTranslateFailures) {
+        translate_sync_only.insert(job->key);
+    }
+    translate_queue->Discard(std::move(job));
+    return nullptr;
+}
+
+void PipelineCache::TranslateOnWorker(TranslationJob& job) {
+    boost::container::static_vector<Shader::Environment*, Maxwell::MaxShaderProgram> env_ptrs;
+    for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+        if (job.key.unique_hashes[index] != 0) {
+            env_ptrs.push_back(&job.envs[index]);
+        }
+    }
+    // As the GPU thread's build: SPIR-V emission and the driver compile on the pipeline workers
+    // when the emission budget has room, otherwise the SPIR-V here.
+    std::shared_ptr<ShaderPools> emit_pools;
+    auto reservation = emission_budget.TryAcquire(job.native);
+    if (reservation) {
+        {
+            std::scoped_lock lock{spare_pools_mutex};
+            if (!spare_pools.empty()) {
+                emit_pools = std::move(spare_pools.back());
+                spare_pools.pop_back();
+            }
+        }
+        if (!emit_pools) {
+            emit_pools = std::make_shared<ShaderPools>();
+        }
+    }
+    thread_local ShaderPools thread_pools;
+    if (!emit_pools) {
+        thread_pools.ReleaseContents();
+    }
+    ShaderPools& pools = emit_pools ? *emit_pools : thread_pools;
+    t_translate_worker = true;
+    SCOPE_EXIT {
+        t_translate_worker = false;
+    };
+    job.pipeline = CreateGraphicsPipeline(pools, job.key, MakeSpan(env_ptrs), nullptr, true,
+                                          std::move(emit_pools), std::move(reservation),
+                                          job.record.get());
+    if (std::ranges::any_of(job.envs, [](const GraphicsEnvironment& env) {
+            return env.GuardedReadFailed();
+        })) {
+        // Translated with zeros where a read gave up: never used, translated again from a fresh
+        // snapshot. The pipeline stays in the job: the GPU thread retires it (AdoptJob, Discard)
+        // rather than destroying it on this thread.
+        job.outcome = TranslationJob::Outcome::Retry;
+    } else if (job.reference && job.record) {
+        verify_compared.fetch_add(1, std::memory_order_relaxed);
+        if (const std::string difference = CompareTranslations(job); !difference.empty()) {
+            verify_differing.fetch_add(1, std::memory_order_relaxed);
+            if (verify_logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+                LOG_WARNING(Render_Vulkan, "Async translate verify: {} differs: {}",
+                            PipelineShaders(job.key), difference);
+            }
+            // Never used: retired by the GPU thread (AdoptJob, Discard), which builds the key
+            // itself from the live state.
+            job.outcome = TranslationJob::Outcome::Differs;
+        }
+    }
+    // The comparison is done; the copies go with the job's snapshot bytes.
+    job.reference.reset();
+    job.record.reset();
+    for (GraphicsEnvironment& env : job.reference_envs) {
+        env = GraphicsEnvironment{};
+    }
+    for (GraphicsEnvironment& env : job.envs) {
+        env.ReleaseSnapshotBytes();
+    }
+}
+
+void PipelineCache::RetireTranslatedPipeline(std::unique_ptr<GraphicsPipeline> pipeline) {
+    if (pipeline) {
+        retired_translations.emplace_back(scheduler.CurrentTick(), std::move(pipeline));
+    }
+}
+
+void PipelineCache::TickTranslations() {
+    translate_queue->RetireAbandoned();
+    // Translations whose draws did not come back yet: adopted now, so the next draw finds them.
+    for (auto& job : translate_queue->TakeFinished()) {
+        const auto it = graphics_cache.find(job->key);
+        if (it == graphics_cache.end() || it->second) {
+            translate_queue->Discard(std::move(job));
+            continue;
+        }
+        bool retry{};
+        if (auto pipeline = AdoptJob(std::move(job), retry)) {
+            it->second = std::move(pipeline);
+            ++translate_stats.adopted_between_frames;
+        } else if (retry) {
+            // Not usable, and no draw to take a fresh snapshot from: the next lookup of the key
+            // is a new one (queued again, or built on the GPU thread once it failed too often).
+            graphics_cache.erase(it);
+        }
+    }
+    if (frame_count % 60 == 0) {
+        for (const auto& key : translate_queue->Sweep(TranslateSweepAge)) {
+            ++translate_stats.swept;
+            translate_sync_only.insert(key);
+            if (const auto it = graphics_cache.find(key);
+                it != graphics_cache.end() && !it->second) {
+                graphics_cache.erase(it);
+            }
+            LOG_WARNING(Render_Vulkan,
+                        "Async translate: {} still translating after {} s; built on the GPU "
+                        "thread at its next draw instead",
+                        PipelineShaders(key), TranslateSweepAge.count());
+        }
+    }
+    auto& stats = translate_stats;
+    const auto now = std::chrono::steady_clock::now();
+    if (stats.window == std::chrono::steady_clock::time_point{}) {
+        stats.window = now;
+        return;
+    }
+    if (now - stats.window < std::chrono::seconds{10}) {
+        return;
+    }
+    const auto ms = [](auto d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    const u32 adopted = stats.adopted;
+    LOG_INFO(Render_Vulkan,
+             "Async translate in the last 10 s: {} queued ({:.1f} ms of GPU thread for "
+             "environments and snapshots, {} KB copied, {} not queued: full), {} adopted ({} "
+             "between frames; first lookup to ready {:.1f} ms average, {:.1f} ms worst; {:.1f} ms "
+             "translating on its threads), {} lookups skipped while translating, {} waits "
+             "({:.1f} ms), {} built on the GPU thread after all, {} queued again ({} stale "
+             "texture descriptors, {} guarded reads gave up), {} made no pipeline, {} swept, {} "
+             "in flight",
+             stats.queued, ms(stats.enqueue_time), stats.snapshot_bytes / 1024, stats.full,
+             adopted, stats.adopted_between_frames,
+             adopted != 0 ? ms(stats.ready_total) / adopted : 0.0, ms(stats.ready_max),
+             ms(stats.translation_time), stats.skipped, stats.waits, ms(stats.wait_time),
+             stats.fallbacks, stats.requeued, stats.stale, stats.gave_up, stats.no_pipeline,
+             stats.swept, translate_queue->InFlight());
+    if (VideoCommon::AsyncTranslateMode() == 2) {
+        LOG_INFO(Render_Vulkan,
+                 "Async translate verify: {} compared, {} differ ({} rejected at adoption)",
+                 verify_compared.exchange(0, std::memory_order_relaxed),
+                 verify_differing.exchange(0, std::memory_order_relaxed), stats.differs);
+    }
+    stats = {};
+    stats.window = now;
 }
 
 ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipelineCacheKey& key,
@@ -3392,6 +3895,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         program.shared_memory_size = max_shared_memory;
     }
     std::vector<u32> code{EmitSPIRV(profile, program)};
+    SelfCheckSpirv(code, key.unique_hash, "compute");
     device.SaveShader(code);
     vk::ShaderModule spv_module{BuildShader(device, code)};
 
