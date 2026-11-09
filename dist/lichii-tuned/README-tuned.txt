@@ -133,6 +133,27 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    frame while jittering, so they keep some of their history (LICHII_FSR_REACTIVE, 0 to 1,
    default 0.5; ab-19 brings round 18's full strength back), and that mask no longer spreads
    along the screen's edges while the camera moves.
+ * Round 20, from upstream Lichii's open pull requests: the GPU thread draws Ocarina's
+   culled mesh draws from the counts the GPU wrote, without waiting for them (#980, about 2,000
+   waits a second); one channel's semaphore release frees the channel waiting on it when the
+   GPU thread reaches it, not a host GPU round trip later (#911); 8-64 MiB images come from
+   256 MiB memory blocks instead of one allocation each (#922, +6% fps measured on an
+   RX 9070 XT); fewer redundant vertex and index buffer binds (#955, #954); cheaper polling
+   of a suspended list copy (#933); fast draws survive writes that change nothing (#974);
+   compute dispatches continue while a pipeline is rebuilt (#969); texture descriptors read
+   without a flush during shader translation (#970); task/mesh pipelines built a few at a
+   time (#998); the Castle Town guard house fix (#976: a built-in Texture Pool x2 patch,
+   on in Add-Ons, and superseded images freed after 4 frames); smaller fixes (#957, #939,
+   #1005, #1008). The pgo-train build loads the game again (#1002's part that keeps the
+   game-file decoder out of the profile instrumentation).
+ * Round 20, from Fritchii v5.2: core timing waits on a high-resolution timer on Windows
+   (ab-21 brings the old wait back), every ASTC decode and unswizzle store is bounds-checked
+   (AMD corruption and device loss), staging buffers may go over the memory budget instead of
+   aborting, guest writes wait for a GPU download landing under them instead of being
+   overwritten, and the pipeline cache is more robust: background builds stop when the game
+   stops, the driver's cache is written during long builds, a slow shutdown that still makes
+   progress is waited for instead of killed, and pipelines other builds stored are counted
+   instead of logged as errors.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -182,6 +203,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
                               spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
                               power-limited laptop, compare the frame rate with the default
+ ab-21-old-timer.bat          core timing waits as in round 19 instead of on Fritchii's
+                              high-resolution timer (EDEN_HIRES_CLOCK=0), logged like
+                              perf-trace.bat
  verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
                               differences ("not met after the drain", "differing" and mismatch
                               counts should stay 0); slower
