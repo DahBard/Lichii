@@ -32,9 +32,9 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `ad477ef1f` (the 53 pull requests of
-  2026-11-08; merged in round 17, `bf4c42e22` = build 117 + 3 in round 14, `92f021240` = build 116
-  in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `281477eac` (merged in round 18;
+  `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
+  round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
   push to `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with
   `[skip ci]` doesn't); the CachyOS ones only in a manual run (`workflow_dispatch` with
@@ -72,12 +72,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (189 commits over upstream nx2
-  `ad477ef1f`, which round 17 merged into it; pushing it doesn't trigger builds).
+- Source of the patch: branch `tuned4` of DahBard/Lichii (248 commits over upstream nx2
+  `281477eac`, which round 18 merged into it; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `ad477ef1f`, as `tuned` does). The patch is `git diff --binary ad477ef1f tuned4` (167 files,
-  718 KB); check it
+  `281477eac`, as `tuned` does). The patch is `git diff --binary 281477eac tuned4` (236 files,
+  1.56 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -111,7 +111,8 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 ## What the tuned build contains (tuned4)
 
 Round 18 (2026-11-09): upstream nx2 merged up to `281477eac`, camera jitter for FSR, and the
-ports deferred for their conflicts (#805, #717's guest CPU parts; see below).
+ports deferred for their conflicts (#805, #717's guest CPU parts), done first as the owner
+asked. Nothing of round 18 has run in the game yet.
 - Merge `1105c716c` (11 pull requests of the evening of 2026-11-08): #858 (cheaper per-draw work
   on the split back thread: alias syncs only when an alias changed, a per-pipeline texture memo,
   delta draws keeping the previous draw's views; fast draws are always on upstream), #921 (its
@@ -131,6 +132,54 @@ ports deferred for their conflicts (#805, #717's guest CPU parts; see below).
   `LICHII_FSR_JITTER=0` (ab-14) as before. Unit tests in `src/tests/video_core/ocarina_upscale.cpp`.
 - The workflow builds `pgo-train` again, for an Ocarina profile (none was ever recorded:
   `lichii-tuned/pgo/` is empty).
+- #717's guest CPU parts (merge `5f0e02841`, branch `r18-pr717`, ported by an Opus subagent
+  from eb3553bcb), every piece behind an `EDEN_NX2_*` switch, on unless 0:
+  - `06d6d329b` dynarmic x64 codegen: flag reuse (`_JIT_FLAGS`), a 2^16-entry 4-way dispatch
+    table (`_JIT_DISPATCH`: 0 = old 2^20 table, 8-24 = bits), compact exits, far code, address
+    folding into fastmem (`_JIT_FOLD_ADDR`, 64-bit fastmem only), `_JIT_ZEXT`,
+    `_JIT_SPILL_GPR`, `_JIT_SCRATCH_COPY`, `_JIT_NO_FRAME`, back-edge halt checks, a 32-entry
+    RSB, YIELD/WFE pauses (`_HINT_PAUSE`); off under CPU accuracy Paranoid. #717's TSO loads
+    are round 7's `LICHII_JIT_TSO` and were not added twice; native LSE atomics are left out
+    (#831's author traced a boot panic to their CAS fallback). Two fixes over #717: the
+    zero-extend skip only for values in a GPR (a 32-bit spill slot would reload 4 stale bytes),
+    no flags-in-ZF path with verbose JIT debugging. `37ca9e142`: RegAlloc shadowing.
+  - `98843dfae` memory: trap fast paths (`_TRAP_FASTPATH`: the trapping access's host
+    pointer reused, a write slot remembers its device page while mappings stay, four read
+    areas per core) and a write slot for non-core threads (`_SYS_SLOT`; System has
+    NUM_CPU_CORES + 1 dirty managers).
+  - `3fa3e9c89` kernel: spin-then-wait kernel locks (`_KSPIN`, `_KSPIN_US` 20), arbiter waits
+    watching the word (`_ARB_SPIN` µs, 8), spin core lock (`_CORE_LOCK`), `_IDLE_PAUSE` (only
+    without WAITPKG; tuned4's UMWAIT idle stays), `_CONTEXT_GUARD`, `_FAST_TLS`,
+    `_OFFSETOF_CACHE`, `_CACHE_LOCK_WAIT`. No thread pinning, no mutex owner hook.
+  - `05b4d4aaa` Ocarina patches through svc 0x80+ hooks: host zstd with the game's dictionaries
+    (`_OOT_NATIVE_ZSTD`), 8-byte strcmp (`_OOT_FAST_LOOKUP`), resource poll backoff
+    (`_OOT_POLL_BACKOFF`, µs), wider multi-core affinity masks (`_OOT_WIDE_AFFINITY`); in
+    Add-Ons like the other patches, original bytes checked. Not checked against the game
+    binary here: the strcmp patch's exit register state, the zstd callers' use of the context.
+  - Not ported: the native Ocarina macros (macro_hle_oot, they overlap #805's macro work), the
+    GPU-thread, cache and drain changes (duplicates of #805), the DLSS CMake condition.
+  - Launchers: ab-15 (all of it off), ab-16 (codegen off), ab-17 (Ocarina patches off).
+- #805 (merge `da05287c7`, branch `r18-pr805`, 47 commits of head 34621dcd6 by an Opus
+  subagent; cherry-picks keep jpkto as author): acquires from a front semaphore view and QMD
+  view instead of drains, macros that read memory run on the back (`EDEN_NX2_BACK_MACROS`),
+  command lists on GPU-written pages wait only for the words GPU work wrote and only up to the
+  last host sync, GPU-written compute list parameters through vkCmdDispatchIndirect
+  (`EDEN_NX2_LIST_INDIRECT`), upload batching (`LICHII_UPLOAD_BATCH=0` off), back-thread CPU
+  cuts, fence-flagged releases, the race fixes. tuned4's paths moved behind switches:
+  `LICHII_TUNED4_ACQUIRES=1` (#345 fast paths, Frizti polls, `LICHII_ACQUIRE_POLL`),
+  `LICHII_TUNED4_DMA_READS=1` (shadow, mixed reads, report drain; with
+  `EDEN_NX2_BACK_MACROS=0` the round 17 behaviour), `LICHII_LIST_WRITER_WAIT=all`; tuned4's
+  front write tracking runs only with one of them. Verify: `EDEN_NX2_DRAIN_CHECK`,
+  `_DMA_READ_VERIFY`, `_BACK_MACRO_VERIFY=<n>`, `_LIST_VERIFY`, `_LIST_INDIRECT_CHECK`;
+  stats `EDEN_NX2_ACQUIRE_STATS`, `_LIST_STATS`, `EDEN_NX2_GPU_PROFILE=2`. Skipped: 1457bd01f
+  and f3702f3b9 (tuned4 has #699 and #792), the GPU-cost diagnostics. Not ported yet: upload
+  reordering (ddf01f582, a0ecdb040: buffer-use ticks the port would have to adapt by hand)
+  and the read-download set (13 commits from 1072d4a1e to 34621dcd6: they only act when the
+  guest reads GPU-written memory, and they touch the memory.cpp handlers #717 changed).
+  `EDEN_NX2_MME_DMA_STATS` now describes only tuned4's paths. Launchers: ab-18 (#805 off),
+  verify-r18.
+- `core/memory.cpp`: #805's trap counters sit in #717's write handler; #717's non-core slot
+  is not counted (the counters check their bounds).
 
 Round 17 (2026-11-08): upstream nx2 merged up to `ad477ef1f`, the owner's new AMD fork migrated
 for Intel, and the fork survey's picks. The owner skipped testing round 16 (r26), so its checks
@@ -679,35 +728,28 @@ Own changes:
 ## Next steps
 
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
-   The frame is ~36 ms; the three CPU-bound threads (guest cores 4 and 5, the GPU back thread)
-   must each fall from ~27 to under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). Round 17
-   (Windows run #27; round 16 untested, so its checks come with it): from its logs, the back thread's bank check
-   and split wait (EXP9), the front's macro dma read waits (mixed reads) and the 1% lows
-   (EXP8, pipeline keys); verify-r16 must log 0 missed and 0 differed, ab-12 tells a regression
-   from one of them. Ask the owner for the monitor's refresh rate and whether FreeSync is on: the
-   host pacer (trace-host-pace vs trace-display) only helps a fixed-refresh display at 60 fps,
-   and FreeSync is the better answer below 60. Then: the guest cores' ~120,000 slow memory
-   accesses a second each (which pages miss fastmem, and why), the list writer wait (310 ms/s:
-   wait only for writers that overlap the entry, as EXP10 narrows macro reads), parallel command
-   recording if per-draw work still dominates the back, area-load stalls (ASTC decode and
-   uploads off the back thread, #166's NUP cache), #253's camera jitter for FSR 4. Compare the
-   CachyOS log (RADV, FSR 3.1) with Windows on the same scene.
-2. The big levers left (survey of 2026-11-08, research section 12): upstream #805 (jpkto, draft,
-   61 commits, conflicts with tuned4 in 25 files): decoupled split threads, attacking all three
-   front waits (list writers 310, macro DMA 208, acquires 180 ms/s). Take its near-clean commits
-   first (20628c90a, 1457bd01f, b62f49104, 8b5be87f7, d4e8d85d4, 758b5aae3, 90e334298,
-   d4e91e81d, 739a6ed95, d8988e703), then list writers (6229487c8, 34656e822), macro DMA reads
-   (1d9b6ef31, a442c38fe), acquires (fb4d4e47a, 188baa144), the QMD view last; run its verify
-   switches (`EDEN_NX2_DRAIN_CHECK`, `READ_CHECK`, `LIST_VERIFY`, `BACK_MACRO_VERIFY`). Then
-   pieces of #717 (stephenjayakar, one squashed commit on build 116): guest JIT and kernel
-   (dynarmic TSO loads, flag reuse, KSpinLock/arbiter spin, trap fast paths), Ocarina's native
-   macros (`macro_hle_oot.*`), host zstd, strcmp and resource poll patches, for the guest cores'
-   27 ms; not its thread pinning (Zen-tuned), not its drain changes (they duplicate #805), and
-   its native LSE atomics only after the CAS-on-write-protected-page panic #831's author found.
-   Re-fetch both heads first: they move. Later: #579/#741's graphics warm-up only if graphics
-   pipeline libraries work on RDNA 4 (AMD-Gfx-Drivers#126), the noinline switches after an A/B,
-   #806 after an A/B at the Hyrule Field spawn (grass), Vendichii's FSR 3 frame generation if
-   the owner wants 60 shown frames before 60 real ones.
+   r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
+   (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
+   pacer can't run on AMD's driver (no VK_KHR_present_wait); FreeSync is the answer below 60.
+   Done since: round 16's bank check (back 27.6 -> 22.7), #253's jitter idea for FSR 4
+   (round 18), the list writer wait (#805, round 18). Still open: which pages miss fastmem
+   (~144,000 slow accesses a second per core; #717's trap fast paths make them cheaper, not
+   fewer), parallel command recording if per-draw work still dominates the back, area-load
+   stalls (ASTC decode and uploads off the back thread, #166's NUP cache).
+2. Round 18's build: compare the perf log with r27 (guest cores 4/5 26.2/24.8 ms, the back
+   22.7, the front's waits ~660 ms/s). #717's codegen should lower the guest cores' "guest
+   code" ms/s, #805 the front's waits; verify-r18 must log no difference, ab-15 to ab-18 tell a
+   regression from the piece that caused it. Then: the rest of #805 (upload reordering
+   ddf01f582/a0ecdb040, the read-download set) and #717's native Ocarina macros
+   (`macro_hle_oot.*`, the front's "macro" zone, ~76 ms/s), a recorded Ocarina PGO profile
+   (pgo-train is on again), the front's "resume pending" polling (~134 ms/s at ~80,000/s),
+   #579/#741's graphics warm-up only if graphics pipeline libraries work on RDNA 4
+   (AMD-Gfx-Drivers#126), the noinline switches after an A/B, #806 after an A/B at the Hyrule
+   Field spawn (grass), Vendichii's FSR 3 frame generation if the owner wants 60 shown frames
+   before 60 real ones. The owner's P-cores average ~3.0 GHz (max 4.2): ask for HWiNFO's power
+   limit and thermal flags while playing, Windows' Best performance mode, and the laptop's own
+   performance profile; with the panel off the Intel GPU stays idle and leaves the package
+   power to the CPU.
 3. Summarize the new log with `python3 -I lichii-tuned/lichii_log_summary.py eden_log.txt`; check
    draws held for pipelines, the front's drain after #345, and the `Finish sites:` lines.
 4. Then: remove the biggest Finish sources; look at the 17.5 ms submission (tessellation?);
