@@ -2130,6 +2130,7 @@ bool Maxwell3D::FrontRunOnBack(Core::System& system, VideoCommon::GpuSplit& spli
         },
         // Its writes (BackWritable) touch registers and the caches, not guest memory.
         fs.parameters, VideoCommon::GpuSplit::Writes::Caches);
+    fs.sink_pending = false; // The back macro consumes the sink before it runs.
     const u64 position = split.Position();
     fs.back_last = position;
     const bool tracked = fs.control == Regs::ShadowRamControl::Track ||
