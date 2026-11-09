@@ -9,6 +9,7 @@
 
 #include "common/assert.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "video_core/nx2_profile.h"
@@ -551,6 +552,9 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
         pending_acquire.reset();
         dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
         Nx2SemaphoreWaiters::Get().Remove(this);
+        // As for an acquire met at once: CanResumeAcquire read the word just now, which
+        // DispatchCalls' check may have come before (Scheduler::Push).
+        dma_pusher.ApplyCollectedWrites();
     }
     return true;
 }
@@ -726,6 +730,14 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             LOG_ERROR(HW_GPU, "Invalid semaphore operation {}", static_cast<u32>(op));
             return;
         }
+        // A met acquire orders this channel's later work after the release that met it, so after
+        // what the guest wrote before that release (EXP35 only collects those writes). Checked
+        // after the word was read; a suspended channel applies them when it resumes.
+        SCOPE_EXIT {
+            if (!pending_acquire) {
+                dma_pusher.ApplyCollectedWrites();
+            }
+        };
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
         if (AcquireWithoutDrain(dma_pusher, acquire)) {
             return;
