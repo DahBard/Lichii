@@ -4750,6 +4750,11 @@ void TextureCache<P>::RelocateImage(ImageId image_id, GPUVAddr gpu_addr, DAddr c
     image.flags |= ImageFlagBits::CpuModified;
     image.last_write_frame = ~u64{0};
     image.relocation_guard_noted = 0;
+    // A new target to the asynchronous shaders' skip rule too: its draws wait until it was
+    // cleared at this address in two render frames (ClassifyDrawTargets).
+    image.last_clear_frame = ~u64{0};
+    image.previous_clear_frame = ~u64{0};
+    image.drawn_since_clear = false;
     // 5. Page tables, map view, page filter, LRU.
     RegisterImage(image_id);
     // 6. As DeleteImage: render targets and descriptor tables are looked up again.
@@ -5456,6 +5461,7 @@ void TextureCache<P>::NoteFullClears() {
     // colour clear), and those must not count as cleared here.
     const auto& clear = maxwell3d->regs.clear_surface;
     const bool color = clear.R || clear.G || clear.B || clear.A;
+    const u64 render_frame = RenderFrame();
     const auto note = [&](ImageViewId view_id) {
         if (!view_id || view_id == NULL_IMAGE_VIEW_ID) {
             return;
@@ -5465,13 +5471,13 @@ void TextureCache<P>::NoteFullClears() {
             return;
         }
         ImageBase& image = slot_images[view.image_id];
-        if (image.last_clear_frame != frame_tick) {
+        if (image.last_clear_frame != render_frame) {
             // Only a clear after a write starts a new one: two clears with nothing between are
             // the same clear, wherever the frame's tick fell.
             if (image.drawn_since_clear) {
                 image.previous_clear_frame = image.last_clear_frame;
             }
-            image.last_clear_frame = frame_tick;
+            image.last_clear_frame = render_frame;
         }
         image.drawn_since_clear = false;
     };
@@ -5491,6 +5497,7 @@ DrawTargets TextureCache<P>::ClassifyDrawTargets() {
     // The bound targets are the registers' while their dirty flag is clear (UpdateRenderTargets
     // finds them again when it is set); otherwise the images at the registers' addresses.
     const bool bound_current = !maxwell3d->dirty.flags[Dirty::RenderTargets];
+    const u64 render_frame = RenderFrame();
     DrawTargets result{};
     bool any_target{};
     const auto take = [&](ImageViewId bound, const ImageInfo& info, GPUVAddr gpu_addr) {
@@ -5507,7 +5514,7 @@ DrawTargets TextureCache<P>::ClassifyDrawTargets() {
         // Not registered yet: the draw is the first use of the target.
         const DrawTargetClass kind =
             image ? ClassifyClearedTarget(image->last_clear_frame, image->previous_clear_frame,
-                                          frame_tick)
+                                          render_frame)
                   : DrawTargetClass::FirstTime;
         if (kind > result.kind) {
             result = DrawTargets{
