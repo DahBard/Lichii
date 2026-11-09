@@ -101,6 +101,15 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    "Pin GPU threads to their own cores"); this build leaves it off: on the Core Ultra 7 255H
    it would put the emulated CPU cores on the four P-cores left instead of spreading them over
    P- and E-cores.
+ * Round 18: AMD FSR 4 (and its FSR 3.1 fallback) now gets a camera jitter: each frame the
+   scene is drawn shifted by a different fraction of a pixel and FSR is told the shift, so it
+   collects new detail over the frames instead of the same samples (sharper edges and fine
+   detail, less crawling). It runs only while FSR upscales Ocarina; ab-14 turns it off
+   (LICHII_FSR_JITTER=0). Upstream Lichii's newest commits are in too, among them cheaper
+   per-draw work on the GPU back thread (texture lookups reused while a pipeline's textures
+   stay the same). The run also has a "pgo-train" download again: 10-15 minutes of Ocarina
+   with it records a profile that makes the next builds' own code faster on this CPU (see the
+   end of this file).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
@@ -136,6 +145,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-13-round16-texture-reads.bat  textures copied out of guest memory before they are untiled,
                               as in round 16 (EDEN_NX2_UNSWIZZLE_COPY=1), logged like
                               perf-trace.bat
+ ab-14-no-fsr-jitter.bat      FSR 4 without round 18's camera jitter (LICHII_FSR_JITTER=0),
+                              logged like perf-trace.bat: compare edges and fine detail
  verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
                               way on every use and logs differences ("missed" and "differed"
                               should stay 0); slower
