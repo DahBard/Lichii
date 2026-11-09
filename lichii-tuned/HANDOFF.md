@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-08 (round 17), for the next Claude session.
+State of the work on 2026-11-09 (round 18), for the next Claude session.
 
 ## Goal
 
@@ -109,6 +109,28 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   tool: a large `tail_lines` saves the log to a file you can grep.
 
 ## What the tuned build contains (tuned4)
+
+Round 18 (2026-11-09): upstream nx2 merged up to `281477eac`, camera jitter for FSR, and the
+ports deferred for their conflicts (#805, #717's guest CPU parts; see below).
+- Merge `1105c716c` (11 pull requests of the evening of 2026-11-08): #858 (cheaper per-draw work
+  on the split back thread: alias syncs only when an alias changed, a per-pipeline texture memo,
+  delta draws keeping the previous draw's views; fast draws are always on upstream), #921 (its
+  fixes), #910 (no null image preparation on memo hits, Ocarina), #878 (compute IR freed before
+  a synchronous compile), #880, #902, #918, #885, #879, #912, #881. Pipelines with computed
+  texture handles (tuned4's handle tables) use neither the memo nor delta draws (#858's
+  `ComputedHandles` blocker); the Ocarina 4K and effects captures stay unconditional (upstream
+  now builds them only with Streamline; FSR 4 uses them here).
+- `479bbb1b5`: camera jitter while FSR (4 or 3.1) upscales Ocarina. Frames after an evaluated
+  one offset the viewports of the scene camera's draws (vertex/mesh constant buffer 3 holding a
+  perspective projection, #253's test) into a scene-sized Z32 depth buffer by a Halton (2, 3)
+  sub-pixel jitter in FSR's cycle (8 phases same size, 18 for 1440p to 4K), chosen at the
+  frame's first draw and fixed for the frame (#253 lost geometry to an EQUAL depth test when its
+  jitter turned off mid-frame); the evaluation is told the offset (FSR convention: texel k
+  samples k + 0.5 - jitter, which a viewport moved by the jitter gives). The motion vectors use
+  the unjittered camera matrices, so they leave the jitter out. DLSS keeps unjittered frames.
+  `LICHII_FSR_JITTER=0` (ab-14) as before. Unit tests in `src/tests/video_core/ocarina_upscale.cpp`.
+- The workflow builds `pgo-train` again, for an Ocarina profile (none was ever recorded:
+  `lichii-tuned/pgo/` is empty).
 
 Round 17 (2026-11-08): upstream nx2 merged up to `ad477ef1f`, the owner's new AMD fork migrated
 for Intel, and the fork survey's picks. The owner skipped testing round 16 (r26), so its checks
@@ -569,6 +591,26 @@ Own changes:
 - Run #27 (round 17, a push: Windows only, the CachyOS job skipped) built `pgo` and `pgo-lto`
   (artifacts `lichii-tuned-r27-pgo`, `lichii-tuned-r27-pgo-lto`, ~90 MB each; pgo-lto in 15 min,
   pgo in 28 min with warm caches), the FSR 4 libraries checked by hash.
+- r27 (pgo-lto; logs perf, display = trace-display, r16 = verify-r16; 2026-11-09). The owner
+  deleted the shader cache to build it in play (Lichii's developer recommends that for the
+  best long-run performance; boot built 1,006 pipelines, so the 1% lows, 4.4 fps, are first
+  builds and say nothing yet). The owner sees the P-cores average ~3.0 GHz while playing, at
+  most 4.2 GHz (HWiNFO; the 255H's P-cores are rated 5.1 GHz): power-limited.
+  - Perf, from 62 s: 29.0 fps (p50 30.9 ms). Per frame: guest cores 4 and 5 26.2 and 24.8 ms,
+    the back 22.7 (r23: 27.6; round 16's bank check is 81 ms/s, r23 164), cores 3/1/0/2
+    19.3-15.2, the front 13.4, VulkanWorker 4.2; GPU submissions 11.7 ms of a ~29 ms span. The
+    guest cores now bound the frame: core 4 runs 778 ms/s of JIT'd guest code, ~144,000 slow
+    memory accesses/s, ~11,500 SleepThread calls/s (a yield loop), ~2,300 WaitForAddress and
+    ~1,700 SignalToAddress/s; idle spin 44-128 ms/s per core. Front waits on the back: list
+    writers 282 ms/s, macro dma read 217, acquire 159 (unchanged from r23); "resume pending"
+    134 ms/s at ~80,000/s. MME DMA reads: 97.6% no wait; the ~540/s that wait are "constant
+    buffer" overlaps that round 16's mixed reads turn down (no "Mixed MME DMA reads" line was
+    logged), so #805's back-run macros are the fix.
+  - The menus ran exactly 30 fps until 68 s: the owner's FPS Limit setting was 30 then (the
+    log's config dumps; 0 afterwards and in the other logs), not a regression.
+  - Display (LICHII_HOST_PACE=2): "present wait unavailable": AMD's driver has no
+    VK_KHR_present_wait, so the host pacer can't run on this setup at all.
+  - verify-r16: bank check missed 0 in every report; no mixed read differed (none checked).
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds

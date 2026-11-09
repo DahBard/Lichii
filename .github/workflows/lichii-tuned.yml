@@ -49,11 +49,11 @@ jobs:
           # - variant: msvc
           #   lto: "OFF"
           #   msvc: true
-          # Instrumented build that records an Ocarina profile while you play (slower). Off until
-          # a profile is wanted: the r7 pgo-train download records one for this code too.
-          # - variant: pgo-train
-          #   lto: "OFF"
-          #   train: true
+          # Instrumented build that records an Ocarina profile while you play (slower). On from
+          # round 18, for the CPU work: profiles uploaded to lichii-tuned/pgo tune the next builds.
+          - variant: pgo-train
+            lto: "OFF"
+            train: true
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
