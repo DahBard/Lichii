@@ -34,13 +34,16 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.renderer_force_max_clock, false);
     entry(settings.use_disk_shader_cache, true);
     entry(settings.use_vulkan_driver_pipeline_cache, true);
-    entry(settings.native_async_draws, NativeAsyncDraws::Bounded);
+    // lichii-tuned: Wait keeps Fritchii v5's async discard (AsyncDiscardMode, vk_pipeline_cache).
+    entry(settings.native_async_draws, NativeAsyncDraws::Wait);
     entry(settings.native_pipeline_wait_ms, 8);
-    entry(settings.precache_shaders, PrecacheShaders::Off);
+    // lichii-tuned: Off would skip the shader and precompiled-pipeline preparation at launch.
+    entry(settings.precache_shaders, PrecacheShaders::Ask);
     entry(settings.use_video_framerate, false);
     entry(settings.mkw_30fps, false);
     entry(settings.mkw_dynamic_fps, false);
-    entry(settings.use_reactive_flushing, true);
+    // lichii-tuned: off, as the tuned defaults seed it (frontend_common/config.cpp).
+    entry(settings.use_reactive_flushing, false);
     entry(settings.barrier_feedback_loops, true);
     entry(settings.enable_buffer_history, false);
 
@@ -55,7 +58,8 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.gpu_unswizzle_enabled, false);
 #if defined(_WIN32) || defined(__linux__)
     // Other hosts skip the pinning.
-    entry(settings.pin_gpu_threads, true);
+    // lichii-tuned: off on hybrid Intel CPUs, as its default (settings.h).
+    entry(settings.pin_gpu_threads, false);
 #endif
 #ifndef __APPLE__
     // Extended dynamic state stays disabled on macOS: MoltenVK renders black screens with it.
