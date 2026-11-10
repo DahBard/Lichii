@@ -1083,6 +1083,9 @@ Own changes:
   - Still to port from CheezyEmu: AMD frame generation (vk_amd_frame_gen, present and swapchain
     hooks, HUD mask shaders), the FSR 4 black-output fallback to FSR 3.1 (3260bc547, e44b16bed;
     upstream fixed the float8 cause with CheezerWheezer's finding), and the FSR presets.
+- Run #44 (tuned4 `5f428467d`): all three variants built (success, ~8 minutes; artifacts
+  `lichii-tuned-r44-*`). r44 is the build to prepare shaders with: it prepares once, resumes if
+  interrupted, and later builds keep it until PreparationVersion is raised.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
