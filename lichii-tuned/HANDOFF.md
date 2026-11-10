@@ -1300,6 +1300,12 @@ Own changes:
 
 ## Next steps
 
+0. Round 22's queue (owner, 2026-11-10), in order:
+   - Finish and test the CheezyEmu FSR 4 and frame generation port (branch `r22-cheezy-fsr`).
+   - Merge upstream Lichii. On 2026-11-10 21:43 +0100 nx2 was at `17baed716`, 31 commits after
+     build 132.
+   - Analyze the newest Fritchii builds (tags up to fritchii-v5.7; we last read v5.5) for
+     anything worth taking.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

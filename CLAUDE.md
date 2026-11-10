@@ -28,6 +28,11 @@ Round 22, in this order:
 3. Make the shader preparation complete once and persist. On the tuned fork it never finished, and
    it re-ran all ~120k pipelines at every launch; Fritchii prepares once.
 
+Then (owner, 2026-11-10), in this order:
+1. Finish and test the CheezyEmu FSR 4 and frame generation port.
+2. A big merge with upstream Lichii.
+3. Once that merge is complete, analyze the newest Fritchii builds for anything worth taking.
+
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
 
