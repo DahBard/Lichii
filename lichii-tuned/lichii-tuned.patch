@@ -14,3 +14,146 @@ index 0474da999..ca4a23042 100644
  # Leave buffer downloads disabled on Switch 2 (default): forcing downloads (=1) copies back
  # 90-220 MB/s of buffers CPU never touches, causing heavy mutex contention and dropping FPS by ~38-63%.
  #EDEN_NX2_BUFFER_DOWNLOADS=1
+diff --git a/externals/cmake-modules/UseLTO.cmake b/externals/cmake-modules/UseLTO.cmake
+index b364ef22d..35ef3d9fc 100644
+--- a/externals/cmake-modules/UseLTO.cmake
++++ b/externals/cmake-modules/UseLTO.cmake
+@@ -10,12 +10,19 @@ option(ENABLE_LTO "Enable Link-Time Optimization (LTO)" OFF)
+ 
+ if (ENABLE_LTO)
+     include(CheckIPOSupported)
+-    check_ipo_supported(RESULT COMPILER_SUPPORTS_LTO)
+-    if(NOT COMPILER_SUPPORTS_LTO)
++    check_ipo_supported(RESULT COMPILER_SUPPORTS_LTO OUTPUT LTO_CHECK_OUTPUT)
++    if (COMPILER_SUPPORTS_LTO)
++        set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
++        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${COMPILER_SUPPORTS_LTO})
++    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
++        # MSYS2's clang fails CMake's IPO check, while clang and lld do ThinLTO fine: pass the
++        # flags directly (archives then need llvm-ar).
++        message(WARNING "check_ipo_supported failed, using -flto=thin directly:\n${LTO_CHECK_OUTPUT}")
++        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-flto=thin>)
++        add_link_options(-flto=thin)
++    else()
+         message(FATAL_ERROR
+         "Your compiler does not support interprocedural optimization"
+-        " (IPO). Disable ENABLE_LTO and try again.")
++        " (IPO). Disable ENABLE_LTO and try again.\n${LTO_CHECK_OUTPUT}")
+     endif()
+-    set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
+-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${COMPILER_SUPPORTS_LTO})
+-endif()
+\ No newline at end of file
++endif()
+diff --git a/src/common/frizti_settings.cpp b/src/common/frizti_settings.cpp
+index 0de2306cf..ac4cd429c 100644
+--- a/src/common/frizti_settings.cpp
++++ b/src/common/frizti_settings.cpp
+@@ -22,29 +22,29 @@ std::string_view Trim(std::string_view text) {
+ }
+ } // namespace
+ 
+-std::vector<BasicSetting*> TunedSettings(Values& values) {
++std::vector<BasicSetting*> TunedSettings(Values& settings_values) {
+     // One line per setting; bump Revision when this list or a default here changes.
+     return {
+-        &values.gpu_accuracy,             // Low
+-        &values.dma_accuracy,             // Default
+-        &values.gpu_fence_behavior,       // Default
+-        &values.vsync_mode,               // Mailbox: the host frame pacer times presents
+-        &values.async_presentation,       // On: the host frame pacer runs on the present thread
+-        &values.use_asynchronous_shaders, // On: unbuilt pipelines skip draws, no freeze
+-        &values.use_docked_mode,          // Docked
+-        &values.memory_layout_mode,       // 8 GB: Ocarina's own memory size
+-        &values.nvdec_emulation,          // GPU: Ocarina's cutscene videos
+-        &values.scaling_filter,           // ScaleForce (newer Lichii builds seed FSR)
+-        &values.resolution_setup,         // 1x: a higher scale left over from other games costs fps
+-        &values.anti_aliasing,            // FXAA
+-        &values.cpu_accuracy,             // Auto
+-        &values.use_disk_shader_cache,    // On: no shader rebuild every boot
+-        &values.use_vulkan_driver_pipeline_cache, // On
++        &settings_values.gpu_accuracy,             // Low
++        &settings_values.dma_accuracy,             // Default
++        &settings_values.gpu_fence_behavior,       // Default
++        &settings_values.vsync_mode,               // Mailbox: the host frame pacer times presents
++        &settings_values.async_presentation,       // On: the host frame pacer runs on the present thread
++        &settings_values.use_asynchronous_shaders, // On: unbuilt pipelines skip draws, no freeze
++        &settings_values.use_docked_mode,          // Docked
++        &settings_values.memory_layout_mode,       // 8 GB: Ocarina's own memory size
++        &settings_values.nvdec_emulation,          // GPU: Ocarina's cutscene videos
++        &settings_values.scaling_filter,           // ScaleForce (newer Lichii builds seed FSR)
++        &settings_values.resolution_setup,         // 1x: a higher scale left over from other games costs fps
++        &settings_values.anti_aliasing,            // FXAA
++        &settings_values.cpu_accuracy,             // Auto
++        &settings_values.use_disk_shader_cache,    // On: no shader rebuild every boot
++        &settings_values.use_vulkan_driver_pipeline_cache, // On
+         // EDS2 and dynamic vertex input: the precompiled OoT recipe is recorded with them, and
+         // players who turned them off (an old AMD crash tip; the crash was shader libraries) had
+         // every graphics pipeline skipped as "for another device" (2026-11-09, RX 9070 XT log).
+-        &values.dyna_state,                 // EDS2
+-        &values.vertex_input_dynamic_state, // On
++        &settings_values.dyna_state,                 // EDS2
++        &settings_values.vertex_input_dynamic_state, // On
+     };
+ }
+ 
+@@ -133,9 +133,9 @@ std::vector<Change> ReconcilePerGame(std::span<BasicSetting* const> settings, co
+     return changes;
+ }
+ 
+-std::vector<Change> FixDockedController(Values& values) {
+-    auto& player = values.players.GetValue(true)[0];
+-    if (values.use_docked_mode.GetValue(true) != ConsoleMode::Docked ||
++std::vector<Change> FixDockedController(Values& settings_values) {
++    auto& player = settings_values.players.GetValue(true)[0];
++    if (settings_values.use_docked_mode.GetValue(true) != ConsoleMode::Docked ||
+         player.controller_type != ControllerType::Handheld) {
+         return {};
+     }
+@@ -144,20 +144,20 @@ std::vector<Change> FixDockedController(Values& values) {
+ }
+ 
+ std::map<std::string, std::string> GlobalValues(std::span<BasicSetting* const> settings) {
+-    std::map<std::string, std::string> values;
++    std::map<std::string, std::string> result;
+     for (const BasicSetting* const setting : settings) {
+-        values.emplace(setting->GetLabel(), setting->ToStringGlobal());
++        result.emplace(setting->GetLabel(), setting->ToStringGlobal());
+     }
+-    return values;
++    return result;
+ }
+ 
+ std::map<std::string, std::string> PerGameValues(std::span<BasicSetting* const> settings) {
+-    std::map<std::string, std::string> values;
++    std::map<std::string, std::string> result;
+     for (const BasicSetting* const setting : settings) {
+-        values.emplace(setting->GetLabel(),
++        result.emplace(setting->GetLabel(),
+                        setting->UsingGlobal() ? std::string{UseGlobal} : setting->ToString());
+     }
+-    return values;
++    return result;
+ }
+ 
+ std::string FormatChanges(std::span<const Change> changes) {
+diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
+index 61accdb68..416dda672 100644
+--- a/src/video_core/gpu_split.h
++++ b/src/video_core/gpu_split.h
+@@ -317,13 +317,13 @@ public:
+     /// Bit 2: `count` (method | argument << 32) writes of an instance-loop group (draw.begin
+     /// Subsequent and the instance loop stores after it), run once, then `repeats - 1` more
+     /// identical groups counted as instances (Maxwell3D::RunDrawBatch).
+-    void DrawBatch(Tegra::Engines::EngineInterface* engine, const u64* writes, u32 count,
++    void DrawBatch(Tegra::Engines::EngineInterface* engine, const u64* group, u32 count,
+                    u32 repeats, Effect effect) {
+         SelectEngine(engine);
+         u64* const entry = Reserve(1 + size_t{count});
+         entry[0] = static_cast<u64>(Kind::DrawBatch) | (u64{count & 0xff} << 8) |
+                    (u64{repeats} << 32);
+-        std::memcpy(entry + 1, writes, size_t{count} * sizeof(u64));
++        std::memcpy(entry + 1, group, size_t{count} * sizeof(u64));
+         CountBatched(Batched::DrawBatches);
+         CountBatched(Batched::DrawRepeats, repeats - 1);
+         Commit(1 + size_t{count}, effect);

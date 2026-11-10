@@ -240,7 +240,8 @@ jobs:
         shell: msys2 {0}
         run: |
           ccache --zero-stats
-          cmake --build build/release --target yuzu --parallel
+          # -k 0: a failing file doesn't stop the others, so one run lists every error.
+          cmake --build build/release --target yuzu --parallel -- -k 0
           ccache --show-stats
 
       - name: Build MSVC
@@ -248,7 +249,7 @@ jobs:
         shell: bash
         run: |
           sccache --zero-stats
-          cmake --build build/release --target yuzu --parallel
+          cmake --build build/release --target yuzu --parallel -- -k 0
           sccache --show-stats
 
       - name: Stop sccache
@@ -586,7 +587,8 @@ jobs:
         run: |
           set -euo pipefail
           ccache --zero-stats
-          cmake --build build/release --target yuzu --parallel
+          # -k 0: a failing file doesn't stop the others, so one run lists every error.
+          cmake --build build/release --target yuzu --parallel -- -k 0
           ccache --show-stats
 
       - name: Save compiler objects
