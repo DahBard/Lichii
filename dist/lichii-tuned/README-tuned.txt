@@ -2,8 +2,9 @@ Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 ==============================================================================
 
 Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichii, branch
-"tuned". Same emulator and the same user data folder as the official build, %APPDATA%\lichii
-(build 132 and Fritchii keep %APPDATA%\eden; see "First launch: import" below), plus:
+"tuned". Same emulator and the same user data folder as the official Lichii builds,
+%APPDATA%\lichii (Fritchii and build 132 keep %APPDATA%\eden; see "First launch: import"
+below), plus:
 
  * Compiled by clang with Lichii's PGO profile, for x86-64-v3 (AVX2, BMI2, FMA) and tuned
    for Arrow Lake. It runs on any CPU with AVX2 (Intel Haswell / AMD Zen and newer).
@@ -309,11 +310,11 @@ The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" 
 
 First launch: import
 --------------------
-This build keeps its data in %APPDATA%\lichii (upstream's change), no longer in %APPDATA%\eden.
-On the first start it offers to import an older profile. Close Fritchii and every other Lichii
-or Eden window first, then:
- 1. Pick Eden, then "Keep Old Data": it copies, and %APPDATA%\eden stays as it is for build 132
-    and Fritchii.
+Lichii builds now keep their data in %APPDATA%\lichii (upstream's change), and this build shares
+that folder with the official Lichii builds; Fritchii and build 132 keep %APPDATA%\eden. The
+first Lichii start with the new folder offers to import an older profile, once for all of them.
+Close Fritchii and every other Lichii or Eden window first, then:
+ 1. Pick Eden, then "Keep Old Data": it copies, and %APPDATA%\eden stays as it is.
  2. Leave "Clear shader cache" unchecked, so the prepared shaders come along.
  3. After "Data was imported successfully", close Lichii and start it once more (the import
     start doesn't read your nx2_switches.txt).
