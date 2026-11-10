@@ -138,6 +138,10 @@ Round 21 (2026-11-09): the Fritchii base.
   and Fritchii's locals renamed where they hid another name (`939e9bde3`, `ea2f48a62`,
   `66500175c`; MSVC's /we4456-4459 and MinGW clang's -Werror=shadow). Fritchii's download
   reports MSVC 1950 (VS 2026); windows-2022 has 19.44.
+- Three-way test, 2026-11-10 (Test results). In what was probably the same area, Fritchii ran
+  ~10% slower in steady play than r35 and build 132. Its smoothness came from building no
+  pipelines in play (a warm cache, async shaders on), which our builds can match.
+  Recommended: keep tuned4 (r36) and hold the port below until one A/B. The owner decides.
 - To bring over next, each with an A/B launcher, in an order set by the Fritchii comparison:
   - Radeon: FSR 4, with camera jitter off by default (the water shimmer).
   - Laptop CPU: hybrid core placement and the spin/wait tweaks.
@@ -992,6 +996,56 @@ Own changes:
   and `pgo-lto` 5 with warm caches; artifacts `lichii-tuned-r40-msvc` 125 MB,
   `lichii-tuned-r40-pgo` and `lichii-tuned-r40-pgo-lto` 92 MB). r40's `pgo` and `pgo-lto`
   differ from r39's only by the renames, so r40 is the one set to test.
+- Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
+  upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
+  agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
+  Immediate, Res1X, ScaleForce and FXAA. Fritchii and 132 had FSR off; r35 ran FSR 4 to 4K.
+  - Area: probably the same starting area. The four largest guest buffers have the same sizes
+    in r35 and 132, and three of the four in Fritchii.
+  - Steady moving play ('last 600 presents'):
+    - r35: 21.4 and 22.7 ms (r35 log L2548, L2784).
+    - 132: 21.1-23.1 ms (L2061, L2122, L6204, L6257).
+    - Fritchii: 24.1 and 24.6 ms (L1459, L1792).
+    So Fritchii was ~10% slower, as on 11-09. On the same 10 s Worst-frame clock r35 ran
+    42.7-47.5 fps and Fritchii 39.1-41.6. No build waited on the GPU fence.
+  - Stutter in play:
+    - Fritchii built 0 pipelines (L1916). Its worst frame was 65.1 ms, in the first 10 s
+      (L1319).
+    - r35 built at least 20 in its first 12 s of play. That gave 9 frames of 50-141 ms; of its
+      2391 play frames (mean 22.0 ms), none after 72.9 s was over 42 ms.
+    - 132 held draws for 1-3.4 s AMD compiles on new content (L2533), also on its warm second
+      boot (window max 3.5 s, L6151). It has no graphics-pipeline preparation: its precache is
+      3899 compute programs in 155 s (L373). Its async shaders default off.
+  - Why, mostly run state rather than code:
+    - Fritchii ran with async shaders and async presentation on (its defaults). r35 and 132 had
+      both off; r35's were reset by the shared qt-config.ini (Settings drift above).
+    - Fritchii's disk cache held 3307 pipelines, 843 of them merged at boot (L320) from the
+      shared vulkan.fork-v54.bin. r35 had just added its runtime builds to that file, so
+      Fritchii likely ran last.
+    - r35's preparation was skipped after 9.9 s (L397: the loading screen's Skip button).
+    - Fritchii's host pacer did not run: 'present wait unavailable, frames are not paced'
+      (L298).
+    - Time step: Fritchii used Dark's ~8-frame average and r35 its raw step. The owner
+      preferred the raw step in round 7.
+  - Leads for Fritchii's slower pace (untested):
+    - Its GPU threads are not pinned on this 6-P-core CPU (L313; EDEN_NX2_PIN_THREADS=1 forces
+      pinning).
+    - It runs without upstream's texture memo (its EXP32, off by default) and without #858,
+      #921 and #1079.
+  - Not measurable from these logs: choppiness below 33 ms (only r35 logs each frame) and what
+    reached the screen.
+  - r36 and Fritchii write the same `precompiled_prepared.fork-v54.txt`, each with its own
+    build version (e9226a635 nx2_precompile.cpp:160, fritchii-v5.5
+    vk_pipeline_cache.cpp:3680). Alternating the two re-runs each one's preparation.
+  - Recommended to the owner:
+    - No fresh start on 132: it had the worst stutter and has no preparation.
+    - Keep tuned4 (r36), and hold the port onto tuned5 until one A/B:
+      1. Fritchii.
+      2. Fritchii with EDEN_NX2_PIN_THREADS=1.
+      3. r36 with async shaders and presentation on, FSR off and its preparation finished.
+      Capture frame times in each run. Run Fritchii first, because of the shared stamp.
+    - Low confidence: r36's preparation is untested, and the smoothness below 33 ms is
+      unmeasured.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
