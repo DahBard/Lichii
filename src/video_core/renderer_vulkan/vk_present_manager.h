@@ -151,6 +151,15 @@ private:
     std::chrono::steady_clock::time_point last_game_frame_queued{};
     std::chrono::nanoseconds game_frame_interval{};
     std::chrono::steady_clock::time_point next_generated_present{};
+    /// Where frame generation's frames went out, logged every 10 s.
+    struct GeneratedPacingStats {
+        std::chrono::steady_clock::time_point window_start{};
+        std::chrono::steady_clock::time_point last_present{};
+        double to_generated_ms{}; ///< From a game frame to the next sequence's first frame
+        double to_game_ms{};      ///< From a generated frame to its game frame
+        u32 to_generated_count{};
+        u32 to_game_count{};
+    } generated_pacing;
     std::mutex present_wait_mutex; ///< Held while waiting on a swapchain; recreation takes it
     std::mutex wait_queue_mutex;
     std::condition_variable_any wait_queue_cv;

@@ -439,9 +439,40 @@ void PresentManager::PaceGeneratedFrame(const Frame* frame, std::stop_token toke
         }
         last_game_frame_queued = frame->queued_at;
     }
+    auto& stats = generated_pacing;
+    const auto note_present = [&] {
+        const auto now = Clock::now();
+        if (frame->generated_count != 0 && stats.last_present != Clock::time_point{}) {
+            const double gap = std::chrono::duration<double, std::milli>(now - stats.last_present).count();
+            if (frame->generated_index == 0) {
+                stats.to_game_ms += gap;
+                ++stats.to_game_count;
+            } else {
+                stats.to_generated_ms += gap;
+                ++stats.to_generated_count;
+            }
+        }
+        stats.last_present = now;
+        if (stats.window_start == Clock::time_point{}) {
+            stats.window_start = now;
+        } else if (now - stats.window_start >= std::chrono::seconds{10}) {
+            if (stats.to_game_count != 0 && stats.to_generated_count != 0) {
+                LOG_INFO(Render_Vulkan,
+                         "Frame generation pacing{}: game frames every {:.1f} ms; a generated "
+                         "frame went out {:.1f} ms after the frame before it, its game frame "
+                         "{:.1f} ms after it",
+                         enabled ? "" : " (off, LICHII_FG_PACING=0)",
+                         std::chrono::duration<double, std::milli>(game_frame_interval).count(),
+                         stats.to_generated_ms / stats.to_generated_count,
+                         stats.to_game_ms / stats.to_game_count);
+            }
+            stats = {.window_start = now, .last_present = now};
+        }
+    };
     if (!enabled || frame->generated_count == 0 ||
         game_frame_interval == std::chrono::nanoseconds{0}) {
         next_generated_present = {};
+        note_present();
         return;
     }
     const auto spacing = game_frame_interval / (frame->generated_count + 1);
@@ -462,6 +493,7 @@ void PresentManager::PaceGeneratedFrame(const Frame* frame, std::stop_token toke
         }
     }
     next_generated_present = Clock::now() + spacing;
+    note_present();
 }
 
 bool PresentManager::PaceFrame(Frame* frame, std::stop_token token) {
