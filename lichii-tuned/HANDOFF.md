@@ -1264,6 +1264,9 @@ Own changes:
       prepares once on its own.
     - ~2.5 min again: the cache resets per exe, and every build starts cold. Find another way to
       carry pipelines across builds (Lichii's own VkPipelineCache data, or pipeline binaries).
+  - Owner (2026-11-10): 'dont worry about that. Loading shaders slowly once per build upgrade is
+    a fine price to pay.' Dropped: no forced preparation, no install-folder stamp, no
+    cross-build pipeline carry-over. The stamp logic stays as it is.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
