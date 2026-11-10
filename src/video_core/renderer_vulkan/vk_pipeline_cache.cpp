@@ -3960,13 +3960,13 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                     .read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
                 const bool compute = kind == 1;
                 ComputePipelineCacheKey compute_key{};
-                GraphicsPipelineCacheKey graphics_key{};
+                GraphicsPipelineCacheKey record_key{};
                 if (compute) {
                     in.read(reinterpret_cast<char*>(&compute_key), sizeof(compute_key));
                 } else {
-                    in.read(reinterpret_cast<char*>(&graphics_key), sizeof(graphics_key));
-                    RecordedKeyForThisDevice(graphics_key);
-                    const auto& key_state = graphics_key.state;
+                    in.read(reinterpret_cast<char*>(&record_key), sizeof(record_key));
+                    RecordedKeyForThisDevice(record_key);
+                    const auto& key_state = record_key.state;
                     const bool other_device =
                         (key_state.extended_dynamic_state != 0) !=
                             dynamic_features.has_extended_dynamic_state ||
@@ -4015,7 +4015,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                             }
                         }
                         skipped = true;
-                    } else if (!keeping && disk_keys && disk_keys->contains(graphics_key.Hash())) {
+                    } else if (!keeping && disk_keys && disk_keys->contains(record_key.Hash())) {
                         ++state.known;
                         skipped = true;
                     }
@@ -4059,7 +4059,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                         TranslationRecord kept;
                         kept.keep_infos = true;
                         const auto pipeline{CreateGraphicsPipeline(
-                            pools, graphics_key, MakeSpan(env_ptrs), nullptr, false, nullptr,
+                            pools, record_key, MakeSpan(env_ptrs), nullptr, false, nullptr,
                             nullptr, false, keeping ? &kept : nullptr)};
                         ok = pipeline && !pipeline->Failed();
                         // A pipeline drawn through the task/mesh compute fallback is not kept:
@@ -4069,7 +4069,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                         if (ok && keeping && kept.complete && !kept.mesh_emulated) {
                             writer.Keep(index, 0,
                                         kept.libraries ? PrecompiledKept::FlagLibraries : u8{0},
-                                        graphics_key.Hash(), env_ids, kept.infos, kept.spirv);
+                                        record_key.Hash(), env_ids, kept.infos, kept.spirv);
                         }
                     }
                 }
@@ -4437,7 +4437,7 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
         }
         const u64 key_offset = offset + 4 + count * sizeof(u32);
         ComputePipelineCacheKey compute_key{};
-        GraphicsPipelineCacheKey graphics_key{};
+        GraphicsPipelineCacheKey record_key{};
         if (compute) {
             if (!index.ReadPrecompiled(key_offset,
                                        std::span(reinterpret_cast<u8*>(&compute_key),
@@ -4449,12 +4449,12 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
             }
         } else {
             if (!index.ReadPrecompiled(key_offset,
-                                       std::span(reinterpret_cast<u8*>(&graphics_key),
-                                                 sizeof(graphics_key)))) {
+                                       std::span(reinterpret_cast<u8*>(&record_key),
+                                                 sizeof(record_key)))) {
                 return "its precompiled record (unreadable)";
             }
-            RecordedKeyForThisDevice(graphics_key);
-            if (graphics_key.Hash() != record.key_hash) {
+            RecordedKeyForThisDevice(record_key);
+            if (record_key.Hash() != record.key_hash) {
                 return "the key (as this device and EDEN_NX2_CANONICAL_KEYS key it)";
             }
         }
@@ -4495,7 +4495,7 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
                 translated.translate_only = true;
                 translated.keep_infos = true;
                 [[maybe_unused]] const auto none =
-                    CreateGraphicsPipeline(pools, graphics_key, MakeSpan(env_ptrs), nullptr, false,
+                    CreateGraphicsPipeline(pools, record_key, MakeSpan(env_ptrs), nullptr, false,
                                            nullptr, nullptr, false, &translated);
                 if (!translated.complete) {
                     return "the pipeline (its translation failed)";
