@@ -1044,6 +1044,12 @@ Own changes:
   and `pgo-lto` 5 with warm caches; artifacts `lichii-tuned-r40-msvc` 125 MB,
   `lichii-tuned-r40-pgo` and `lichii-tuned-r40-pgo-lto` 92 MB). r40's `pgo` and `pgo-lto`
   differ from r39's only by the renames, so r40 is the one set to test.
+- Run #41 (round 22, tuned4 `0e30416f4` = r36 + build 132): failed in all three variants at
+  850/1880 on src/common/host_memory.cpp:426, 'class member cannot be redeclared'. We had ported
+  #961 before upstream merged it, and the merge kept both copies of the Windows-only
+  BackingOffset. Fixed in `604dbd24f`. A MinGW-target syntax check (the round 17 method) of the
+  merge's Windows files and the patched Qt files finds nothing else. The Linux check can't see
+  `#ifdef _WIN32` code.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
