@@ -18,6 +18,7 @@
 #include <functional>
 #include <optional>
 #include <stop_token>
+#include <string_view>
 #include <vector>
 
 #include "common/common_types.h"
@@ -51,10 +52,22 @@ void SetGameFiles(u64 title_id, GameFiles files);
 [[nodiscard]] std::filesystem::path PrecompiledPath(const std::filesystem::path& title_dir,
                                                     u32 cache_version);
 
-/// <title_dir>/precompiled_prepared.fork-v<cache_version>.txt: the file, driver, GPU and release
-/// a preparation built every record for (PipelineCache::AddPrecompiledJobs).
+/// <title_dir>/precompiled_prepared.tuned-v<cache_version>.txt: the file, driver, GPU and
+/// preparation version a preparation built every record for (PipelineCache::AddPrecompiledJobs).
+/// Not Fritchii's name: its runs would make each other's preparations run again.
 [[nodiscard]] std::filesystem::path PreparedStampPath(const std::filesystem::path& title_dir,
                                                       u32 cache_version);
+
+/// <title_dir>/precompiled_progress.tuned-v<cache_version>.txt: the stamp an unfinished
+/// preparation would write, then how many records from the file's start it got through. The next
+/// launch resumes there, after a skip, a quit or a crash.
+[[nodiscard]] std::filesystem::path PreparedProgressPath(const std::filesystem::path& title_dir,
+                                                         u32 cache_version);
+
+/// In the prepared stamp in place of the build version, so a new build keeps a finished
+/// preparation (Fritchii stamps its release for the same reason). Raise it when a translator or
+/// pipeline key change means the driver's cache no longer holds what the game draws.
+inline constexpr std::string_view PreparationVersion = "tuned 1";
 
 /// A recipe or precompiled file for this title that no preparation finished yet: the desktop app
 /// asks before the game starts, as for a title never precached.

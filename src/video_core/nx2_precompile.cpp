@@ -157,7 +157,12 @@ std::filesystem::path PrecompiledPath(const std::filesystem::path& title_dir, u3
 
 std::filesystem::path PreparedStampPath(const std::filesystem::path& title_dir,
                                         u32 cache_version) {
-    return title_dir / fmt::format("precompiled_prepared.fork-v{}.txt", cache_version);
+    return title_dir / fmt::format("precompiled_prepared.tuned-v{}.txt", cache_version);
+}
+
+std::filesystem::path PreparedProgressPath(const std::filesystem::path& title_dir,
+                                           u32 cache_version) {
+    return title_dir / fmt::format("precompiled_progress.tuned-v{}.txt", cache_version);
 }
 
 bool PreparationPending(u64 title_id, u32 cache_version) {

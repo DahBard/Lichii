@@ -2147,9 +2147,31 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
         ShaderWarm::ComputeWarmPath(title_id).parent_path() / "precache-jobs",
         fmt::format("{} {} {}", device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION),
         slot_count, "pipeline"};
-    std::vector<u8> built(jobs.size());
+    // 0: not done yet, 1: built, 2: done without a pipeline. Read while the workers run, to save
+    // how far the precompiled records got.
+    std::vector<std::atomic<u8>> built(jobs.size());
     std::atomic<size_t> done{};
     bool skipped = false;
+    const auto save_progress = [&] {
+        if (!precompiled || !precompiled_counts) {
+            return;
+        }
+        size_t next = precompiled_first;
+        while (next < jobs.size() && built[next].load() != 0) {
+            ++next;
+        }
+        std::ofstream progress_file(precompiled_counts->progress_path,
+                                    std::ios::binary | std::ios::trunc);
+        progress_file << precompiled_counts->stamp
+                      << precompiled_counts->resumed + (next - precompiled_first) << '\n';
+    };
+    auto next_save = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+    const auto save_now_and_then = [&] {
+        if (const auto now = std::chrono::steady_clock::now(); now >= next_save) {
+            save_progress();
+            next_save = now + std::chrono::seconds{30};
+        }
+    };
     LOG_INFO(Render_Vulkan,
              "Shader precache: {} cached graphics pipelines, {} of {} compute programs and {} "
              "precompiled pipelines to build on {} threads",
@@ -2178,6 +2200,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                 if (callback) {
                     callback(VideoCore::LoadCallbackStage::Warm, done, jobs.size());
                 }
+                save_now_and_then();
                 std::this_thread::sleep_for(std::chrono::milliseconds{5});
             }
             if (skipped) {
@@ -2187,6 +2210,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                                                           : jobs[index].compute_hash;
             if (journal.Poisoned(id)) {
                 jobs[index].translate = {};
+                built[index] = 2;
                 done.fetch_add(1);
                 continue;
             }
@@ -2201,7 +2225,8 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                                VideoCommon::ShaderJobContext& context) mutable
                     -> VideoCommon::ShaderDriverStage {
                         Common::UniqueFunction<bool> build;
-                        if (!context.StopRequested()) {
+                        const bool stopped = context.StopRequested();
+                        if (!stopped) {
                             try {
                                 build = translate();
                             } catch (const std::exception& e) {
@@ -2210,6 +2235,10 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                         }
                         translate = {};
                         if (!build) {
+                            // A stopped job stays not done, so the next launch builds it.
+                            if (!stopped) {
+                                built[index] = 2;
+                            }
                             done.fetch_add(1);
                             return {};
                         }
@@ -2219,11 +2248,15 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                             if (slot != JournalSlots::None) {
                                 journal.Begin(slot, id);
                             }
+                            u8 result = 2;
                             try {
-                                built[index] = pipeline_build();
+                                if (pipeline_build()) {
+                                    result = 1;
+                                }
                             } catch (const std::exception& e) {
                                 LOG_DEBUG(Render_Vulkan, "Shader precache: {}", e.what());
                             }
+                            built[index] = result;
                             if (slot != JournalSlots::None) {
                                 journal.End(slot);
                                 journal_slots.Give(slot);
@@ -2253,9 +2286,13 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
             if (callback) {
                 callback(VideoCore::LoadCallbackStage::Warm, done, jobs.size());
             }
+            save_now_and_then();
             std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
         batch.Wait();
+    }
+    if (skipped || stop_loading.stop_requested()) {
+        save_progress();
     }
     const size_t total_built = static_cast<size_t>(std::count(built.begin(), built.end(), u8{1}));
     if (compute_pending && !skipped) {
@@ -2279,19 +2316,25 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
             }
         }
         const size_t total = jobs.size() - precompiled_first;
+        const size_t resumed = precompiled_counts ? precompiled_counts->resumed : 0;
         LOG_INFO(Render_Vulkan,
                  "Precompiled pipelines: {} of {} prepared ({} already in the disk cache), {} not "
-                 "buildable on this device{}{}{}, {} failed",
+                 "buildable on this device{}{}{}, {} failed{}",
                  precompiled_built, total,
                  precompiled_counts ? precompiled_counts->known.load() : 0, unbuildable_total,
                  unbuildable.empty() ? "" : " (", unbuildable, unbuildable.empty() ? "" : ")",
-                 total - precompiled_built - unbuildable_total);
+                 total - precompiled_built - unbuildable_total,
+                 resumed != 0 ? fmt::format("; {} more in earlier runs", resumed) : "");
         std::ofstream stamp_file(precompiled->first, std::ios::binary | std::ios::trunc);
         stamp_file << precompiled->second;
+        if (precompiled_counts) {
+            std::error_code remove_error;
+            std::filesystem::remove(precompiled_counts->progress_path, remove_error);
+        }
     }
     const size_t precached_before = precached.size();
     for (size_t index = 0; index < graphics_jobs; ++index) {
-        if (built[index]) {
+        if (built[index] == 1) {
             precached.insert(jobs[index].graphics_hash);
         }
     }
@@ -2408,15 +2451,25 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     const auto stamp_path = Precompile::PreparedStampPath(base_dir, CACHE_VERSION);
     const std::string stamp =
         fmt::format("{} {} {:#x} {} {}\n", file_size, modified, device.GetDriverVersion(),
-                    Common::g_build_version, device.GetModelName());
+                    Precompile::PreparationVersion, device.GetModelName());
     if (!Precompile::Forced()) {
         std::ifstream stamp_file(stamp_path, std::ios::binary);
         std::string line;
         if (std::getline(stamp_file, line) && line + '\n' == stamp) {
             LOG_INFO(Render_Vulkan,
-                     "Precompiled pipelines: {} was prepared for this driver and build already",
-                     path_text);
+                     "Precompiled pipelines: {} was prepared for this driver already", path_text);
             return std::nullopt;
+        }
+    }
+    // An unfinished preparation of the same file, driver and version resumes where it stopped.
+    const auto progress_path = Precompile::PreparedProgressPath(base_dir, CACHE_VERSION);
+    size_t resume = 0;
+    if (!Precompile::Forced()) {
+        std::ifstream progress_file(progress_path, std::ios::binary);
+        std::string line;
+        if (std::getline(progress_file, line) && line + '\n' == stamp &&
+            std::getline(progress_file, line)) {
+            resume = static_cast<size_t>(std::strtoull(line.c_str(), nullptr, 10));
         }
     }
     // Layout (Nx2Recipe): "NX2PREP1", u32 cache version, u32 environment count, u32 record count,
@@ -2503,8 +2556,12 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     // Graphics pipelines the disk cache holds were built at boot already.
     const auto known = std::make_shared<const std::unordered_set<u64>>(disk_pipelines);
     const auto counts = std::make_shared<PrecompiledCounts>();
+    resume = std::min(resume, record_offsets.size());
+    counts->resumed = resume;
+    counts->progress_path = progress_path;
+    counts->stamp = stamp;
     precompiled_counts = counts;
-    for (size_t record = 0; record < record_offsets.size(); ++record) {
+    for (size_t record = resume; record < record_offsets.size(); ++record) {
         const u64 offset = record_offsets[record];
         const auto [record_id, record_compute] = record_ids[record];
         // The record is read again and translated in the job's CPU stage; its driver stage
@@ -2579,8 +2636,9 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
             .compute_hash = record_compute ? record_id : 0,
         });
     }
-    LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} records of {} to prepare",
-             record_offsets.size(), path_text);
+    LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} records of {} to prepare{}",
+             record_offsets.size() - resume, path_text,
+             resume != 0 ? fmt::format(", resuming after the first {}", resume) : "");
     return std::make_pair(stamp_path, stamp);
 }
 

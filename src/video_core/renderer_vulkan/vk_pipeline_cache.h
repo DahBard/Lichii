@@ -387,6 +387,9 @@ private:
         };
         std::atomic<size_t> known{}; ///< Graphics pipelines the disk cache held (built at boot)
         std::array<std::atomic<size_t>, reasons.size()> unbuildable{};
+        size_t resumed{}; ///< Records an earlier, unfinished preparation got through
+        std::filesystem::path progress_path;
+        std::string stamp;
     };
     std::shared_ptr<PrecompiledCounts> precompiled_counts;
 
