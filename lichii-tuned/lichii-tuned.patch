@@ -30689,6 +30689,75 @@ index 000000000..2dd68e6a5
 +};
 +
 +} // namespace Vulkan
+diff --git a/src/video_core/renderer_vulkan/present/frame_gen.cpp b/src/video_core/renderer_vulkan/present/frame_gen.cpp
+index d04765b0f..79ad1ed60 100644
+--- a/src/video_core/renderer_vulkan/present/frame_gen.cpp
++++ b/src/video_core/renderer_vulkan/present/frame_gen.cpp
+@@ -2,12 +2,14 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <string>
+ #include <vector>
+ 
+ #include "common/fs/file.h"
+ #include "common/fs/fs.h"
+ #include "common/fs/path_util.h"
++#include "common/logging.h"
+ #include "common/settings.h"
+ #include "video_core/renderer_vulkan/present/frame_gen.h"
+ #include "video_core/renderer_vulkan/present/util.h"
+@@ -221,7 +223,13 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
+     }
+ 
+     if (!frame->storage_view) {
+-        state.store(VideoCore::FrameGenState::UnsupportedSurface, std::memory_order_relaxed);
++        if (state.exchange(VideoCore::FrameGenState::UnsupportedSurface,
++                           std::memory_order_relaxed) !=
++            VideoCore::FrameGenState::UnsupportedSurface) {
++            LOG_WARNING(Render_Vulkan,
++                        "Frame generation can't run: shaders can't write the presented frames' "
++                        "format");
++        }
+         warm_streak = 0;
+         return;
+     }
+@@ -248,6 +256,34 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
+ 
+     const bool use_fsr3 = Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::Fsr3;
+ 
++    // Every 10 s: game frames and generated frames per second (CheezyEmu 93d8f9b86). Without it a
++    // log can't tell whether the built-in frame generation ran or only said so in the status bar.
++    {
++        static auto window_start = std::chrono::steady_clock::now();
++        static u64 window_frames = 0;
++        static u64 window_generated = 0;
++        ++window_frames;
++        window_generated += GeneratedFrameCount();
++        const auto now = std::chrono::steady_clock::now();
++        if (now - window_start >= std::chrono::seconds{10}) {
++            const double seconds = std::chrono::duration<double>(now - window_start).count();
++            const u32 target = Settings::values.frame_gen_target_rate.GetValue();
++            LOG_INFO(Render_Vulkan,
++                     "Frame generation ({}): {:.0f} game frames + {:.0f} generated per second at "
++                     "{}x{} (target {}){}",
++                     use_fsr3 ? "Optical Flow" : "LSFG", static_cast<double>(window_frames) / seconds,
++                     static_cast<double>(window_generated) / seconds, extent.width, extent.height,
++                     target == 0 ? std::string{"none"} : std::to_string(target) + " FPS",
++                     window_generated == 0 && target != 0 &&
++                             static_cast<double>(window_frames) / seconds >= target * 0.9
++                         ? ": none needed, the game already reaches the target"
++                         : "");
++            window_start = now;
++            window_frames = 0;
++            window_generated = 0;
++        }
++    }
++
+     if (use_fsr3 && fsr3_chain) {
+         scheduler.RequestOutsideRenderPassOperationContext();
+         fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
 diff --git a/src/video_core/renderer_vulkan/present/lsfg_mipmaps.cpp b/src/video_core/renderer_vulkan/present/lsfg_mipmaps.cpp
 index 6454ca048..3455557d1 100644
 --- a/src/video_core/renderer_vulkan/present/lsfg_mipmaps.cpp
@@ -37782,10 +37851,53 @@ index 1000aed08..2af4bc96d 100644
          ++buffer_index;
          buffer.SetObjectNameEXT(fmt::format("Staging Buffer {}", buffer_index).c_str());
 diff --git a/src/video_core/renderer_vulkan/vk_swapchain.cpp b/src/video_core/renderer_vulkan/vk_swapchain.cpp
-index 2cbdcbef4..bb93a6b94 100644
+index 2cbdcbef4..7064df9d0 100644
 --- a/src/video_core/renderer_vulkan/vk_swapchain.cpp
 +++ b/src/video_core/renderer_vulkan/vk_swapchain.cpp
-@@ -230,11 +230,20 @@ bool Swapchain::AcquireNextImage(bool may_flush) {
+@@ -27,17 +27,37 @@ namespace Vulkan {
+ 
+ namespace {
+ 
+-VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats) {
++VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats,
++                                           const vk::PhysicalDevice& physical_device,
++                                           bool want_storage) {
+     if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
+         VkSurfaceFormatKHR format;
+         format.format = VK_FORMAT_B8G8R8A8_UNORM;
+         format.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+         return format;
+     }
+-    const auto& found = std::find_if(formats.begin(), formats.end(), [](const auto& format) {
+-        return format.format == VK_FORMAT_B8G8R8A8_UNORM &&
+-               format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+-    });
++    const auto offered = [&formats](VkFormat wanted) {
++        return std::find_if(formats.begin(), formats.end(), [wanted](const auto& format) {
++            return format.format == wanted &&
++                   format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++        });
++    };
++    const auto storable = [&physical_device](VkFormat format) {
++        return (physical_device.GetFormatProperties(format).optimalTilingFeatures &
++                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
++    };
++    // Frame generation writes the presented frames from shaders, which the present manager
++    // creates in this format. Where the driver can't store to B8G8R8A8, it gets an RGBA format
++    // it can store to, if the surface offers one.
++    if (want_storage && !storable(VK_FORMAT_B8G8R8A8_UNORM)) {
++        for (const VkFormat format :
++             {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_A2B10G10R10_UNORM_PACK32}) {
++            if (const auto it = offered(format); it != formats.end() && storable(format)) {
++                return *it;
++            }
++        }
++    }
++    const auto found = offered(VK_FORMAT_B8G8R8A8_UNORM);
+     return found != formats.end() ? *found : formats[0];
+ }
+ 
+@@ -230,11 +250,20 @@ bool Swapchain::AcquireNextImage(bool may_flush) {
      return false;
  }
  
@@ -37808,7 +37920,7 @@ index 2cbdcbef4..bb93a6b94 100644
          .waitSemaphoreCount = render_semaphore ? 1U : 0U,
          .pWaitSemaphores = &render_semaphore,
          .swapchainCount = 1,
-@@ -243,11 +252,14 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
+@@ -243,11 +272,14 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
          .pResults = nullptr,
      };
      std::scoped_lock lock{scheduler.submit_mutex};
@@ -37823,7 +37935,7 @@ index 2cbdcbef4..bb93a6b94 100644
          break;
      case VK_ERROR_OUT_OF_DATE_KHR:
          is_outdated = true;
-@@ -263,6 +275,7 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
+@@ -263,6 +295,7 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
      if (frame_index >= image_count) {
          frame_index = 0;
      }
@@ -37831,6 +37943,23 @@ index 2cbdcbef4..bb93a6b94 100644
  }
  
  void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
+@@ -278,8 +311,15 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
+                                  VK_PRESENT_MODE_FIFO_RELAXED_KHR) != present_modes.end();
+ 
+     const VkCompositeAlphaFlagBitsKHR alpha_flags{ChooseAlphaFlags(capabilities)};
+-    surface_format = ChooseSwapSurfaceFormat(formats);
++    surface_format =
++        ChooseSwapSurfaceFormat(formats, physical_device, Settings::values.frame_gen.GetValue());
+     present_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed);
++    LOG_INFO(Render_Vulkan, "Swapchain: {}, present mode {}, shader writes to it {}",
++             string_VkFormat(surface_format.format), string_VkPresentModeKHR(present_mode),
++             (physical_device.GetFormatProperties(surface_format.format).optimalTilingFeatures &
++              VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0
++                 ? "supported"
++                 : "unsupported");
+ 
+     u32 requested_image_count{capabilities.minImageCount + 1};
+     // Ensure Triple buffering if possible.
 diff --git a/src/video_core/renderer_vulkan/vk_swapchain.h b/src/video_core/renderer_vulkan/vk_swapchain.h
 index 584399567..3d8977b16 100644
 --- a/src/video_core/renderer_vulkan/vk_swapchain.h

@@ -1114,6 +1114,21 @@ Own changes:
   (default) or LSFG, multiplier 2-4, target frame rate). It runs on host shaders, without AMD's
   runtime. Try it before porting CheezyEmu's AMD frame generation (AMD's FidelityFX runtime, HUD
   mask, swapchain hooks: large and risky).
+- r44 frame generation test (owner): Optical Flow at 2x, target 0, flow scale 95: 'I didn't
+  notice any difference ... I don't believe framegen was actually on'. The log has no line about
+  it: upstream's built-in frame generation reports its state only to the status bar.
+  - Likely cause: the generated frames are written from shaders into the present manager's
+    frames, which take the swapchain's format. The swapchain always picks B8G8R8A8_UNORM, and
+    without shader writes to that format (likely on AMD's driver) frame generation stops at
+    UnsupportedSurface.
+  - Fixed in tuned4 (round 22, for r45): with frame generation on, the swapchain takes
+    R8G8B8A8_UNORM or A2B10G10R10_UNORM_PACK32 when the driver can't store to B8G8R8A8.
+  - New log lines: 'Swapchain: <format>, present mode <mode>, shader writes to it
+    supported|unsupported'; a warning when frame generation can't run; and every 10 s 'Frame
+    generation (Optical Flow): N game frames + M generated per second' (CheezyEmu 93d8f9b86).
+  - Frame generation also forces FIFO (VSync) at the monitor's refresh rate.
+  - The owner's monitor is 3840x2160, so FSR 4's 4K output is 1:1 and the scaling filter doesn't
+    matter.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
