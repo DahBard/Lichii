@@ -53,14 +53,33 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * "GPU Clocks" (Boost by default) again shortens how long the game thinks its GPU work takes
    (Lichii #664). Ocarina sizes its render resolution from that, so it can render sharper and
    ask more of the GPU; Normal keeps the old behaviour.
- * Ocarina's AMD FSR upscaling is upstream Lichii's since build 132 (this build's own FSR 4,
-   camera jitter and reactive-mask changes of rounds 15-19 are gone, with LICHII_FSR4 and
-   LICHII_FSR_REACTIVE): "Use AMD FSR 3.1 upscaling in Ocarina of Time" (Graphics, off by
-   default) upscales docked to 4K. It runs without camera jitter and its texture LOD bias, as
-   CheezyEmu's FSR does (the jitter made the screen borders shimmer); LICHII_FSR_JITTER=1
-   brings upstream's jitter and bias back. "Use AMD FSR 4 in place of FSR 3.1" (off by
-   default) downloads AMD's FidelityFX runtime into the user folder's "fidelityfx" folder when
-   you turn it on, and falls back to FSR 3.1 without it.
+ * Ocarina's AMD FSR and AMD frame generation are CheezyEmu's (CheezerWheezer's Lichii fork
+   for AMD GPUs), since round 22. Upstream's FSR 3.1/FSR 4 with its camera jitter and texture
+   LOD bias are gone (with LICHII_FSR_JITTER and the FSR 4 download panel), and so is the
+   shimmer at the screen borders. FSR runs without jitter. The settings are in Graphics, in the
+   "AMD FSR & Frame Generation" box:
+   - "Use AMD FSR 4 in Ocarina of Time" (on by default) replaces the game's upscale pass with
+     AMD FSR 4 through AMD's own runtime: the amd_fidelityfx_*.dll files next to lichii.exe
+     (AMD-FidelityFX-LICENSE.md is their license). Docked, the game renders 1440p and FSR
+     writes 4K. Without FSR 4 for the GPU it uses AMD's FSR 3.1. If FSR 4 draws a black
+     picture, it switches to FSR 3.1 for the session. Needs Resolution 1X. The "RCAS
+     Sharpness" slider sets its sharpening.
+   - "Ocarina of Time FSR preset" (Native by default) renders the 3D scene smaller and lets
+     FSR upscale it: Quality, Balanced, Performance or Ultra Performance. Native AA renders at
+     the output size. Docked with 4K output, Quality is 2560x1440 and Performance 1920x1080.
+     The preset patches the game's render scale when the game starts.
+   - "Ocarina of Time docked output": 4K (the default), or 1440p, which is lighter and makes no
+     4K image.
+   - AMD frame generation: tick "Enable Frame Generation", pick "AMD FSR Frame Generation
+     (Ocarina, restart)" as the type, and restart Lichii. It doubles the frames on screen
+     through AMD's own swapchain and pacing. LICHII_FG_PACING only applies to the built-in
+     Optical Flow and LSFG types. "AMD Frame Generation Version" is Auto (FSR 4's on the
+     RX 9070 XT) or FSR 3.1 (lighter). The HUD is masked, so it stays still in generated
+     frames.
+   The status bar, and the performance overlay in fullscreen, show "FSR 4.x.x" while FSR
+   upscales. When it doesn't, they show "FSR (reason)", for example RES 1X, or NO CAMERA in
+   menus. Clicking it turns FSR on or off. With AMD frame generation the FG button shows
+   "FG AMD FSR 2X" and the frame rate reads like "Game: 120 FPS (60 + FG)".
  * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
    GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
  * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
@@ -106,8 +125,8 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Round 18: AMD FSR 4 (and its FSR 3.1 fallback) now gets a camera jitter: each frame the
    scene is drawn shifted by a different fraction of a pixel and FSR is told the shift, so it
    collects new detail over the frames instead of the same samples (sharper edges and fine
-   detail, less crawling). Removed in round 22 for upstream's FSR (it made the screen's
-   edges shimmer, most visibly with water). Upstream Lichii's newest commits are in too, among them cheaper
+   detail, less crawling). Removed in round 22 with CheezyEmu's FSR, which runs without
+   jitter (the jitter made the screen's edges shimmer, most visibly with water). Upstream Lichii's newest commits are in too, among them cheaper
    per-draw work on the GPU back thread (texture lookups reused while a pipeline's textures
    stay the same). The run also has a "pgo-train" download again: 10-15 minutes of Ocarina
    with it records a profile that makes the next builds' own code faster on this CPU (see the
@@ -261,7 +280,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
- trace-no-fsr.bat             Ocarina's own upscale pass, no 4K output
+ trace-no-fsr.bat             Ocarina's own upscale pass instead of AMD FSR, no 4K output
                               (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
  trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
                               perf-trace.bat
@@ -282,7 +301,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
 Each start replaces the log, so copy it after every run you want to compare.
 
 The CachyOS (Linux) download of the same run has a .sh twin of each launcher and its own
-README-cachyos.md (no FSR 4 there: AMD's runtime is Windows-only).
+README-cachyos.md (no AMD FSR or AMD frame generation there: AMD's runtime is Windows-only).
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
 
