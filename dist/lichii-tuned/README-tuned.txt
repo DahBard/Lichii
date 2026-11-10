@@ -2,7 +2,8 @@ Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 ==============================================================================
 
 Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichii, branch
-"tuned". Same emulator and the same user data folder as the official build, plus:
+"tuned". Same emulator and the same user data folder as the official build, %APPDATA%\lichii
+(build 132 and Fritchii keep %APPDATA%\eden; see "First launch: import" below), plus:
 
  * Compiled by clang with Lichii's PGO profile, for x86-64-v3 (AVX2, BMI2, FMA) and tuned
    for Arrow Lake. It runs on any CPU with AVX2 (Intel Haswell / AMD Zen and newer).
@@ -146,8 +147,9 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    command list the GPU wrote (r27: about 660 ms of every second of waiting). It keeps its own
    view of the semaphores the GPU releases, runs memory-reading macros on the back thread,
    waits only for the words GPU work wrote, and lets the GPU read compute parameters it wrote
-   itself; uploads are batched into fewer commands. ab-18 brings back round 17's behaviour,
-   verify-r18 checks the shortcuts against the slow way while you play.
+   itself; uploads are batched into fewer commands (upstream's #1245 since round 22, always
+   on). ab-18 brings back round 17's behaviour for the rest, verify-r18 checks the shortcuts
+   against the slow way while you play.
  * Round 20, from upstream Lichii's open pull requests: the GPU thread draws Ocarina's
    culled mesh draws from the counts the GPU wrote, without waiting for them (#980, about 2,000
    waits a second); one channel's semaphore release frees the channel waiting on it when the
@@ -188,7 +190,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    queued, and the queued build then ran on freed memory. Fritchii doesn't queue these builds.
    r36 builds them in the job itself.
  * Crashes: this package writes lichii-crash-<pid>.txt and lichii-crash-<pid>.dmp to
-   %APPDATA%\eden\crash_dumps when Lichii crashes (EDEN_NX2_CRASH_DUMP=1 in nx2_switches.txt).
+   %APPDATA%\lichii\crash_dumps when Lichii crashes (EDEN_NX2_CRASH_DUMP=1 in nx2_switches.txt).
    Send both with the log.
  * Round 20, more of Fritchii v5.2, each group with an A/B launcher that brings round 19 back:
    - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
@@ -245,7 +247,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-17-no-oot-patches.bat     only the Ocarina patches off (zstd, string compares, poll
                               backoff, wider core masks), logged like perf-trace.bat
  ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
-                              macro reads, list waits and uploads), logged like perf-trace.bat
+                              macro reads and list waits), logged like perf-trace.bat
  ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
                               spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
                               power-limited laptop, compare the frame rate with the default
@@ -304,6 +306,17 @@ The CachyOS (Linux) download of the same run has a .sh twin of each launcher and
 README-cachyos.md (no AMD FSR or AMD frame generation there: AMD's runtime is Windows-only).
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
+
+First launch: import
+--------------------
+This build keeps its data in %APPDATA%\lichii (upstream's change), no longer in %APPDATA%\eden.
+On the first start it offers to import an older profile. Close Fritchii and every other Lichii
+or Eden window first, then:
+ 1. Pick Eden, then "Keep Old Data": it copies, and %APPDATA%\eden stays as it is for build 132
+    and Fritchii.
+ 2. Leave "Clear shader cache" unchecked, so the prepared shaders come along.
+ 3. After "Data was imported successfully", close Lichii and start it once more (the import
+    start doesn't read your nx2_switches.txt).
 
 PGO training build (the "pgo-train" download)
 ---------------------------------------------

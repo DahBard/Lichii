@@ -3,7 +3,7 @@
 
 #pragma once
 
-/// EDEN_NX2_CRASH_DUMP (1: %APPDATA%\eden\crash_dumps, or a folder): on a crash, writes
+/// EDEN_NX2_CRASH_DUMP (1: %APPDATA%\lichii\crash_dumps, or a folder): on a crash, writes
 /// lichii-crash-<pid>.txt (the exception, registers, call stack, code addresses on the stack,
 /// loaded and recently unloaded modules) and lichii-crash-<pid>.dmp, without Windows' LocalDumps
 /// registry key. Exceptions something handles (fastmem faults) never reach it; Windows' own
