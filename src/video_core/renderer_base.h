@@ -13,6 +13,7 @@
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
+#include "common/settings_enums.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "video_core/gpu.h"
 #include "video_core/rasterizer_interface.h"
@@ -57,6 +58,14 @@ struct UpscalerStatus {
     std::string idle_reason; ///< and the full one for its tooltip.
 };
 
+struct DlssStatus {
+    u64 evaluations{};
+    /// The last evaluation's settings: the mode it ran in, and the mode and preset the user chose
+    Settings::NvidiaDlssQuality mode{};
+    Settings::NvidiaDlssQuality requested{};
+    Settings::NvidiaDlssPreset preset{};
+};
+
 struct RendererSettings {
     // Screenshot
     std::atomic<bool> screenshot_requested{false};
@@ -92,6 +101,11 @@ public:
 
     /// Whether the game-specific upscaler runs, which one and at what sizes
     [[nodiscard]] virtual UpscalerStatus GetUpscalerStatus() const {
+        return {};
+    }
+
+    /// How many NVIDIA DLSS evaluations ran so far and the mode of the last one
+    [[nodiscard]] virtual DlssStatus GetDlssStatus() const {
         return {};
     }
 

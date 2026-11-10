@@ -154,6 +154,8 @@ ENUM(AntiAliasing, None, Fxaa, Smaa);
 ENUM(OotAntiAliasing, Game, NoSharpening);
 ENUM(OotFsrPreset, Native, Quality, Balanced, Performance, UltraPerformance, NativeAa);
 ENUM(OotDockedOutput, Output4k, Output1440p);
+ENUM(NvidiaDlssQuality, Automatic, Native, Quality, Balanced, Performance, UltraPerformance);
+ENUM(NvidiaDlssPreset, M, NvidiaDefault, E, F, J, K, L);
 ENUM(AspectRatio, R16_9, R4_3, R21_9, R16_10, Stretch);
 ENUM(ConsoleMode, Handheld, Docked);
 ENUM(AppletMode, HLE, LLE, Disabled);

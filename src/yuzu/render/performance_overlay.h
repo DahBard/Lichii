@@ -72,6 +72,8 @@ private:
     QValueAxis* m_fpsX = nullptr;
     QValueAxis* m_fpsY = nullptr;
 
+    QLabel* m_dlssLabel = nullptr;
+
 signals:
     void closed();
 };

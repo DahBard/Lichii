@@ -3762,9 +3762,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     }
     static_assert(VideoCommon::EvictedPointerSlots::NumPrograms == Maxwell::MaxShaderProgram);
     VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
-    for (size_t index = 0, program_env = 0; index < Maxwell::MaxShaderProgram; ++index) {
+    for (size_t index = 0, mapped_env = 0; index < Maxwell::MaxShaderProgram; ++index) {
         if (key.unique_hashes[index] != 0) {
-            mapped_pointers[index] = envs[program_env++]->MappedStoragePointerKeys();
+            mapped_pointers[index] = envs[mapped_env++]->MappedStoragePointerKeys();
         }
     }
     auto pipeline = std::make_unique<GraphicsPipeline>(

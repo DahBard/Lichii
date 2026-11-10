@@ -64,20 +64,27 @@ public:
     }
 
     [[nodiscard]] VideoCore::FrameGenStatus GetFrameGenStatus() const override {
+        // The status bar counts generated frames by difference: report both counters' sum, which
+        // only rises within a game, also when frame generation is switched on, off or over.
+        const u64 amd_generated = AmdFrameGen::GeneratedFrames();
+        u64 generated = amd_generated;
+#ifdef HAS_LSFG
+        const auto lsfg_status = frame_gen.CurrentStatus();
+        generated += lsfg_status.generated_frames;
+#endif
         if (Settings::values.frame_gen.GetValue() &&
             Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::AmdFsr) {
-            const u64 generated = AmdFrameGen::GeneratedFrames();
             const auto [tag, reason] = rasterizer.AmdFrameGenIdleReason();
-            return {.state = generated != 0 ? VideoCore::FrameGenState::Running
-                                            : VideoCore::FrameGenState::Pending,
+            return {.state = amd_generated != 0 ? VideoCore::FrameGenState::Running
+                                                : VideoCore::FrameGenState::Pending,
                     .generated_frames = generated,
                     .idle_tag = tag,
                     .idle_reason = reason};
         }
 #ifdef HAS_LSFG
-        return frame_gen.CurrentStatus();
+        return {.state = lsfg_status.state, .generated_frames = generated};
 #else
-        return {.state = VideoCore::FrameGenState::UnsupportedBuild};
+        return {.state = VideoCore::FrameGenState::UnsupportedBuild, .generated_frames = generated};
 #endif
     }
 
@@ -101,6 +108,10 @@ public:
         status.idle_reason = reason;
         return status;
     }
+
+#ifdef EGLANTINE_STREAMLINE
+    [[nodiscard]] VideoCore::DlssStatus GetDlssStatus() const override;
+#endif
 
     // Enhanced platform-specific initialization
     void InitializePlatformSpecific();

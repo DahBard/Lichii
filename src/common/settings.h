@@ -67,6 +67,8 @@ SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
 SWITCHABLE(OotFsrPreset, false);
 SWITCHABLE(OotDockedOutput, false);
+SWITCHABLE(NvidiaDlssQuality, false);
+SWITCHABLE(NvidiaDlssPreset, false);
 SWITCHABLE(AspectRatio, true);
 SWITCHABLE(AstcDecodeMode, true);
 SWITCHABLE(AstcRecompression, true);
@@ -413,6 +415,20 @@ struct Values {
                                                   false};
     // NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS.
     SwitchableSetting<bool> nvidia_dlss{linkage, false, "nvidia_dlss", Category::Renderer};
+    SwitchableSetting<NvidiaDlssQuality> nvidia_dlss_quality{linkage,
+                                                             NvidiaDlssQuality::Automatic,
+                                                             "nvidia_dlss_quality",
+                                                             Category::Renderer,
+                                                             Specialization::Default,
+                                                             true,
+                                                             true};
+    SwitchableSetting<NvidiaDlssPreset> nvidia_dlss_preset{linkage,
+                                                           NvidiaDlssPreset::M,
+                                                           "nvidia_dlss_preset",
+                                                           Category::Renderer,
+                                                           Specialization::Default,
+                                                           true,
+                                                           true};
     // AMD FSR through AMD's FidelityFX runtime (Windows) in place of Ocarina of Time's upscale:
     // FSR 4 where AMD offers it for the GPU, AMD's FSR 3.1 otherwise.
     SwitchableSetting<bool> amd_fsr4{linkage, true, "amd_fsr4", Category::Renderer};
@@ -1050,6 +1066,9 @@ struct Values {
     Setting<bool> log_flush_line{linkage, false, "flush_line", Category::Miscellaneous, Specialization::Default, true, true};
     Setting<bool> censor_username{linkage, true, "censor_username", Category::Miscellaneous};
     Setting<bool> first_launch{linkage, true, "first_launch", Category::Miscellaneous};
+    // The values the recommended settings (common/recommended_settings.h) replaced.
+    Setting<std::string> recommended_settings_backup{
+        linkage, {}, "recommended_settings_backup", Category::Miscellaneous};
 
     // Network
     Setting<std::string> network_interface{linkage, std::string(), "network_interface",
@@ -1073,6 +1092,14 @@ struct Values {
 };
 
 extern Values values;
+
+struct NvidiaDlssRuntimeSettings {
+    NvidiaDlssQuality quality;
+    NvidiaDlssPreset preset;
+};
+
+void RefreshNvidiaDlssRuntimeSettings();
+NvidiaDlssRuntimeSettings GetNvidiaDlssRuntimeSettings();
 
 constexpr u32 MIN_FRAME_GEN_MULTIPLIER = 2;
 constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;

@@ -16,6 +16,7 @@
 #include <utility>
 #include <queue>
 #include <source_location>
+#include <span>
 #include <vector>
 
 #include "common/alignment.h"
@@ -202,10 +203,8 @@ public:
         on_submit = std::move(func);
     }
 
-    /// An upload in order: copies into dst after the work recorded before them and before the
-    /// work recorded after them (the barriers of an in-order buffer copy). Uploads with no other
-    /// command between them share one command and one pair of barriers, unless one would write
-    /// bytes another writes, or a buffer another reads. Call outside a render pass.
+    /// Consecutive in-order staging uploads share barriers until their destinations overlap,
+    /// a source depends on a pending copy, or the batch is full. Call outside a render pass.
     void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
 
     /// Send work to a separate thread.
@@ -216,7 +215,7 @@ public:
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
         }
         if (uploads_pending) {
-            // Uploads recorded before this command go before it.
+            // Pending uploads precede every other recorded command, including upload-buffer work.
             FlushUploads();
         }
         if (chunk->Record(command)) {
@@ -498,6 +497,11 @@ private:
     u64 render_pass_serial{};
     std::unique_ptr<CommandPool> command_pool;
 
+    std::unique_ptr<UploadBatch> upload_batch;
+    bool uploads_pending{};
+    /// Records pending uploads before another command, worker handoff, or submission tick.
+    void FlushUploads();
+
     vk::QueryPool trace_query_pool;
     static constexpr u32 TraceMaxSubmissions = 512;
     struct SubmissionTrace {
@@ -544,12 +548,6 @@ private:
     bool trace_gpu_sampling{};
     bool trace_gpu_pending{};
     bool trace_gpu_failed{};
-
-    /// RecordUpload's copies not recorded yet; uploads_pending while it holds any.
-    std::unique_ptr<UploadBatch> upload_batch;
-    bool uploads_pending{};
-    /// Records the pending uploads as one command.
-    void FlushUploads();
 
     VideoCommon::QueryCacheBase<QueryCacheParams>* query_cache = nullptr;
 

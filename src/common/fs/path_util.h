@@ -39,6 +39,10 @@ enum class EdenPath {
 
 // migration/compat dirs
 enum EmuPath {
+    LegacyEdenDir,
+    LegacyEdenConfigDir,
+    LegacyEdenCacheDir,
+
     CitronDir,
     CitronConfigDir,
     CitronCacheDir,
@@ -221,6 +225,8 @@ template <typename Path>
  * @param app_directory Directory to use for application storage.
  */
 void SetAppDirectory(const std::string& app_directory);
+
+[[nodiscard]] bool IsPortableMode();
 
 /**
  * Gets the filesystem path associated with the EdenPath enum.

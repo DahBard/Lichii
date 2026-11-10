@@ -28,13 +28,13 @@
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/gpu_wait_stats.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/renderer_vulkan/upload_batch.h"
 #include "video_core/renderer_vulkan/vk_command_pool.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
-#include "video_core/renderer_vulkan/upload_batch.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -355,7 +355,7 @@ void Scheduler::DispatchWork() {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::DispatchWork");
     }
     if (uploads_pending) {
-        // What the worker gets is everything recorded so far.
+        // The worker must receive everything recorded so far.
         FlushUploads();
     }
     if (chunk && !chunk->Empty()) {
@@ -375,29 +375,29 @@ void Scheduler::DispatchWork() {
 }
 
 void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies) {
-    if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+    if (VideoCommon::GpuSplit::check_owner) {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::RecordUpload");
     }
-    if (copies.empty()) {
-        return;
+    // Check each region so even a single upload larger than the capacity stays bounded, and
+    // overlapping regions within that upload cannot enter the same batch.
+    for (const VkBufferCopy& copy : copies) {
+        const std::span<const VkBufferCopy> region{&copy, 1};
+        if (uploads_pending && !upload_batch->CanAdd(src, dst, region)) {
+            FlushUploads();
+        }
+        upload_batch->Add(src, dst, region);
+        uploads_pending = true;
     }
-    if (uploads_pending && !upload_batch->CanAdd(src, dst, copies)) {
-        FlushUploads();
-    }
-    upload_batch->Add(src, dst, copies);
-    uploads_pending = true;
 }
 
 void Scheduler::FlushUploads() {
-    // Copies, so the batch's vectors keep their capacity for the next one.
-    auto command = [copies = upload_batch->copies,
-                    groups = upload_batch->groups](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
-        UploadBatch::Record(cmdbuf, copies, groups);
-    };
+    // Copy the vectors so the recording thread retains their capacity while the worker uses them.
+    auto command = [copies = upload_batch->copies, groups = upload_batch->groups](
+                       vk::CommandBuffer cmdbuf) { UploadBatch::Record(cmdbuf, copies, groups); };
     upload_batch->copies.clear();
     upload_batch->groups.clear();
     uploads_pending = false;
-    RecordWithUploadBuffer(std::move(command));
+    Record(std::move(command));
 }
 
 void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass renderpass,
@@ -911,7 +911,7 @@ void Scheduler::TraceGpuSubmission() {
 
 u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
     if (uploads_pending) {
-        // In the tick they were recorded at.
+        // Keep the copies in the tick that protects their staging regions and buffer lifetimes.
         FlushUploads();
     }
     if (VideoCommon::Nx2Profile::Enabled()) {

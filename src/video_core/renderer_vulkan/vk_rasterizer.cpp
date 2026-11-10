@@ -272,7 +272,7 @@ bool IsPrimitiveRestartSupported(const Device& device, VkPrimitiveTopology topol
              device.IsPatchListPrimitiveRestartSupported()));
 }
 
-/// Before a dispatch: earlier writes visible to it, its indirect arguments included.
+/// Earlier writes must be visible to a dispatch, including its indirect arguments.
 void RecordDispatchBarrier(vk::CommandBuffer cmdbuf) {
     static constexpr VkMemoryBarrier READ_BARRIER{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -2364,8 +2364,8 @@ void RasterizerVulkan::DispatchCompute() {
     scheduler.RequestOutsideRenderPassOperationContext();
     scheduler.NoteComputeWrites();
     // DLSS's or FSR's evaluation may be recorded next, before the dispatch: the barrier goes first.
-    const bool barrier_first = can_replace;
-    if (barrier_first) {
+    const bool barrier_recorded = can_replace;
+    if (barrier_recorded) {
         scheduler.Record([](vk::CommandBuffer cmdbuf) { RecordDispatchBarrier(cmdbuf); });
     }
     const auto* const replacement =
@@ -2376,7 +2376,7 @@ void RasterizerVulkan::DispatchCompute() {
         scheduler.TraceComputePipeline(pipeline->ShaderHash());
     }
     scheduler.Record([this, pipeline, dim, byte_addressed_shadow, bind = std::move(deferred_bind),
-                      replacement, barrier_recorded = barrier_first](vk::CommandBuffer cmdbuf) {
+                      replacement, barrier_recorded](vk::CommandBuffer cmdbuf) {
         if (!barrier_recorded) {
             RecordDispatchBarrier(cmdbuf);
         }
