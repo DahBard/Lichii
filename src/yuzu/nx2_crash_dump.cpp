@@ -254,6 +254,8 @@ void WriteReport(EXCEPTION_POINTERS* pointers, const char* what) {
     if (g_written.exchange(true)) {
         return;
     }
+    // Fails harmlessly when the folder exists.
+    CreateDirectoryW(g_directory, nullptr);
     wchar_t text_path[MAX_PATH + 64];
     wchar_t dump_path[MAX_PATH + 64];
     std::swprintf(text_path, MAX_PATH + 64, L"%ls\\lichii-crash-%lu.txt", g_directory,
@@ -354,12 +356,14 @@ void InstallNx2CrashDump() {
     if (g_directory[0] == L'\0') {
         std::filesystem::path directory;
         if (std::strcmp(value, "1") == 0) {
+            // Not made here: %APPDATA%\lichii must not exist before the Eden import runs. The
+            // profile's folders include it, and WriteReport makes it for a crash before them.
             directory = Common::FS::GetEdenPath(Common::FS::EdenPath::CrashDumpsDir);
         } else {
             directory = std::filesystem::path{std::u8string{reinterpret_cast<const char8_t*>(value)}};
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
         }
-        std::error_code error;
-        std::filesystem::create_directories(directory, error);
         const std::wstring text = directory.wstring();
         if (text.empty() || text.size() >= MAX_PATH) {
             return;
