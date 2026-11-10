@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <string_view>
 
 namespace VideoCommon {
@@ -22,6 +23,17 @@ constexpr OcarinaUpscaleBackend SelectOcarinaUpscaler(bool fsr_enabled, bool dls
         return OcarinaUpscaleBackend::Dlss;
     }
     return fsr_enabled ? OcarinaUpscaleBackend::Fsr : OcarinaUpscaleBackend::Native;
+}
+
+/// LICHII_FSR_JITTER=1 turns on the camera jitter (#1061) and the texture LOD bias below while FSR
+/// upscales. Off by default (round 22, the owner): the jitter made the screen borders shimmer, and
+/// CheezyEmu's FSR runs unjittered and without the bias, which needs the jitter.
+inline bool OcarinaFsrJitterEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_FSR_JITTER");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
 }
 
 /// Texture LOD bias added to Ocarina's mipmapped samplers while FSR upscales. AMD recommends

@@ -4668,7 +4668,9 @@ f32 TextureCacheRuntime::OcarinaFsrLodBias() {
     if (!ocarina_fsr_lod_bias) {
         const bool ocarina = Settings::GetCurrentProgramID() == 0x0400486024DEC000ULL;
         ocarina_fsr_lod_bias =
-            ocarina ? VideoCommon::OcarinaFsrLodBias(ResolveOcarinaUpscaler(device)) : 0.0f;
+            ocarina && VideoCommon::OcarinaFsrJitterEnabled()
+                ? VideoCommon::OcarinaFsrLodBias(ResolveOcarinaUpscaler(device))
+                : 0.0f;
     }
     return *ocarina_fsr_lod_bias;
 }

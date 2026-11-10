@@ -54,10 +54,11 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    (Lichii #664). Ocarina sizes its render resolution from that, so it can render sharper and
    ask more of the GPU; Normal keeps the old behaviour.
  * Ocarina's AMD FSR upscaling is upstream Lichii's since build 132 (this build's own FSR 4,
-   camera jitter and reactive-mask changes of rounds 15-19 are gone, with LICHII_FSR4,
-   LICHII_FSR_JITTER and LICHII_FSR_REACTIVE): "Use AMD FSR 3.1 upscaling in Ocarina of
-   Time" (Graphics, off by default) upscales docked to 4K, and with it on, upstream's camera
-   jitter and texture LOD bias come with it. "Use AMD FSR 4 in place of FSR 3.1" (off by
+   camera jitter and reactive-mask changes of rounds 15-19 are gone, with LICHII_FSR4 and
+   LICHII_FSR_REACTIVE): "Use AMD FSR 3.1 upscaling in Ocarina of Time" (Graphics, off by
+   default) upscales docked to 4K. It runs without camera jitter and its texture LOD bias, as
+   CheezyEmu's FSR does (the jitter made the screen borders shimmer); LICHII_FSR_JITTER=1
+   brings upstream's jitter and bias back. "Use AMD FSR 4 in place of FSR 3.1" (off by
    default) downloads AMD's FidelityFX runtime into the user folder's "fidelityfx" folder when
    you turn it on, and falls back to FSR 3.1 without it.
  * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
