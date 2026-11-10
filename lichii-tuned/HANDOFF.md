@@ -1210,6 +1210,12 @@ Own changes:
     fullscreen toggle or alt-tab with AMD frame generation), 'AMD frame generation:' lines, and
     the frame rate against r44 (FSR 4 on: 44-57 fps). Per-draw actor tracking now runs for every
     indexed draw in Ocarina while FSR is on.
+- Run #48 (tuned4 `aae4566f5`): all three variants built (success, ~32 minutes; artifacts
+  `lichii-tuned-r48-*`, with AMD's loader, upscaler and frame generation DLLs). r48 is r47 with
+  CheezyEmu's FSR port in place of upstream's FSR. Owner's FSR settings for 1440p -> 4K as in r44:
+  docked, Res 1X, preset Native (or Quality: the same 2560x1440 docked with 4K output), docked
+  output 4K; the log should say 'FSR renders from 2560x1440 of 2560x1440' and 'AMD FSR: upscaler
+  4.x.x running, 2560x1440 -> 3840x2160'.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
