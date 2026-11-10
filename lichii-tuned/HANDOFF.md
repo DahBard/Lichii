@@ -1151,6 +1151,8 @@ Own changes:
     for one 6 ms refresh, so motion looks unchanged.
   - Fixed in tuned4 (for r46): the present thread spaces a sequence's frames by
     interval / (generations + 1). LICHII_FG_PACING=0 restores upstream's back-to-back presents.
+- Run #46 (tuned4 `c1f7068cf`): all three variants built (success, ~6 minutes; artifacts
+  `lichii-tuned-r46-*`). r46 is r45 plus the frame generation pacing.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
