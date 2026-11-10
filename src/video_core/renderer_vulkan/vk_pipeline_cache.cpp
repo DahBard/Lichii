@@ -2041,6 +2041,17 @@ private:
     std::mutex mutex;
     std::vector<size_t> free;
 };
+
+/// A prepared stamp ("size modified driver version model") without its second field, the
+/// precompiled file's time; empty when it has no such field.
+std::string StampWithoutTime(const std::string& stamp) {
+    const size_t first = stamp.find(' ');
+    const size_t second = first == std::string::npos ? first : stamp.find(' ', first + 1);
+    if (second == std::string::npos) {
+        return {};
+    }
+    return stamp.substr(0, first) + stamp.substr(second);
+}
 } // Anonymous namespace
 
 void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
@@ -2435,8 +2446,9 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
                           fmt::format("{:016x}", title_id);
     // Assembled from the recipe and the game's files when missing or older than the recipe
     // (tens of seconds, about the file's size in memory).
+    bool noted = false;
     const auto path =
-        Precompile::EnsurePrecompiledFile(title_id, base_dir, CACHE_VERSION, stop_loading);
+        Precompile::EnsurePrecompiledFile(title_id, base_dir, CACHE_VERSION, stop_loading, &noted);
     if (path.empty() || stop_loading.stop_requested()) {
         return std::nullopt;
     }
@@ -2452,10 +2464,16 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     const std::string stamp =
         fmt::format("{} {} {:#x} {} {}\n", file_size, modified, device.GetDriverVersion(),
                     Precompile::PreparationVersion, device.GetModelName());
+    // A copied profile (an import, a restored backup) can give the file another time. A stamp
+    // that differs from this one only there still holds when the file's note names the recipe.
+    const auto only_time_differs = [&stamp, noted](const std::string& line) {
+        const std::string rest = StampWithoutTime(line + '\n');
+        return noted && !rest.empty() && rest == StampWithoutTime(stamp);
+    };
+    std::string prepared_line;
     if (!Precompile::Forced()) {
         std::ifstream stamp_file(stamp_path, std::ios::binary);
-        std::string line;
-        if (std::getline(stamp_file, line) && line + '\n' == stamp) {
+        if (std::getline(stamp_file, prepared_line) && prepared_line + '\n' == stamp) {
             LOG_INFO(Render_Vulkan,
                      "Precompiled pipelines: {} was prepared for this driver already", path_text);
             return std::nullopt;
@@ -2466,10 +2484,27 @@ std::optional<std::pair<std::filesystem::path, std::string>> PipelineCache::AddP
     size_t resume = 0;
     if (!Precompile::Forced()) {
         std::ifstream progress_file(progress_path, std::ios::binary);
-        std::string line;
-        if (std::getline(progress_file, line) && line + '\n' == stamp &&
-            std::getline(progress_file, line)) {
-            resume = static_cast<size_t>(std::strtoull(line.c_str(), nullptr, 10));
+        std::string progress_key, progress_done;
+        const bool counted =
+            std::getline(progress_file, progress_key) && std::getline(progress_file, progress_done);
+        // A copy of a prepared file, unless a preparation of the file as it is now was under way.
+        if (progress_key + '\n' != stamp && only_time_differs(prepared_line)) {
+            std::ofstream rewritten(stamp_path, std::ios::binary | std::ios::trunc);
+            rewritten << stamp;
+            LOG_INFO(Render_Vulkan,
+                     "Precompiled pipelines: {} was prepared for this driver already; only its "
+                     "time changed (a copied profile), so its stamp is updated",
+                     path_text);
+            return std::nullopt;
+        }
+        if (counted && (progress_key + '\n' == stamp || only_time_differs(progress_key))) {
+            resume = static_cast<size_t>(std::strtoull(progress_done.c_str(), nullptr, 10));
+            if (progress_key + '\n' != stamp) {
+                LOG_INFO(Render_Vulkan,
+                         "Precompiled pipelines: {} resumes its preparation; only its time "
+                         "changed (a copied profile)",
+                         path_text);
+            }
         }
     }
     // Layout (Nx2Recipe): "NX2PREP1", u32 cache version, u32 environment count, u32 record count,

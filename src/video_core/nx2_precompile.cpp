@@ -225,7 +225,7 @@ std::optional<Recipe> FindRecipe(u64 title_id, const std::filesystem::path& titl
 }
 
 std::filesystem::path EnsurePrecompiledFile(u64 title_id, const std::filesystem::path& title_dir,
-                                            u32 cache_version, std::stop_token stop) {
+                                            u32 cache_version, std::stop_token stop, bool* noted) {
     const auto precompiled = PrecompiledPath(title_dir, cache_version);
     std::error_code error;
     const bool have_file = std::filesystem::exists(precompiled, error);
@@ -250,6 +250,9 @@ std::filesystem::path EnsurePrecompiledFile(u64 title_id, const std::filesystem:
         }
         const std::string previous{std::istreambuf_iterator<char>(note), {}};
         if (previous == SourceText(*recipe)) {
+            if (noted != nullptr) {
+                *noted = true;
+            }
             return precompiled;
         }
         if (previous == LegacySourceText(recipe->path)) {
@@ -257,6 +260,9 @@ std::filesystem::path EnsurePrecompiledFile(u64 title_id, const std::filesystem:
             note.close();
             std::ofstream rewritten(SourcePath(precompiled), std::ios::binary | std::ios::trunc);
             rewritten << SourceText(*recipe);
+            if (noted != nullptr) {
+                *noted = true;
+            }
             return precompiled;
         }
         LOG_INFO(Render_Vulkan, "Precompiled pipelines: {} changed, assembling it again",

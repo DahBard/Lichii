@@ -90,8 +90,11 @@ struct Recipe {
 /// from an older recipe, else one assembled now from the recipe and the running game's files
 /// (written through a temporary file). Empty when there is neither. Takes tens of seconds and
 /// about the file's size in memory while it assembles: call it off the UI and GPU threads.
+/// `noted`, when given, is set when the file was left as it was because its note names this
+/// recipe: its bytes are what this recipe assembled, whatever time a copy gave it.
 [[nodiscard]] std::filesystem::path EnsurePrecompiledFile(u64 title_id,
                                                           const std::filesystem::path& title_dir,
-                                                          u32 cache_version, std::stop_token stop);
+                                                          u32 cache_version, std::stop_token stop,
+                                                          bool* noted = nullptr);
 
 } // namespace VideoCommon::Nx2Precompile
