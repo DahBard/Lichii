@@ -132,6 +132,43 @@ CLAUDE.md. Plan, in this order:
 3. A shader preparation that completes once and persists.
 Then `tuned` goes back to the tuned4 layout (upstream tree + workflow + this folder).
 
+Step 1 done: `0e30416f4` (tuned4 = r36 + build 132; four agents resolved the conflicts by area).
+- Upstream's code where both sides did the same thing:
+  - Shader cache v2 (#1036). EDEN_NX2_PREBUILD_STREAM and EDEN_NX2_REKEY_FOREIGN_PIPELINES are
+    gone (v54 loader only), and so is `pipeline_record_file`. The preparation, preload-all and
+    async discard/translate sit on top.
+  - Upstream's Ocarina FSR 3.1/4 and jitter (#1060-#1062) replace ours. LICHII_FSR4*,
+    LICHII_FSR_JITTER and LICHII_FSR_REACTIVE are removed, with ab-14, ab-19 and trace-fsr31.
+    Our always-on float8 and compute-derivatives device features are removed too.
+  - #1016's HostTiming sleep replaces our high-resolution timer (EDEN_HIRES_CLOCK, ab-21).
+  - #984 replaces our translation generations.
+- The split's macro and read-back path keeps our later #805 merge as the base. Upstream's
+  #949/#1056 are an earlier port of the same PR, and our files depend on the later API. On top
+  it takes upstream's new pieces: #949's scheduler-ownership fix and latch, the #979/#1014
+  mirror, #1028 read-back, #965/#975/#1039 profiling and the live-read check. Fritchii v3's
+  acquires stay behind LICHII_TUNED4_ACQUIRES=1 (off).
+- New upstream switches: EDEN_NX2_STUTTER_TRACE (+ _DETAIL_MS), EDEN_NX2_LIVE_READ_CHECK,
+  EDEN_NX2_HOSTTIMING_STATS, EDEN_NX2_MEM_TRACE.
+- Tuned defaults version 4 (frontend_common/config.cpp) seeds these once more: async shaders,
+  async presentation, reactive flushing off, GPU video decoding, GPU accuracy Low and OoT AA No
+  sharpening. Round 21's Fritchii runs had reset them in the shared config. It also seeds
+  Ocarina's FSR off: upstream's FSR 3.1/4 is opt-in (Graphics: 'Use AMD FSR 3.1 upscaling in
+  Ocarina of Time', 'Use AMD FSR 4 in place of FSR 3.1'), and its jitter, which has no off
+  switch, is unchecked for the border shimmer.
+- Local check: clang -fsyntax-only on 381 units (all of video_core plus every changed non-Qt
+  file). The only failures were headers the sandbox lacks, plus block_of_code.cpp and codec.cpp,
+  which fail the same way on r36. No warnings on added lines except lambda init-captures.
+- To watch on the laptop:
+  - preflush (ours) now runs next to upstream's early read-back downloads (#1028); A/B with
+    EDEN_NX2_PREFLUSH=0;
+  - HostTiming on E-cores with #1016's sleep (EDEN_NX2_HOSTTIMING_STATS=1);
+  - 'split drain' time, since the back_quiet change interacts with our tick hook;
+  - the first boot converts the v54 cache to v2 ('Shader cache v2 started from the version 54
+    cache').
+- Risks the agents noted: our parallel translation skips #1036's texture-pool flush, as r36
+  did; the precache now runs on hardware_concurrency-1 workers; #949's waiter table has 64
+  slots.
+
 Round 21 (2026-11-09): the Fritchii base.
 - The owner ran Fritchii v5.5 on the laptop and found it smoother. I first read its log as
   60 fps against our ~30; that was its title-screen video. In gameplay it ran ~32 fps against
