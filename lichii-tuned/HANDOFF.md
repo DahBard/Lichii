@@ -988,7 +988,10 @@ Own changes:
   video_core, so it was never compiled. Renamed in `66500175c`. A local syntax check of the 25
   frontend files Fritchii changes (clang and GCC with Qt 6.4 headers, Linux and MinGW targets)
   found nothing else MSVC would stop on.
-- Run #40 (tuned5 `66500175c`): the same three variants with `msvc` fixed.
+- Run #40 (tuned5 `66500175c`): all three variants built (success; `msvc` 17 minutes, `pgo`
+  and `pgo-lto` 5 with warm caches; artifacts `lichii-tuned-r40-msvc` 125 MB,
+  `lichii-tuned-r40-pgo` and `lichii-tuned-r40-pgo-lto` 92 MB). r40's `pgo` and `pgo-lto`
+  differ from r39's only by the renames, so r40 is the one set to test.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
