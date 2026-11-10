@@ -1129,6 +1129,9 @@ Own changes:
   - Frame generation also forces FIFO (VSync) at the monitor's refresh rate.
   - The owner's monitor is 3840x2160, so FSR 4's 4K output is 1:1 and the scaling filter doesn't
     matter.
+  - The monitor runs at 160 Hz with FreeSync ('Advanced FreeSync', owner, 2026-11-10). Frame
+    generation's forced FIFO with VRR is tear-free. At 2x the ~45-57 fps base gives ~90-115 fps
+    inside the VRR range: keep the target at 0.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
