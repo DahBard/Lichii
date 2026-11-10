@@ -1390,8 +1390,10 @@ Own changes:
      build 132. Planned in `lichii-tuned/merge-plan-nx2.md` (per-hunk detail in
      `merge-plan-nx2.json`): 18 conflicted files, 29 hunks. Blocker: #1253's data-folder import
      copies without file times, which would re-prepare all ~120k pipelines; Copy() must keep them
-     (same push as the merge). Owner decisions: the recommended-settings table edits, Copy vs
-     Link import.
+     (same push as the merge). Owner decisions (2026-11-10): the recommended table matches the
+     owner's config (precache Always, pinning off, reactive flushing off, async draws Bounded,
+     VRAM Aggressive); import with Keep Old Data, sharing %APPDATA%\lichii with official builds.
+     The merge runs on branch `r22-merge-nx2`.
    - Analyze the newest Fritchii builds (tags up to fritchii-v5.7; we last read v5.5) for
      anything worth taking.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).

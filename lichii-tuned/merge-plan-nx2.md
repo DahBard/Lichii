@@ -127,19 +127,24 @@ Cross-area rules from the critique:
      old patch to the new base.
 7. Watch pgo and pgo-lto for -Werror failures. Fix them on tuned4, regenerate the patch and push.
 
-## Owner decisions
+## Owner decisions (2026-11-10)
 
-1. **Recommended-settings table.** Help > Apply only changes settings when the owner clicks it,
-   but upstream's table would undo four tuned values. Planned edits:
-   - Shader precache: Ask instead of Off. Off skips the preparation.
-   - GPU thread pinning: off instead of on, for the hybrid 255H.
-   - Reactive flushing: off instead of on. Owner's call; upstream's value is defensible.
-   - Native async draws: Wait instead of Bounded. Wait keeps Fritchii v5's async discard. Owner's
-     call too.
-2. **Import mode.** Copy (recommended; Fritchii and 132 keep `%APPDATA%\eden`) or Link.
-3. **Upstream report.** Upstream's warm marker has the same copy-time problem in MinGW and Linux
-   builds. Offering the Copy() fix upstream would be an outward action, so only with the owner's
-   go-ahead.
+1. **Recommended-settings table.** It matches the owner's current config, so Help > Apply
+   changes none of it. The r48 log shows that config. Changed against upstream's table, each
+   with a `// lichii-tuned:` comment:
+   - precache_shaders Always. The owner's choice; upstream's Off skips the preparation.
+   - pin_gpu_threads false. Our CPU placement handles the hybrid 255H.
+   - use_reactive_flushing false. In our tree, false enables the targeted Switch 2 read traps
+     (`memory.cpp` ReadTrapsEnabled) with preflush and async read-back. The r48 session served
+     4,673 such reads.
+   - vram_usage_mode Aggressive. Conservative caps a discrete card at ~7 GiB.
+   Left as upstream has them:
+   - native_async_draws Bounded. The owner already runs Bounded with 8 ms; our code default
+     Wait means Fritchii v5's discard mode 2.
+   - memory_layout_mode 4 GB. Switch 2 programs force 12 GB per game.
+2. **Import mode: "Keep Old Data" (Copy).** The tuned build shares `%APPDATA%\lichii` with the
+   official Lichii builds. Fritchii and build 132 keep `%APPDATA%\eden`.
+3. **Upstream report of the copy-time bug:** not decided. Ask before any outward action.
 
 ## Owner's first test after the merge
 
