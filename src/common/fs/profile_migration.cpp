@@ -200,6 +200,9 @@ void Copy(const fs::path& source, const fs::path& stage) {
             fs::create_directory(target);
         } else if (item.symlink_status().type() == fs::file_type::regular) {
             fs::copy_file(item.path(), target);
+            // Not every standard library keeps it, and cache stamps (the shader preparation's,
+            // the precache warm-up's) include the time of the file they describe.
+            fs::last_write_time(target, fs::last_write_time(item.path()));
         } else {
             throw std::runtime_error("Migration source changed to a link or special file");
         }

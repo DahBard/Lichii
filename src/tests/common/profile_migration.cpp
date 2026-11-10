@@ -116,6 +116,16 @@ TEST_CASE("Copy verifies and stages every root before preparing or publishing",
     RunImport(plan, [&](const auto&) { FAIL("Completed import ran twice"); });
 }
 
+TEST_CASE("Copy keeps file times", "[profile_migration]") {
+    Fixture f;
+    const auto file = f.source / "shader/x.bin";
+    Write(file, "prepared pipelines");
+    // Two days back, so a copy stamped with the current time can't match it.
+    fs::last_write_time(file, fs::last_write_time(file) - std::chrono::hours{48});
+    RunImport(f.MakePlan());
+    REQUIRE(fs::last_write_time(f.destination / "shader/x.bin") == fs::last_write_time(file));
+}
+
 TEST_CASE("Import keeps the entire old destination in a sibling backup", "[profile_migration]") {
     Fixture f;
     Write(f.source / "save", "legacy save");
