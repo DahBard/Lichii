@@ -1132,6 +1132,9 @@ Own changes:
   - The monitor runs at 160 Hz with FreeSync ('Advanced FreeSync', owner, 2026-11-10). Frame
     generation's forced FIFO with VRR is tear-free. At 2x the ~45-57 fps base gives ~90-115 fps
     inside the VRR range: keep the target at 0.
+- Run #45 (tuned4 `9073c8718`): all three variants built (success, ~6 minutes; artifacts
+  `lichii-tuned-r45-*`). r45 is r44 plus the frame generation swapchain fix and its log lines. No
+  new shader preparation: PreparationVersion is unchanged.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
