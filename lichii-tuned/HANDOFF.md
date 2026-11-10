@@ -1254,6 +1254,16 @@ Own changes:
     build goes into that one folder, and the stamp should include the install folder, so that
     a new folder prepares once. If a new build is cold even in the same folder, AMD keys by the
     exe, and the preparation needs a different approach.
+  - Owner, second launch of r48 from the same folder: 'loading took around 15 seconds.
+    Everything is working as intended.' So the driver cache works within a build and folder.
+    Test still open: per folder or per exe. The merged build goes over the r48 folder; its first
+    launch's load time decides.
+    - Fast: AMD keys by folder. Offer one forced preparation in that folder
+      (EDEN_NX2_PRECOMPILED_FORCE=1, ~45 min; a forced run starts over and doesn't resume), so
+      that new areas don't stutter. Add the install folder to the stamp, so that a new folder
+      prepares once on its own.
+    - ~2.5 min again: the cache resets per exe, and every build starts cold. Find another way to
+      carry pipelines across builds (Lichii's own VkPipelineCache data, or pipeline binaries).
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
