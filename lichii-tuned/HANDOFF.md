@@ -1216,6 +1216,44 @@ Own changes:
   docked, Res 1X, preset Native (or Quality: the same 2560x1440 docked with 4K output), docked
   output 4K; the log should say 'FSR renders from 2560x1440 of 2560x1440' and 'AMD FSR: upscaler
   4.x.x running, 2560x1440 -> 3840x2160'.
+- r48 test (owner, 2026-11-10): 'Everything seems to be working perfectly. The best the game has
+  felt (aside from the stutters from building shaders which go away with more playtime).'
+  - Settings: docked, Exclusive fullscreen, VSync Immediate, Res1X, FSR preset Native, 4K output,
+    AMD FSR frame generation (Auto).
+  - FSR: FSR 4.1.2 running 2560x1440 -> 3840x2160, output check passed. AMD frame generation:
+    FSR 4.0.2 generating frames, HUD masked per pixel. Five swapchain rebuilds (fullscreen
+    toggles, 3840x2160 <-> 3574x1974); no 'wasn't submitted in time' warning; no errors in play.
+  - Game frame rate in play 41-53 fps per 10 s (r44 FSR 4 without FG: 44-57), shown doubled.
+    1% lows 19-31 fps outside two rough windows. At 285-315 s the rate fell to 27 fps, with 20%
+    of frames over 33 ms. In those windows the back thread's compute zone took 254-290 ms/s
+    (4300-4700 dispatches/s) against 85-107 ms/s elsewhere (6300-7900/s).
+  - The first AMD frame generation context took ~10 s to create (frame 28 waited 9.9 s for an
+    acquire). Later rebuilds took ~0.2 s.
+  - Shader preparation: 'prepared for this driver already', so no re-preparation.
+  - The boot shows a cold AMD driver cache. 3026 cached pipelines took 146 s (22 -> 169 s).
+    Boot pipeline loads across builds:
+
+    | Build | Pipelines | Load time |
+    |---|---|---|
+    | r44, a later launch | 2228 | 7 s |
+    | r45 | 2999 | 173 s |
+    | r46 | 3017 | 15 s |
+    | r47 | 3020 | 171 s |
+    | r48 | 3026 | 146 s |
+
+    Play builds took 40-2000 ms each, the driver compiling them. So the 120k pipelines prepared
+    in r43/r44 didn't stay in AMD's cache for r45, r47 and r48. Our stamp still says
+    'prepared', because it assumes the driver cache carries over between builds.
+  - Likely cause: AMD's Windows Vulkan cache (%LOCALAPPDATA%\AMD\VkCache) is kept per install
+    folder or per exe. Each build was extracted to a new folder; r46 may have been a second
+    launch or an overwrite. AMD doesn't document this.
+  - Owner test asked for:
+    1. Relaunch r48 from the same folder: the boot should be fast.
+    2. Copy r48 into the r44 folder (where the 120k preparation ran) and launch from there.
+    If that boot is fast and the stutters are gone, AMD keys its cache by folder. Then every
+    build goes into that one folder, and the stamp should include the install folder, so that
+    a new folder prepares once. If a new build is cold even in the same folder, AMD keys by the
+    exe, and the preparation needs a different approach.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
