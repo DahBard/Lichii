@@ -24,7 +24,8 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.dma_accuracy, DmaAccuracy::Default);
     entry(settings.gpu_fence_behavior, GpuFenceBehavior::Default);
     entry(settings.native_compute_write_mark, NativeComputeWriteMark::Auto);
-    entry(settings.vram_usage_mode, VramUsageMode::Conservative);
+    // lichii-tuned: Aggressive; Conservative caps a discrete card at ~7 GiB (vulkan_device.cpp).
+    entry(settings.vram_usage_mode, VramUsageMode::Aggressive);
     entry(settings.nvdec_emulation, NvdecEmulation::Gpu);
     entry(settings.max_anisotropy, AnisotropyMode::Automatic);
     entry(settings.accelerate_astc, AstcDecodeMode::Gpu);
@@ -34,15 +35,14 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.renderer_force_max_clock, false);
     entry(settings.use_disk_shader_cache, true);
     entry(settings.use_vulkan_driver_pipeline_cache, true);
-    // lichii-tuned: Wait keeps Fritchii v5's async discard (AsyncDiscardMode, vk_pipeline_cache).
-    entry(settings.native_async_draws, NativeAsyncDraws::Wait);
+    entry(settings.native_async_draws, NativeAsyncDraws::Bounded);
     entry(settings.native_pipeline_wait_ms, 8);
-    // lichii-tuned: Off would skip the shader and precompiled-pipeline preparation at launch.
-    entry(settings.precache_shaders, PrecacheShaders::Ask);
+    // lichii-tuned: Always, the owner's choice; Off would skip the shader preparation at launch.
+    entry(settings.precache_shaders, PrecacheShaders::Always);
     entry(settings.use_video_framerate, false);
     entry(settings.mkw_30fps, false);
     entry(settings.mkw_dynamic_fps, false);
-    // lichii-tuned: off, as the tuned defaults seed it (frontend_common/config.cpp).
+    // lichii-tuned: off, which turns on the targeted Switch 2 read traps (memory.cpp).
     entry(settings.use_reactive_flushing, false);
     entry(settings.barrier_feedback_loops, true);
     entry(settings.enable_buffer_history, false);
@@ -58,7 +58,7 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.gpu_unswizzle_enabled, false);
 #if defined(_WIN32) || defined(__linux__)
     // Other hosts skip the pinning.
-    // lichii-tuned: off on hybrid Intel CPUs, as its default (settings.h).
+    // lichii-tuned: off; our core placement (hybrid_cpu.cpp) handles the hybrid 255H.
     entry(settings.pin_gpu_threads, false);
 #endif
 #ifndef __APPLE__
