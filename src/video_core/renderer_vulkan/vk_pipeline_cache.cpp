@@ -3126,7 +3126,7 @@ int AsyncDiscardSwitch() {
                            : text[0] == '1' ? 1
                                             : 2;
         static constexpr std::array<const char*, 4> what{
-            "unset: 2 while the native_async_draws setting is Wait (its default), else the setting",
+            "unset: 2 while the native_async_draws setting is Wait, else the setting",
             "0: native draws by the native_async_draws setting",
             "1: native draws skip unbuilt pipelines by the legacy heuristic",
             "2: native draws skip unbuilt pipelines only into render targets cleared every frame",
@@ -3142,9 +3142,9 @@ int AsyncDiscardMode() {
     if (const int value = AsyncDiscardSwitch(); value >= 0) {
         return value;
     }
-    // Fritchii v5's default (b2a243415), unless the setting was changed from Wait: with an empty
-    // shader cache, skipping by the legacy heuristic dropped draws into render-once layers for
-    // good (no "Press Start", empty chat bubbles, wrong lighting), while waiting for every
+    // Fritchii v5's mode (b2a243415) while the setting is Wait, else the setting decides: with an
+    // empty shader cache, skipping by the legacy heuristic dropped draws into render-once layers
+    // for good (no "Press Start", empty chat bubbles, wrong lighting), while waiting for every
     // pipeline stalls each new one.
     return Settings::values.native_async_draws.GetValue() == Settings::NativeAsyncDraws::Wait
                ? 2

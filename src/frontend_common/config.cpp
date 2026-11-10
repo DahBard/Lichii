@@ -169,10 +169,11 @@ void Config::SetUpIni() {
                  ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
         }
         if (applied < 3) {
-            // Round 17: offer upstream #781's shader precache at launch, the compute half of the
-            // warm-up the AMD fork (medicinauvsecretaria-lang's Lichii OoT AMD) builds in.
+            // Round 17: upstream #781's shader precache at launch, the compute half of the
+            // warm-up the AMD fork (medicinauvsecretaria-lang's Lichii OoT AMD) builds in. Always,
+            // as the tuned default: Ask here would override it in a new profile.
             seed(Settings::values.precache_shaders,
-                 ToString(u32(Settings::PrecacheShaders::Ask)));
+                 ToString(u32(Settings::PrecacheShaders::Always)));
         }
         if (applied < TunedDefaultsVersion) {
             WriteIntegerSetting(std::string("lichii_tuned_defaults"), TunedDefaultsVersion);

@@ -133,10 +133,9 @@ struct ComputePipelineCacheEntry {
 };
 
 /// EDEN_NX2_ASYNC_DISCARD, read on first use: what a native draw does while its pipeline is
-/// missing. 0: the native_async_draws setting decides (Wait by default). 1: skipped by the legacy
-/// heuristic. 2: skipped only into render targets the frame clears and redraws, the rest wait.
-/// Unset: 2 while the setting is Wait, its default; 0 when the setting was changed. Non-native
-/// draws keep the legacy heuristic in every mode.
+/// missing. 0: the native_async_draws setting decides. 1: skipped by the legacy heuristic. 2:
+/// skipped only into render targets the frame clears and redraws, the rest wait. Unset: 2 while
+/// the setting is Wait, else 0. Non-native draws keep the legacy heuristic in every mode.
 [[nodiscard]] int AsyncDiscardMode();
 
 class PipelineCache : public VideoCommon::ShaderCache {

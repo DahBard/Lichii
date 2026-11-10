@@ -117,7 +117,7 @@ below), plus:
    saved more often (after 32 new pipelines, at most every 10 s; the list of used pipelines
    every 5 s), so a driver crash loses less, and at launch the emulator offers to precompile
    the game's compute shaders on the loading screen (Graphics > Advanced, "Precache shaders
-   before game start": now Ask; Always or Off there). Those builds are compiled for AMD Zen 3
+   before game start": now Always; Ask or Off there). Those builds are compiled for AMD Zen 3
    CPUs (-march=znver3), which is why they may not start on Intel CPUs; this build stays
    compiled for any x86-64-v3 CPU.
  * Upstream now pins the GPU threads to cores of their own by default (GraphicsExtra > Hacks,
@@ -175,9 +175,9 @@ below), plus:
    progress is waited for instead of killed, and pipelines other builds stored are counted
    instead of logged as errors.
  * Round 20, Fritchii's shader preparation: this package ships Fritchii's precompile recipe for
-   Ocarina of Time v131072 (recipes\OoT_v131072_cache_v54.nx2recipe, next to lichii.exe). The
-   first launch asks to precache shaders: say yes, and before the game starts every pipeline
-   the game is predicted to draw is built once, so the GPU driver has them compiled before
+   Ocarina of Time v131072 (recipes\OoT_v131072_cache_v54.nx2recipe, next to lichii.exe). With
+   shader precache at Always (the default), before the game starts every pipeline the game
+   is predicted to draw is built once, so the GPU driver has them compiled before
    they are first drawn (about 15 minutes, once per GPU driver and build; Fritchii measured
    Ocarina's worst walking freezes going from ~700-850 ms to 40-70 ms). As in Fritchii, a
    pipeline recorded for a GPU with other features is skipped, not converted (r34 and r35
@@ -195,9 +195,10 @@ below), plus:
    Send both with the log.
  * Round 20, more of Fritchii v5.2, each group with an A/B launcher that brings round 19 back:
    - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
-     thread, so a new effect stalls the frame less; a draw whose pipeline is still building is
-     skipped only into targets the game clears every frame, so menus and one-time effects still
-     wait.
+     thread, so a new effect stalls the frame less; with "Switch 2 draws with unbuilt
+     pipelines" at Wait, a draw whose pipeline is still building is skipped only into targets
+     the game clears every frame, so menus and one-time effects still wait (the default is now
+     Bounded: up to 8 ms of waiting per frame, then a skip).
    - Guest memory (ab-23): the emulated CPU's reads and writes of memory the GPU never wrote skip
      the caches' locks, and its writes reach the GPU before the next command list, semaphore or
      copy; the uniform bank check skips its once-a-frame compare; two #717 trims; cache
@@ -209,8 +210,10 @@ below), plus:
    verify-r20 checks these shortcuts against the slow way while you play.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
-   on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
-   settings; "Game" brings the game's network back).
+   on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
+   Bounded, VRAM usage Aggressive, and "Ocarina of Time anti-aliasing" = No sharpening
+   (Graphics settings; "Game" brings the game's network back). Help > Apply Recommended
+   Settings keeps these.
 
 The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
 CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch

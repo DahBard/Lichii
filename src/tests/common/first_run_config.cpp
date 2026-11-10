@@ -116,7 +116,7 @@ void CheckUnchangedProfile() {
     CHECK(values.fsr_sharpening_slider.GetValue() == 25);
     CHECK(values.dma_accuracy.GetValue() == Settings::DmaAccuracy::Default);
     CHECK(values.gpu_fence_behavior.GetValue() == Settings::GpuFenceBehavior::Default);
-    CHECK(values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Conservative);
+    CHECK(values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive);
     CHECK(values.max_anisotropy.GetValue() == Settings::AnisotropyMode::Automatic);
     CHECK(values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu);
     CHECK(values.frame_pacing_mode.GetValue() == Settings::FramePacingMode::Target_Auto);
@@ -128,7 +128,7 @@ void CheckUnchangedProfile() {
     CHECK_FALSE(values.use_video_framerate.GetValue());
     CHECK_FALSE(values.mkw_30fps.GetValue());
     CHECK_FALSE(values.mkw_dynamic_fps.GetValue());
-    CHECK(values.use_reactive_flushing.GetValue());
+    CHECK_FALSE(values.use_reactive_flushing.GetValue());
     CHECK(values.barrier_feedback_loops.GetValue());
     CHECK_FALSE(values.enable_buffer_history.GetValue());
     CHECK_FALSE(values.skip_cpu_inner_invalidation.GetValue());

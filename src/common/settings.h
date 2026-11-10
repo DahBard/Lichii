@@ -633,8 +633,9 @@ struct Values {
         true,
         true};
 
+    // lichii-tuned: Aggressive; Conservative caps a discrete card at ~7 GiB (vulkan_device.cpp).
     SwitchableSetting<VramUsageMode, true> vram_usage_mode{linkage,
-                                                           VramUsageMode::Conservative,
+                                                           VramUsageMode::Aggressive,
                                                            "vram_usage_mode",
                                                            Category::RendererAdvanced};
 
@@ -690,8 +691,9 @@ struct Values {
         linkage, true, "use_vulkan_driver_pipeline_cache", Category::RendererAdvanced,
         Specialization::Default};
 
+    // lichii-tuned: Bounded, the recommended value; Wait runs Fritchii v5's async discard.
     SwitchableSetting<NativeAsyncDraws> native_async_draws{linkage,
-                                                           NativeAsyncDraws::Wait,
+                                                           NativeAsyncDraws::Bounded,
                                                            "native_async_draws",
                                                            Category::RendererAdvanced,
                                                            Specialization::Default,
@@ -713,8 +715,9 @@ struct Values {
     // driver's cache holds them before the game first uses them.
     // Ask: the desktop app asks at launch while the game has no finished precache; where nothing
     // asks, as Off.
+    // lichii-tuned: Always, the owner's choice; Off skips the shader preparation.
     SwitchableSetting<PrecacheShaders> precache_shaders{linkage,
-                                                        PrecacheShaders::Off,
+                                                        PrecacheShaders::Always,
                                                         "precache_shaders",
                                                         Category::RendererAdvanced,
                                                         Specialization::Default,
@@ -732,13 +735,8 @@ struct Values {
     SwitchableSetting<bool> mkw_dynamic_fps{linkage, false, "mkw_dynamic_fps",
                                             Category::RendererAdvanced};
 
-    SwitchableSetting<bool> use_reactive_flushing{linkage,
-#ifdef __ANDROID__
-                                                  false,
-#else
-                                                  true,
-#endif
-                                                  "use_reactive_flushing",
+    // lichii-tuned: off everywhere, which turns on the targeted Switch 2 read traps (memory.cpp).
+    SwitchableSetting<bool> use_reactive_flushing{linkage, false, "use_reactive_flushing",
                                                   Category::RendererAdvanced};
 
     SwitchableSetting<bool> barrier_feedback_loops{linkage, true, "barrier_feedback_loops",
