@@ -27,17 +27,37 @@ namespace Vulkan {
 
 namespace {
 
-VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats) {
+VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats,
+                                           const vk::PhysicalDevice& physical_device,
+                                           bool want_storage) {
     if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
         VkSurfaceFormatKHR format;
         format.format = VK_FORMAT_B8G8R8A8_UNORM;
         format.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         return format;
     }
-    const auto& found = std::find_if(formats.begin(), formats.end(), [](const auto& format) {
-        return format.format == VK_FORMAT_B8G8R8A8_UNORM &&
-               format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    });
+    const auto offered = [&formats](VkFormat wanted) {
+        return std::find_if(formats.begin(), formats.end(), [wanted](const auto& format) {
+            return format.format == wanted &&
+                   format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        });
+    };
+    const auto storable = [&physical_device](VkFormat format) {
+        return (physical_device.GetFormatProperties(format).optimalTilingFeatures &
+                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+    };
+    // Frame generation writes the presented frames from shaders, which the present manager
+    // creates in this format. Where the driver can't store to B8G8R8A8, it gets an RGBA format
+    // it can store to, if the surface offers one.
+    if (want_storage && !storable(VK_FORMAT_B8G8R8A8_UNORM)) {
+        for (const VkFormat format :
+             {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_A2B10G10R10_UNORM_PACK32}) {
+            if (const auto it = offered(format); it != formats.end() && storable(format)) {
+                return *it;
+            }
+        }
+    }
+    const auto found = offered(VK_FORMAT_B8G8R8A8_UNORM);
     return found != formats.end() ? *found : formats[0];
 }
 
@@ -291,8 +311,15 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
                                  VK_PRESENT_MODE_FIFO_RELAXED_KHR) != present_modes.end();
 
     const VkCompositeAlphaFlagBitsKHR alpha_flags{ChooseAlphaFlags(capabilities)};
-    surface_format = ChooseSwapSurfaceFormat(formats);
+    surface_format =
+        ChooseSwapSurfaceFormat(formats, physical_device, Settings::values.frame_gen.GetValue());
     present_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed);
+    LOG_INFO(Render_Vulkan, "Swapchain: {}, present mode {}, shader writes to it {}",
+             string_VkFormat(surface_format.format), string_VkPresentModeKHR(present_mode),
+             (physical_device.GetFormatProperties(surface_format.format).optimalTilingFeatures &
+              VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0
+                 ? "supported"
+                 : "unsupported");
 
     u32 requested_image_count{capabilities.minImageCount + 1};
     // Ensure Triple buffering if possible.

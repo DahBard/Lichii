@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/present/frame_gen.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -221,7 +223,13 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     }
 
     if (!frame->storage_view) {
-        state.store(VideoCore::FrameGenState::UnsupportedSurface, std::memory_order_relaxed);
+        if (state.exchange(VideoCore::FrameGenState::UnsupportedSurface,
+                           std::memory_order_relaxed) !=
+            VideoCore::FrameGenState::UnsupportedSurface) {
+            LOG_WARNING(Render_Vulkan,
+                        "Frame generation can't run: shaders can't write the presented frames' "
+                        "format");
+        }
         warm_streak = 0;
         return;
     }
@@ -247,6 +255,34 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
 
     const bool use_fsr3 = Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::Fsr3;
+
+    // Every 10 s: game frames and generated frames per second (CheezyEmu 93d8f9b86). Without it a
+    // log can't tell whether the built-in frame generation ran or only said so in the status bar.
+    {
+        static auto window_start = std::chrono::steady_clock::now();
+        static u64 window_frames = 0;
+        static u64 window_generated = 0;
+        ++window_frames;
+        window_generated += GeneratedFrameCount();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - window_start >= std::chrono::seconds{10}) {
+            const double seconds = std::chrono::duration<double>(now - window_start).count();
+            const u32 target = Settings::values.frame_gen_target_rate.GetValue();
+            LOG_INFO(Render_Vulkan,
+                     "Frame generation ({}): {:.0f} game frames + {:.0f} generated per second at "
+                     "{}x{} (target {}){}",
+                     use_fsr3 ? "Optical Flow" : "LSFG", static_cast<double>(window_frames) / seconds,
+                     static_cast<double>(window_generated) / seconds, extent.width, extent.height,
+                     target == 0 ? std::string{"none"} : std::to_string(target) + " FPS",
+                     window_generated == 0 && target != 0 &&
+                             static_cast<double>(window_frames) / seconds >= target * 0.9
+                         ? ": none needed, the game already reaches the target"
+                         : "");
+            window_start = now;
+            window_frames = 0;
+            window_generated = 0;
+        }
+    }
 
     if (use_fsr3 && fsr3_chain) {
         scheduler.RequestOutsideRenderPassOperationContext();
