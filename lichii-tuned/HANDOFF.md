@@ -1063,6 +1063,9 @@ Own changes:
     precache.
   Fixed in tuned4 `5ce380aae`: at most 4 jobs per worker in flight, and the CPU workers run the
   builds themselves, as before the merge.
+- Run #43 (tuned4 `5ce380aae`): all three variants built (success, ~6 minutes with warm caches;
+  artifacts `lichii-tuned-r43-*`). r43 is r42 plus the precache fix: the build to test the
+  preparation with.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
