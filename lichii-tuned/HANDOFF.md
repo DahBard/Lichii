@@ -121,6 +121,18 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## What the tuned build contains (tuned5, from round 21; tuned4 below)
 
+Round 22 (2026-11-10): back to tuned4. After the three-way test (Test results), the owner chose
+to stay on the tuned fork: not Fritchii, and no fresh start on build 132. Priorities are in
+CLAUDE.md. Plan, in this order:
+1. Merge build 132 (`d2eaae4f3`, still the nx2 tip) into tuned4 on branch `r22-merge132`. The
+   merge has 239 conflict hunks in 65 files. Upstream's code wins where both sides do the same
+   thing: shader cache v2 (#1036); upstream's FSR 3.1/4 and jitter (#1060-#1062) in place of
+   ours; #1056 and #1028 in place of our #805 merge; #949 and #979 in place of Fritchii v3's
+   acquires.
+2. FSR, frame generation and Radeon work from CheezerWheezer/CheezyEmu, vetted.
+3. A shader preparation that completes once and persists.
+Then `tuned` goes back to the tuned4 layout (upstream tree + workflow + this folder).
+
 Round 21 (2026-11-09): the Fritchii base.
 - The owner ran Fritchii v5.5 on the laptop and found it smoother. I first read its log as
   60 fps against our ~30; that was its title-screen video. In gameplay it ran ~32 fps against
