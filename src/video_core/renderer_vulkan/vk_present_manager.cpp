@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
 #include "video_core/nx2_perf.h"
+#include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -220,6 +221,8 @@ void PresentManager::Present(Frame* frame) {
     if (use_present_thread) {
         scheduler.Record([this, frame](vk::CommandBuffer) {
             frame->queued_at = std::chrono::steady_clock::now();
+            // In order with the game frame's commands, so this is the frame it prepared.
+            frame->frame_gen_id = AmdFrameGen::TakePreparedFrame();
             std::unique_lock lock{queue_mutex};
             present_queue.push_back(frame);
             frame_cv.notify_one();
@@ -229,6 +232,7 @@ void PresentManager::Present(Frame* frame) {
             VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::PresentWait};
             scheduler.WaitWorker();
         }
+        frame->frame_gen_id = AmdFrameGen::TakePreparedFrame();
         CopyToSwapchain(frame);
         free_queue.push_back(frame);
     }
@@ -878,8 +882,26 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         }
     }
 
-    // Present
-    last_present_id = swapchain.Present(render_semaphore);
+    // Present. For AMD's frame generation, the game rectangle scales with the blit from the frame
+    // to the swapchain image.
+    AmdFrameGen::PresentTarget frame_gen{.frame_id = frame->frame_gen_id, .rect = {}};
+    if (frame->width != 0 && frame->height != 0) {
+        const auto& rect = frame->frame_gen_rect;
+        const auto scale = [](u32 value, u32 to, u32 from) {
+            return static_cast<u32>(static_cast<u64>(value) * to / from);
+        };
+        const u32 rect_width = rect.extent.width != 0 ? rect.extent.width : frame->width;
+        const u32 rect_height = rect.extent.height != 0 ? rect.extent.height : frame->height;
+        frame_gen.rect = VkRect2D{
+            .offset = {static_cast<s32>(scale(static_cast<u32>(rect.offset.x), extent.width,
+                                              frame->width)),
+                       static_cast<s32>(scale(static_cast<u32>(rect.offset.y), extent.height,
+                                              frame->height))},
+            .extent = {scale(rect_width, extent.width, frame->width),
+                       scale(rect_height, extent.height, frame->height)},
+        };
+    }
+    last_present_id = swapchain.Present(render_semaphore, frame_gen);
 }
 
 } // namespace Vulkan

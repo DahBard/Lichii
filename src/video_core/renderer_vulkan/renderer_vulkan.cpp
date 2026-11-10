@@ -248,10 +248,16 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                                 : std::chrono::steady_clock::time_point{};
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers,
-                               render_window.GetFramebufferLayout(),
+    const auto frame_layout = render_window.GetFramebufferLayout();
+    blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers, frame_layout,
                                present_manager.SwapchainImageCount(),
                                swapchain.GetImageViewFormat());
+    // AMD frame generation: where the game picture sits in the frame.
+    frame->frame_gen_rect = VkRect2D{
+        .offset = {static_cast<s32>(frame_layout.screen.left),
+                   static_cast<s32>(frame_layout.screen.top)},
+        .extent = {frame_layout.screen.GetWidth(), frame_layout.screen.GetHeight()},
+    };
 
 #ifdef HAS_LSFG
     void(frame_gen.WantedGenerations(present_manager.MaxExtraFrames()));

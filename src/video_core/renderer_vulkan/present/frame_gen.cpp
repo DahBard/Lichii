@@ -204,7 +204,9 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         shaders.emplace(device);
     }
 
-    if (unavailable || !Settings::values.frame_gen.GetValue()) {
+    // AMD FSR frame generation runs in AMD's swapchain instead of these chains.
+    if (unavailable || !Settings::values.frame_gen.GetValue() ||
+        Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::AmdFsr) {
         if (chain || fsr3_chain) {
             scheduler.Finish();
             chain.reset();

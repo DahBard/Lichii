@@ -16,6 +16,7 @@ namespace Ui {
 class PerformanceOverlay;
 }
 
+class QLabel;
 class QLineSeries;
 class QChart;
 class QChartView;
@@ -60,6 +61,9 @@ private:
 
     // drag
     QPoint m_drag_start_pos;
+
+    // AMD FSR and frame generation, as the status bar shows them
+    QLabel* m_features = nullptr;
 
     // fps chart
     QLineSeries* m_fpsSeries = nullptr;

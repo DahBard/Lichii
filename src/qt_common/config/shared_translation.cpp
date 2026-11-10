@@ -166,16 +166,14 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Strength of RCAS (AMD's contrast-adaptive sharpening) on the upscaler used in place "
               "of a game's DLSS (AMD FSR 3.1); 0% turns it off.\nAlso sets the sharpening "
               "of the AMD FSR 1 and SGSR window adapting filters."));
-    INSERT(Settings, ocarina_fsr, tr("Use AMD FSR 3.1 upscaling in Ocarina of Time"),
-           tr("Replaces Ocarina of Time's native upscaler using scene depth and camera motion. "
-              "Works on any supported Vulkan GPU. NVIDIA DLSS takes precedence when enabled and "
-              "available. RCAS Sharpness controls sharpening. Takes effect when a game starts."));
-    INSERT(Settings, amd_fsr4, tr("Use AMD FSR 4 in place of FSR 3.1"),
-           tr("Uses AMD's ML-based FSR 4 where FSR replaces a game's upscaler (Ocarina of Time "
-              "with the setting above). Radeon RX 6000 or newer, or a Ryzen AI processor, with a "
-              "current AMD driver.\nNeeds AMD's FidelityFX runtime, which Lichii downloads from "
-              "AMD when you ask. The files are AMD's, under AMD's licence. Without them, or if FSR 4 "
-              "can't run, FSR 3.1 is used. Takes effect when a game starts."));
+    INSERT(Settings, amd_fsr4, tr("Use AMD FSR 4 in Ocarina of Time"),
+           tr("Replaces The Legend of Zelda: Ocarina of Time's upscaler with AMD FSR 4 "
+              "(machine-learning upscaling) on GPUs AMD's FSR runtime supports: Radeon RX 9000, and "
+              "RX 7000 and RX 6000 with a recent driver. Other GPUs get AMD's FSR 3.1.\nAMD frame "
+              "generation uses AMD's FSR 3.1 when FSR 4 is off or not offered, so it works on any "
+              "GPU.\nNeeds Resolution 1X: at other resolutions the game's own upscaler is used."
+              "\nWindows only (AMD's DLLs next to lichii.exe). NVIDIA DLSS, when it is on and "
+              "available, is used first.\nTakes effect when the game starts."));
     INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
@@ -192,6 +190,26 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "network, which sharpens heavily.\nNo sharpening: the image as the game renders it, "
               "without the network (faster; pairs well with a higher resolution). Has no effect while "
               "NVIDIA DLSS is on.\nTakes effect when the game starts."));
+    INSERT(Settings, oot_fsr_preset, tr("Ocarina of Time FSR preset:"),
+           tr("The Legend of Zelda: Ocarina of Time renders its 3D scene smaller and AMD FSR "
+              "upscales it (at 1080p):\n"
+              "Native AA: the full 1920x1080, FSR as anti-aliasing (sharpest, slowest).\n"
+              "Native: the game's own size, 1440x810.\n"
+              "Quality: 1280x720.\nBalanced: 1125x633.\nPerformance: 960x540.\n"
+              "Ultra Performance: 640x360 (fastest, softest).\n"
+              "Docked, the preset follows the docked output. 4K: Quality 2560x1440, Balanced "
+              "2250x1265, Performance 1920x1080, Ultra Performance 1280x720 (Native AA is "
+              "2560x1440 too, the largest the game draws docked). 1440p: Native AA 2560x1440, "
+              "Quality 1710x961, Balanced 1500x844, Performance 1280x720, Ultra Performance "
+              "855x480.\n"
+              "The HUD and text stay sharp, and saved shaders still apply. Turns on Max "
+              "Resolution's fixed size. Takes effect when the game starts."));
+    INSERT(Settings, oot_docked_output, tr("Ocarina of Time docked output:"),
+           tr("Docked only. 4K: FSR upscales the 3D scene to 3840x2160 (sharpest, heaviest).\n"
+              "1440p: FSR writes the game's own 2560x1440 image instead and no 4K image is made, "
+              "which is lighter on the GPU. The FSR preset renders a fraction of the output you "
+              "pick here, so 4K renders more for the same preset (Performance: 1920x1080 for 4K, "
+              "1280x720 for 1440p).\nTakes effect when the game starts."));
     INSERT(Settings, post_shader_chain, QString(), QString());
     INSERT(Settings, post_shader_preset, QString(), QString());
     INSERT(Settings, post_shader_enabled, tr("Enable post-processing effects"),
@@ -250,9 +268,20 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, bg_blue, QString(), QString());
 
     INSERT(Settings, frame_gen, tr("Enable Frame Generation"), QString());
-    INSERT(Settings, frame_gen_type, tr("Frame Generation Type"), QString());
+    INSERT(Settings, frame_gen_type, tr("Frame Generation Type"),
+           tr("AMD FSR Frame Generation: AMD's frame generation for Ocarina of Time (Windows, "
+              "Resolution 1X; restart Lichii after picking it).\nOptical Flow Interpolation and "
+              "Lossless Scaling are Lichii's other frame generators, for any game."));
+    INSERT(Settings, amd_frame_gen_version, tr("AMD Frame Generation Version"),
+           tr("Which AMD FSR frame generation runs (with the AMD FSR frame generation type).\n"
+              "Auto: FSR 4 frame generation on Radeon RX 9000 (it needs their FP8 support), "
+              "FSR 3.1 on every other GPU.\n"
+              "FSR 3.1: lighter on the GPU; use it on an RX 9000 if FSR 4 frame generation costs "
+              "too much performance.\nTakes effect when Lichii restarts."));
     INSERT(Settings, frame_gen_multiplier, tr("Frame Generation Multiplier"), QString());
-    INSERT(Settings, frame_gen_target_rate, tr("Target Frame Rate"), QString());
+    INSERT(Settings, frame_gen_target_rate, tr("Target Frame Rate"),
+           tr("Lichii's own frame generators (Optical Flow, Lossless Scaling) add frames up to "
+              "this rate.\nAMD FSR frame generation always doubles the game's frame rate."));
     INSERT(Settings, frame_gen_flow_scale_auto, tr("Auto Flow Scale"), QString());
     INSERT(Settings, frame_gen_flow_scale, tr("Flow Scale"), QString());
     INSERT(Settings, frame_gen_queue_target, tr("Queue Target"), QString());
@@ -576,6 +605,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(FrameGenType, Lsfg, tr("Lossless Scaling (LSFG)")),
                               PAIR(FrameGenType, Fsr3, tr("Optical Flow Interpolation (built-in)")),
+                              PAIR(FrameGenType, AmdFsr, tr("AMD FSR Frame Generation (Ocarina, restart)")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::AmdFrameGenVersion>::Index(),
+                          {
+                              PAIR(AmdFrameGenVersion, Auto, tr("Auto (FSR 4 where available)")),
+                              PAIR(AmdFrameGenVersion, Fsr31, tr("FSR 3.1 (faster)")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::ScalingFilter>::Index(),
                           {
@@ -606,6 +641,20 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(OotAntiAliasing, Game, tr("Game")),
                               PAIR(OotAntiAliasing, NoSharpening, tr("No sharpening")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::OotDockedOutput>::Index(),
+                          {
+                              PAIR(OotDockedOutput, Output4k, tr("4K")),
+                              PAIR(OotDockedOutput, Output1440p, tr("1440p (lighter)")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::OotFsrPreset>::Index(),
+                          {
+                              PAIR(OotFsrPreset, NativeAa, tr("Native AA")),
+                              PAIR(OotFsrPreset, Native, tr("Native (game's size)")),
+                              PAIR(OotFsrPreset, Quality, tr("Quality")),
+                              PAIR(OotFsrPreset, Balanced, tr("Balanced")),
+                              PAIR(OotFsrPreset, Performance, tr("Performance")),
+                              PAIR(OotFsrPreset, UltraPerformance, tr("Ultra Performance")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::AspectRatio>::Index(),
                           {

@@ -1,100 +1,79 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 CheezyEmu contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// AMD FSR 4 through AMD's FidelityFX runtime. The runtime takes plain Vulkan images: the inputs
-// in SHADER_READ_ONLY_OPTIMAL (FFX "compute read"), the output in GENERAL ("unordered access"),
-// and records into our command buffer. Picking the FSR 4 provider by version follows
-// CheezerWheezer's FSR 4 integration for CheezyEmu.
-
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
-
-#include <boost/container/static_vector.hpp>
 
 #include "common/logging.h"
 #include "common/settings.h"
+#include "video_core/gpu_crash_context.h"
+#include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
+#include "video_core/renderer_vulkan/vk_ffx_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
-#include "video_core/vulkan_common/ffx_runtime.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 
-// After vulkan.h, which sets the platform macros the wrapper's Win32 entry points need.
-#ifndef _WIN32
-#define __declspec(x)
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #endif
+#include <windows.h>
+
+#include "api/include/ffx_api.h"
+#include "api/include/ffx_api_types.h"
 #include "api/include/vk/ffx_api_vk.h"
 #include "upscalers/include/ffx_upscale.h"
-#ifndef _WIN32
-#undef __declspec
 #endif
 
 namespace Vulkan {
+
 namespace {
 constexpr VkFormat OUTPUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkImageUsageFlags OUTPUT_USAGE = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-constexpr VkImageSubresourceRange COLOR_RANGE{
-    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-    .baseMipLevel = 0,
-    .levelCount = 1,
-    .baseArrayLayer = 0,
-    .layerCount = 1,
-};
+[[maybe_unused]] constexpr VkImageUsageFlags OUTPUT_USAGE =
+    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
-FfxApiResource Resource(VkImage image, VkFormat format, VkExtent2D size, u32 usage, u32 state) {
-    FfxApiResource resource{};
-    resource.resource = reinterpret_cast<void*>(image);
-    resource.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
-    resource.description.format = ffxApiGetSurfaceFormatVK(format);
-    resource.description.width = size.width;
-    resource.description.height = size.height;
-    resource.description.depth = 1;
-    resource.description.mipCount = 1;
-    resource.description.flags = 0;
-    resource.description.usage = usage;
-    resource.state = state;
-    return resource;
+std::mutex running_version_mutex;
+std::string running_version; ///< For the status bar.
+
+[[maybe_unused]] void SetRunningVersion(std::string version) {
+    std::scoped_lock lock{running_version_mutex};
+    running_version = std::move(version);
+}
+} // Anonymous namespace
+
+std::string Fsr4Upscaler::RunningVersion() {
+    std::scoped_lock lock{running_version_mutex};
+    return running_version;
 }
 
-VkImageMemoryBarrier Barrier(VkImage image, VkImageSubresourceRange range, VkAccessFlags src_access,
-                             VkAccessFlags dst_access, VkImageLayout old_layout,
-                             VkImageLayout new_layout) {
-    return VkImageMemoryBarrier{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .pNext = nullptr,
-        .srcAccessMask = src_access,
-        .dstAccessMask = dst_access,
-        .oldLayout = old_layout,
-        .newLayout = new_layout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = range,
-    };
-}
+#ifdef _WIN32
 
-VkImageMemoryBarrier Barrier(const Fsr4Upscaler::Image& image, VkAccessFlags src_access,
-                             VkAccessFlags dst_access, VkImageLayout old_layout,
-                             VkImageLayout new_layout) {
-    VkImageSubresourceRange range = image.range;
-    range.aspectMask = image.barrier_aspect;
-    return Barrier(image.image, range, src_access, dst_access, old_layout, new_layout);
-}
+namespace {
 
-void Message(uint32_t type, const wchar_t* message) {
-    std::string text;
-    for (const wchar_t* c = message; c && *c; ++c) {
-        text.push_back(*c < 128 ? static_cast<char>(*c) : '?');
-    }
-    if (type == FFX_API_MESSAGE_TYPE_ERROR) {
-        LOG_ERROR(Render_Vulkan, "FSR 4: {}", text);
-    } else {
-        LOG_INFO(Render_Vulkan, "FSR 4: {}", text);
-    }
-}
+using Api = FfxRuntime::Api;
+
+// Set when FSR 4 drew black over a real picture: FSR 3.1 from then on, for this session.
+std::atomic<bool> fsr4_output_black{};
+
+// The output check: an 8x8 grid of input and output pixels, 16 bytes a pixel.
+constexpr u32 HEALTH_GRID = 8;
+constexpr u32 HEALTH_SAMPLES = HEALTH_GRID * HEALTH_GRID;
+constexpr VkDeviceSize HEALTH_STRIDE = 16;
+constexpr VkDeviceSize HEALTH_OUTPUT_OFFSET = HEALTH_SAMPLES * HEALTH_STRIDE;
+constexpr VkDeviceSize HEALTH_SIZE = 2 * HEALTH_OUTPUT_OFFSET;
+constexpr u32 HEALTH_INTERVAL = 30;   ///< Frames between samples.
+constexpr u32 HEALTH_BLACK_LIMIT = 4; ///< Black samples in a row (a few seconds) to switch.
+/// A sample counts as black when this many of its 64 pixels are black or NaN: the RX 9070 XT's
+/// broken FSR 4 output is black with scattered white dots, which an all-64 test kept missing.
+constexpr u32 HEALTH_BLACK_PIXELS = 56;
+constexpr u32 HEALTH_GOOD_LIMIT = 4;  ///< Good samples to stop checking.
 
 VkDeviceContext DeviceContext(const Device& device) {
     return VkDeviceContext{
@@ -104,14 +83,23 @@ VkDeviceContext DeviceContext(const Device& device) {
     };
 }
 
+// The upscaler provider the DLL offers this device: its version id and name.
 struct Provider {
     u64 id{};
     std::string name;
 };
 
-/// The newest FSR 4 (or later) upscaler AMD's runtime offers for this device. The runtime also
-/// offers FSR 3.1 on GPUs without FSR 4; that one is left to the built-in FSR 3.1.
-std::optional<Provider> FindFsr4(const FfxRuntime::Api& api, const Device& device) {
+// FSR 4 when it is wanted and AMD's runtime offers it for this GPU (RX 9000; RX 6000/7000 need
+// a recent driver), else FSR 3.1, which runs on any GPU and takes the same inputs: Ocarina's motion
+// data, HUD mask and AMD frame generation hang off this upscaler, so they keep working without
+// FSR 4. EDEN_NX2_FSR_VERSION=3 forces FSR 3.1 (to test that path on a GPU with FSR 4).
+std::optional<Provider> FindFsr4(const Api& api, const Device& device) {
+    static const bool force_fsr3 = [] {
+        const char* const value = std::getenv("EDEN_NX2_FSR_VERSION");
+        return value && value[0] == '3';
+    }();
+    const bool black = fsr4_output_black.load();
+    const bool want_fsr4 = Settings::values.amd_fsr4.GetValue() && !force_fsr3 && !black;
     VkDeviceContext vk_context = DeviceContext(device);
     u64 count = 0;
     ffxQueryDescGetVersions versions{};
@@ -120,8 +108,7 @@ std::optional<Provider> FindFsr4(const FfxRuntime::Api& api, const Device& devic
     versions.device = &vk_context;
     versions.outputCount = &count;
     if (api.query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0) {
-        LOG_INFO(Render_Vulkan, "AMD FSR 4: the FidelityFX runtime offers no upscaler for {}",
-                 device.GetModelName());
+        LOG_INFO(Render_Vulkan, "FSR 4: the FidelityFX runtime offers no upscaler for this GPU");
         return std::nullopt;
     }
     std::vector<u64> ids(count);
@@ -133,126 +120,201 @@ std::optional<Provider> FindFsr4(const FfxRuntime::Api& api, const Device& devic
     }
     std::string offered;
     std::optional<Provider> fsr4;
+    std::optional<Provider> fsr3;
     for (u64 i = 0; i < count; ++i) {
         const std::string name = names[i] ? names[i] : "";
         offered += (offered.empty() ? "" : ", ") + name;
-        // Newest first.
+        // The list is newest first; take the newest 4.x and the newest 3.1.x.
         if (!fsr4 && !name.empty() && name[0] >= '4' && name[0] <= '9') {
             fsr4 = Provider{ids[i], name};
         }
+        if (!fsr3 && name.starts_with("3.") && name.size() > 2 && name[2] >= '1') {
+            fsr3 = Provider{ids[i], name};
+        }
     }
-    LOG_INFO(Render_Vulkan, "AMD FSR 4: upscalers offered for {}: {}{}", device.GetModelName(),
-             offered, fsr4 ? "" : " (no FSR 4; using FSR 3.1)");
-    return fsr4;
+    LOG_INFO(Render_Vulkan, "AMD FSR: upscalers offered for {}: {}", device.GetModelName(),
+             offered);
+    if (want_fsr4 && fsr4) {
+        return fsr4;
+    }
+    if (fsr3) {
+        LOG_INFO(Render_Vulkan, "AMD FSR: using FSR {} ({})", fsr3->name,
+                 force_fsr3                                 ? "forced by EDEN_NX2_FSR_VERSION=3"
+                 : black                                    ? "FSR 4 drew a black picture"
+                 : !Settings::values.amd_fsr4.GetValue()    ? "FSR 4 is turned off"
+                                                            : "no FSR 4 for this GPU or driver");
+    }
+    return fsr3;
+}
+
+FfxApiResource ImageResource(const Fsr4Upscaler::Image& image, VkExtent2D size, u32 state,
+                             u32 usage) {
+    FfxApiResourceDescription description{};
+    description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+    description.format = ffxApiGetSurfaceFormatVK(image.format);
+    description.width = size.width;
+    description.height = size.height;
+    description.depth = 1;
+    description.mipCount = 1;
+    description.flags = FFX_API_RESOURCE_FLAGS_NONE;
+    description.usage = usage;
+    return ffxApiGetResourceVK(reinterpret_cast<void*>(image.image), description, state);
+}
+
+VkImageMemoryBarrier Barrier(const Fsr4Upscaler::Image& image, VkAccessFlags src, VkAccessFlags dst,
+                             VkImageLayout old_layout, VkImageLayout new_layout) {
+    VkImageSubresourceRange range = image.range;
+    range.aspectMask = image.barrier_aspect;
+    return VkImageMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = src,
+        .dstAccessMask = dst,
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image.image,
+        .subresourceRange = range,
+    };
+}
+
+} // Anonymous namespace
+
+struct Fsr4Upscaler::Context {
+    std::shared_ptr<const Api> runtime; ///< Released after the context (member order)
+    const Api* api{};
+    ffxContext handle{};
+    Provider provider;
+};
+
+namespace {
+struct ProbeResult {
+    bool available{};
+    bool fsr4{};
+};
+ProbeResult Probe(const Device& device) {
+    static std::once_flag once;
+    static ProbeResult result{};
+    std::call_once(once, [&device] {
+        const auto runtime = FfxRuntime::Acquire();
+        const auto provider = runtime ? FindFsr4(*runtime, device) : std::nullopt;
+        result.available = provider.has_value();
+        result.fsr4 = provider && !provider->name.empty() && provider->name[0] >= '4';
+    });
+    return result;
 }
 } // Anonymous namespace
 
-bool Fsr4Upscaler::IsWanted(const Device& device) {
-    return Settings::values.amd_fsr4.GetValue() &&
-           device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY;
+bool Fsr4Upscaler::IsAvailable(const Device& device) {
+    // AMD frame generation needs this upscaler's motion data even with FSR 4 turned off.
+    if (!Settings::values.amd_fsr4.GetValue() && !AmdFrameGen::Requested()) {
+        return false;
+    }
+    return Probe(device).available;
+}
+
+bool Fsr4Upscaler::IsFsr4(const Device& device) {
+    return IsAvailable(device) && Probe(device).fsr4 && !fsr4_output_black.load();
 }
 
 Fsr4Upscaler::Fsr4Upscaler(const Device& device_, Scheduler& scheduler_,
                            MemoryAllocator& memory_allocator_)
     : device{device_}, scheduler{scheduler_}, memory_allocator{memory_allocator_},
-      api{FfxRuntime::Acquire()} {
-    const auto provider = api ? FindFsr4(*api, device) : std::nullopt;
+      context{std::make_unique<Context>()} {
+    context->runtime = FfxRuntime::Acquire();
+    context->api = context->runtime.get();
+    if (!context->api) {
+        throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
+    }
+    const auto provider = FindFsr4(*context->api, device);
     if (!provider) {
         throw vk::Exception(VK_ERROR_FEATURE_NOT_PRESENT);
     }
-    provider_id = provider->id;
-    provider_name = provider->name;
-    CreateExposure();
+    context->provider = *provider;
+    point_sampler = device.GetLogical().CreateSampler(VkSamplerCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .magFilter = VK_FILTER_NEAREST,
+        .minFilter = VK_FILTER_NEAREST,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .mipLodBias = 0.0f,
+        .anisotropyEnable = VK_FALSE,
+        .maxAnisotropy = 1.0f,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_NEVER,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
+        .unnormalizedCoordinates = VK_FALSE,
+    });
 }
 
 Fsr4Upscaler::~Fsr4Upscaler() {
+    scheduler.Finish();
     DestroyContext();
 }
 
 void Fsr4Upscaler::DestroyContext() {
-    if (context == nullptr) {
-        return;
+    if (context && context->handle) {
+        context->api->destroy_context(&context->handle, nullptr);
+        context->handle = nullptr;
     }
-    scheduler.Finish(); // recorded dispatches may still use it
-    ffxContext ctx = context;
-    api->destroy_context(&ctx, nullptr);
-    context = nullptr;
 }
 
-bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D upscale_size) {
+bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D upscale_size,
+                                 bool depth_inverted, bool hdr) {
     DestroyContext();
+    VkDeviceContext vk_context = DeviceContext(device);
     ffxCreateBackendVKDesc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    backend.header.pNext = nullptr;
-    backend.deviceContext = DeviceContext(device);
+    backend.deviceContext = vk_context;
     ffxOverrideVersion version_override{};
     version_override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
-    version_override.header.pNext = &backend.header;
-    version_override.versionId = provider_id;
+    version_override.versionId = context->provider.id;
     ffxCreateContextDescUpscaleVersion api_version{};
     api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
-    api_version.header.pNext = &version_override.header;
     api_version.version = FFX_UPSCALER_VERSION;
-
     ffxCreateContextDescUpscale create{};
     create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    create.header.pNext = &api_version.header;
-    // Tonemapped LDR colour, standard (not reversed) finite depth, exposure given (unit).
-    create.flags = 0;
+    create.flags = (depth_inverted ? FFX_UPSCALE_ENABLE_DEPTH_INVERTED : 0u) |
+                   (hdr ? FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE
+                        : FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE);
     create.maxRenderSize = {render_size.width, render_size.height};
     create.maxUpscaleSize = {upscale_size.width, upscale_size.height};
-    create.fpMessage = Message;
-    ffxContext ctx{};
-    const ffxReturnCode_t result = api->create_context(&ctx, &create.header, nullptr);
+    create.fpMessage = nullptr;
+    // Chain: upscale <- version <- override <- backend.
+    create.header.pNext = &api_version.header;
+    api_version.header.pNext = &version_override.header;
+    version_override.header.pNext = &backend.header;
+    const ffxReturnCode_t result =
+        context->api->create_context(&context->handle, &create.header, nullptr);
     if (result != FFX_API_RETURN_OK) {
-        LOG_ERROR(Render_Vulkan, "FSR 4: ffxCreateContext {}x{} -> {}x{} failed ({}); using FSR 3.1",
-                  render_size.width, render_size.height, upscale_size.width, upscale_size.height,
-                  result);
+        LOG_ERROR(Render_Vulkan, "AMD FSR {}: context creation failed ({}), using the game's upscaler",
+                  context->provider.name, result);
+        context->handle = nullptr;
         return false;
     }
-    context = ctx;
-    render_extent = render_size;
-    upscale_extent = upscale_size;
-    LOG_INFO(Render_Vulkan, "FSR 4: AMD FSR {} context {}x{} -> {}x{}", provider_name,
-             render_size.width, render_size.height, upscale_size.width, upscale_size.height);
+    ffxQueryGetProviderVersion provider{};
+    provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+    context->api->query(&context->handle, &provider.header);
+    VideoCommon::GpuCrashContext::Set(
+        "fsr", fmt::format("{} {}x{} -> {}x{}",
+                           provider.versionName ? provider.versionName
+                                                : context->provider.name.c_str(),
+                           render_size.width, render_size.height, upscale_size.width,
+                           upscale_size.height));
+    SetRunningVersion(provider.versionName ? std::string{provider.versionName}
+                                           : context->provider.name);
+    LOG_INFO(Render_Vulkan, "AMD FSR: upscaler {} running, {}x{} -> {}x{} ({})",
+             provider.versionName ? provider.versionName : context->provider.name.c_str(),
+             render_size.width, render_size.height, upscale_size.width, upscale_size.height,
+             hdr ? "HDR" : "non-linear colour");
     return true;
-}
-
-void Fsr4Upscaler::CreateExposure() {
-    exposure_image = memory_allocator.CreateImage(VkImageCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = VK_FORMAT_R32_SFLOAT,
-        .extent = {1, 1, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices = nullptr,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    });
-    scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([image = *exposure_image](vk::CommandBuffer cmdbuf) {
-        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               0,
-                               Barrier(image, COLOR_RANGE, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                       VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
-        VkClearColorValue one{};
-        one.float32[0] = 1.0f;
-        cmdbuf.ClearColorImage(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, one, COLOR_RANGE);
-        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                               Barrier(image, COLOR_RANGE, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                       VK_ACCESS_SHADER_READ_BIT,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
-    });
 }
 
 void Fsr4Upscaler::CreateOutput(VkExtent2D upscale_size) {
@@ -284,120 +346,343 @@ void Fsr4Upscaler::CreateOutput(VkExtent2D upscale_size) {
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = OUTPUT_FORMAT,
         .components{},
-        .subresourceRange = COLOR_RANGE,
+        .subresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
     });
     scheduler.RequestOutsideRenderPassOperationContext();
     scheduler.Record([image = *output_image](vk::CommandBuffer cmdbuf) {
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                               Barrier(image, COLOR_RANGE, 0,
-                                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL));
+                               VkImageMemoryBarrier{
+                                   .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                   .pNext = nullptr,
+                                   .srcAccessMask = 0,
+                                   .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                                   .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                   .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .image = image,
+                                   .subresourceRange{
+                                       .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                       .baseMipLevel = 0,
+                                       .levelCount = 1,
+                                       .baseArrayLayer = 0,
+                                       .layerCount = 1,
+                                   },
+                               });
     });
 }
 
-bool Fsr4Upscaler::Upscale(const Inputs& in) {
-    if (failed.load()) {
+bool Fsr4Upscaler::CheckOutputHealth() {
+    if (!health_pending || !scheduler.IsFree(health_tick)) {
         return false;
     }
-    const bool new_context = context == nullptr || in.render_size.width != render_extent.width ||
-                             in.render_size.height != render_extent.height ||
-                             in.upscale_size.width != upscale_extent.width ||
-                             in.upscale_size.height != upscale_extent.height;
-    if (new_context) {
-        if (!CreateContext(in.render_size, in.upscale_size)) {
+    health_pending = false;
+    health_buffer.Invalidate();
+    const std::span<const u8> data = health_buffer.Mapped();
+    // The input is a real picture when its pixels differ (not a fade, a loading or a flat screen).
+    u32 distinct_inputs = 0;
+    for (u32 i = 1; i < HEALTH_SAMPLES; ++i) {
+        if (std::memcmp(&data[i * HEALTH_STRIDE], &data[0], HEALTH_STRIDE) != 0) {
+            ++distinct_inputs;
+        }
+    }
+    // The output is RGBA16F: black or NaN in every sample is a broken FSR 4.
+    u32 bad_outputs = 0;
+    for (u32 i = 0; i < HEALTH_SAMPLES; ++i) {
+        std::array<u16, 4> texel;
+        std::memcpy(texel.data(), &data[HEALTH_OUTPUT_OFFSET + i * HEALTH_STRIDE], sizeof(texel));
+        bool nan = false;
+        bool black = true;
+        for (u32 channel = 0; channel < 3; ++channel) {
+            const u16 bits = texel[channel];
+            nan |= (bits & 0x7c00) == 0x7c00;
+            black &= (bits & 0x7fff) == 0;
+        }
+        if (nan || black) {
+            ++bad_outputs;
+        }
+    }
+    // A dark scene (a cave, a fade) is black in FSR's input too: only a bright input judges it.
+    // The input is RGBA16F as well (the Ocarina colour copy).
+    u32 dark_inputs = 0;
+    for (u32 i = 0; i < HEALTH_SAMPLES; ++i) {
+        std::array<u16, 4> texel;
+        std::memcpy(texel.data(), &data[i * HEALTH_STRIDE], sizeof(texel));
+        // Below 1/64 in every colour channel (half-float exponent under 9).
+        if ((texel[0] & 0x7fff) < 0x2400 && (texel[1] & 0x7fff) < 0x2400 &&
+            (texel[2] & 0x7fff) < 0x2400) {
+            ++dark_inputs;
+        }
+    }
+    if (distinct_inputs < HEALTH_SAMPLES / 4 || dark_inputs > HEALTH_SAMPLES / 4) {
+        return false; // nothing to judge by
+    }
+    if (bad_outputs < HEALTH_BLACK_PIXELS) {
+        black_checks = 0;
+        if (++good_checks >= HEALTH_GOOD_LIMIT) {
+            health_done = true;
+            health_buffer = vk::Buffer{};
+            LOG_INFO(Render_Vulkan, "AMD FSR {}: output check passed", context->provider.name);
+        }
+        return false;
+    }
+    ++black_checks;
+    LOG_WARNING(Render_Vulkan, "AMD FSR {}: black output over a game picture ({} of {})",
+                context->provider.name, black_checks, HEALTH_BLACK_LIMIT);
+    return black_checks >= HEALTH_BLACK_LIMIT;
+}
+
+bool Fsr4Upscaler::SwitchToFsr3() {
+    fsr4_output_black = true;
+    scheduler.Finish();
+    DestroyContext();
+    health_buffer = vk::Buffer{};
+    health_done = true;
+    const auto provider = FindFsr4(*context->api, device);
+    if (!provider || provider->name.starts_with('4')) {
+        LOG_ERROR(Render_Vulkan, "AMD FSR 4 drew a black picture and no FSR 3.1 is offered; "
+                                 "using the game's upscaler");
+        return false;
+    }
+    LOG_ERROR(Render_Vulkan, "AMD FSR 4 drew a black picture on this GPU or driver: switched to "
+                             "FSR {}. Updating the graphics driver may fix FSR 4.",
+              provider->name);
+    context->provider = *provider;
+    render_extent = {}; // the next frame creates the FSR 3.1 context
+    return true;
+}
+
+bool Fsr4Upscaler::Upscale(const Inputs& in) {
+    if (failed) {
+        return false;
+    }
+    if (!health_done && CheckOutputHealth() && !SwitchToFsr3()) {
+        failed = true;
+        return false;
+    }
+    const bool extent_changed = !output_image || in.render_size.width != render_extent.width ||
+                                in.render_size.height != render_extent.height ||
+                                in.upscale_size.width != upscale_extent.width ||
+                                in.upscale_size.height != upscale_extent.height;
+    const bool options_changed = extent_changed || in.depth_inverted != depth_inverted_input ||
+                                 in.hdr != hdr_input;
+    if (options_changed) {
+        scheduler.Finish(); // the old context may still be recording
+        if (extent_changed) {
+            CreateOutput(in.upscale_size);
+        }
+        if (!CreateContext(in.render_size, in.upscale_size, in.depth_inverted, in.hdr)) {
             failed = true;
             return false;
         }
-        CreateOutput(in.upscale_size);
+        render_extent = in.render_size;
+        upscale_extent = in.upscale_size;
+        depth_inverted_input = in.depth_inverted;
+        hdr_input = in.hdr;
     }
+    const bool reset = in.reset || options_changed;
 
-    ffxDispatchDescUpscale dispatch{};
-    dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
-    dispatch.header.pNext = nullptr;
-    dispatch.color = Resource(in.color.image, in.color.format, in.render_size, 0,
-                              FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    dispatch.depth = Resource(in.depth.image, in.depth.format, in.render_size,
-                              FFX_API_RESOURCE_USAGE_DEPTHTARGET,
-                              FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    dispatch.motionVectors = Resource(in.motion_vectors.image, in.motion_vectors.format,
-                                      in.render_size, 0, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    dispatch.exposure = Resource(*exposure_image, VK_FORMAT_R32_SFLOAT, {1, 1}, 0,
-                                 FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    if (in.reactive) {
-        dispatch.reactive = Resource(in.reactive->image, in.reactive->format, in.render_size, 0,
-                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    // FSR 4 only: check its output now and then until it has drawn a picture.
+    VkBuffer health = VK_NULL_HANDLE;
+    if (!health_done && !health_pending && context->provider.name.starts_with('4') &&
+        ++health_frame % HEALTH_INTERVAL == 0) {
+        if (!health_buffer) {
+            health_buffer = memory_allocator.CreateBuffer(
+                VkBufferCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .size = HEALTH_SIZE,
+                    .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                    .queueFamilyIndexCount = 0,
+                    .pQueueFamilyIndices = nullptr,
+                },
+                MemoryUsage::Download);
+            std::memset(health_buffer.Mapped().data(), 0, HEALTH_SIZE);
+        }
+        health = *health_buffer;
+        health_pending = true;
+        health_tick = scheduler.CurrentTick();
     }
-    dispatch.output = Resource(*output_image, OUTPUT_FORMAT, in.upscale_size,
-                               FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-    dispatch.jitterOffset = {in.jitter[0], in.jitter[1]};
-    dispatch.motionVectorScale = {1.0f, 1.0f};
-    dispatch.renderSize = {in.render_size.width, in.render_size.height};
-    dispatch.upscaleSize = {in.upscale_size.width, in.upscale_size.height};
-    dispatch.enableSharpening = in.sharpen;
-    dispatch.sharpness = in.sharpness;
-    dispatch.frameTimeDelta = in.frame_time_ms;
-    dispatch.preExposure = 1.0f;
-    dispatch.reset = in.reset || new_context;
-    dispatch.cameraNear = in.camera_near;
-    dispatch.cameraFar = in.camera_far;
-    dispatch.cameraFovAngleVertical = in.vertical_fov;
-    dispatch.viewSpaceToMetersFactor = 1.0f;
-    dispatch.flags = 0;
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([this, in, dispatch,
-                      output = *output_image](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([this, in, reset, health, output = *output_image](vk::CommandBuffer cmdbuf) {
         constexpr VkAccessFlags WRITES =
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-        // The inputs stay in GENERAL otherwise; FSR 4 reads them as sampled images.
-        boost::container::static_vector<VkImageMemoryBarrier, 5> to_read{
+        // The inputs come from the game's draws and dispatches and stay in GENERAL otherwise;
+        // FSR reads them as sampled images (SHADER_READ_ONLY_OPTIMAL, as AMD's docs ask).
+        const std::array to_read{
             Barrier(in.color, WRITES, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
             Barrier(in.depth, WRITES, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
             Barrier(in.motion_vectors, WRITES, VK_ACCESS_SHADER_READ_BIT,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            Barrier(output, COLOR_RANGE, VK_ACCESS_SHADER_READ_BIT,
-                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL),
         };
-        if (in.reactive) {
-            to_read.push_back(Barrier(*in.reactive, WRITES, VK_ACCESS_SHADER_READ_BIT,
-                                      VK_IMAGE_LAYOUT_GENERAL,
-                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
-        }
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, to_read);
 
-        ffxDispatchDescUpscale recorded = dispatch;
-        recorded.commandList = static_cast<void*>(*cmdbuf);
-        ffxContext ctx = context;
-        const ffxReturnCode_t result = api->dispatch(&ctx, &recorded.header);
-        if (result != FFX_API_RETURN_OK && !failed.exchange(true)) {
-            LOG_ERROR(Render_Vulkan, "FSR 4: ffxDispatch failed ({}); using FSR 3.1", result);
-        }
-
-        boost::container::static_vector<VkImageMemoryBarrier, 5> back{
-            Barrier(in.color, VK_ACCESS_SHADER_READ_BIT, 0,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-            Barrier(in.depth, VK_ACCESS_SHADER_READ_BIT, 0,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-            Barrier(in.motion_vectors, VK_ACCESS_SHADER_READ_BIT, 0,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-            Barrier(output, COLOR_RANGE, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL),
+        const Image output_image_info{
+            .view = VK_NULL_HANDLE,
+            .image = output,
+            .format = OUTPUT_FORMAT,
+            .range{},
+            .barrier_aspect = VK_IMAGE_ASPECT_COLOR_BIT,
         };
-        if (in.reactive) {
-            back.push_back(Barrier(*in.reactive, VK_ACCESS_SHADER_READ_BIT, 0,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_GENERAL));
-        }
+        ffxDispatchDescUpscale dispatch{};
+        dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
+        dispatch.commandList = reinterpret_cast<void*>(*cmdbuf);
+        dispatch.color = ImageResource(in.color, in.render_size,
+                                       FFX_API_RESOURCE_STATE_COMPUTE_READ,
+                                       FFX_API_RESOURCE_USAGE_READ_ONLY);
+        dispatch.depth = ImageResource(in.depth, in.render_size,
+                                       FFX_API_RESOURCE_STATE_COMPUTE_READ,
+                                       FFX_API_RESOURCE_USAGE_READ_ONLY |
+                                           FFX_API_RESOURCE_USAGE_DEPTHTARGET);
+        dispatch.motionVectors = ImageResource(in.motion_vectors, in.render_size,
+                                               FFX_API_RESOURCE_STATE_COMPUTE_READ,
+                                               FFX_API_RESOURCE_USAGE_READ_ONLY);
+        dispatch.exposure = {};
+        dispatch.reactive = {};
+        dispatch.transparencyAndComposition = {};
+        dispatch.output = ImageResource(output_image_info, in.upscale_size,
+                                        FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
+                                        FFX_API_RESOURCE_USAGE_UAV);
+        dispatch.jitterOffset = {in.jitter[0], in.jitter[1]};
+        dispatch.motionVectorScale = {in.motion_vector_scale[0], in.motion_vector_scale[1]};
+        dispatch.renderSize = {in.render_size.width, in.render_size.height};
+        dispatch.upscaleSize = {in.upscale_size.width, in.upscale_size.height};
+        dispatch.enableSharpening = in.sharpen;
+        dispatch.sharpness = in.sharpness;
+        dispatch.frameTimeDelta = in.frame_time_ms;
+        dispatch.preExposure = 1.0f;
+        dispatch.reset = reset;
+        // Only frame generation reads the camera; FSR 4 upscaling ignores these.
+        dispatch.cameraNear = 0.1f;
+        dispatch.cameraFar = 1000.0f;
+        dispatch.cameraFovAngleVertical = 1.0f;
+        dispatch.viewSpaceToMetersFactor = 1.0f;
+        dispatch.flags = 0;
+        const ffxReturnCode_t result = context->api->dispatch(&context->handle, &dispatch.header);
+
+        const std::array to_general{
+            Barrier(in.color, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | WRITES,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
+            Barrier(in.depth, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | WRITES,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
+            Barrier(in.motion_vectors, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | WRITES,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
+        };
+        const VkMemoryBarrier output_written{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        };
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, {}, {}, back);
+                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, output_written, {},
+                               to_general);
+        if (health != VK_NULL_HANDLE) {
+            // An 8x8 grid of input and output pixels, for CheckOutputHealth.
+            const VkMemoryBarrier to_transfer{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | WRITES,
+                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            };
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, to_transfer);
+            const auto grid = [](u32 mip, u32 layer, VkExtent2D size, VkDeviceSize base) {
+                std::array<VkBufferImageCopy, HEALTH_SAMPLES> regions{};
+                const VkImageSubresourceLayers layers{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = mip,
+                    .baseArrayLayer = layer,
+                    .layerCount = 1,
+                };
+                for (u32 y = 0; y < HEALTH_GRID; ++y) {
+                    for (u32 x = 0; x < HEALTH_GRID; ++x) {
+                        const u32 i = y * HEALTH_GRID + x;
+                        regions[i] = VkBufferImageCopy{
+                            .bufferOffset = base + i * HEALTH_STRIDE,
+                            .bufferRowLength = 0,
+                            .bufferImageHeight = 0,
+                            .imageSubresource = layers,
+                            .imageOffset{
+                                static_cast<s32>((2 * x + 1) * size.width / (2 * HEALTH_GRID)),
+                                static_cast<s32>((2 * y + 1) * size.height / (2 * HEALTH_GRID)),
+                                0},
+                            .imageExtent{1, 1, 1},
+                        };
+                    }
+                }
+                return regions;
+            };
+            const auto input_regions = grid(in.color.range.baseMipLevel,
+                                            in.color.range.baseArrayLayer, in.render_size, 0);
+            const auto output_regions = grid(0, 0, in.upscale_size, HEALTH_OUTPUT_OFFSET);
+            cmdbuf.CopyImageToBuffer(in.color.image, VK_IMAGE_LAYOUT_GENERAL, health,
+                                     input_regions);
+            cmdbuf.CopyImageToBuffer(output, VK_IMAGE_LAYOUT_GENERAL, health, output_regions);
+            const VkMemoryBarrier to_host{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+            };
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   0, to_host);
+        }
+        if (result != FFX_API_RETURN_OK && !failed.exchange(true)) {
+            LOG_ERROR(Render_Vulkan, "AMD FSR {}: dispatch failed ({}), using the game's upscaler",
+                      context->provider.name, result);
+        }
     });
     return true;
 }
+
+#else // _WIN32
+
+struct Fsr4Upscaler::Context {};
+
+bool Fsr4Upscaler::IsAvailable(const Device&) {
+    return false; // AMD ships the FSR 4 runtime for Windows only
+}
+
+bool Fsr4Upscaler::IsFsr4(const Device&) {
+    return false;
+}
+
+Fsr4Upscaler::Fsr4Upscaler(const Device& device_, Scheduler& scheduler_,
+                           MemoryAllocator& memory_allocator_)
+    : device{device_}, scheduler{scheduler_}, memory_allocator{memory_allocator_} {
+    throw vk::Exception(VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+Fsr4Upscaler::~Fsr4Upscaler() = default;
+
+void Fsr4Upscaler::CreateOutput(VkExtent2D) {}
+
+bool Fsr4Upscaler::CreateContext(VkExtent2D, VkExtent2D, bool, bool) {
+    return false;
+}
+
+void Fsr4Upscaler::DestroyContext() {}
+
+bool Fsr4Upscaler::Upscale(const Inputs&) {
+    return false;
+}
+
+#endif // _WIN32
 
 } // namespace Vulkan

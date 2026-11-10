@@ -48,6 +48,8 @@ struct Frame {
     /// them this is (1..generated_count; 0 for the game frame, presented after them).
     u32 generated_count{};
     u32 generated_index{};
+    u64 frame_gen_id{};        ///< AMD frame generation: the prepared game frame shown, or 0.
+    VkRect2D frame_gen_rect{}; ///< Where the game picture sits in the frame.
 };
 
 class PresentManager {

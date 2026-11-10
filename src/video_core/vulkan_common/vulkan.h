@@ -38,6 +38,10 @@
 #undef None
 #undef Status
 #undef True
+// X11 (Linux): these clash with NvResult::Success and other enums named Success when a Vulkan
+// header comes before nvdata.h (the FSR 4 and AMD frame generation headers do).
+#undef Success
+#undef BadValue
 
 // "Catch-all" handle for both Android and.. the rest of platforms
 struct VkSurfaceKHR_T;

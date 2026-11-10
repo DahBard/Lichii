@@ -5,10 +5,10 @@
 
 #include <array>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "common/common_types.h"
-#include "video_core/ocarina_upscale.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -18,14 +18,24 @@ class DescriptorPool;
 class Device;
 class MemoryAllocator;
 class Scheduler;
-class StagingBufferPool;
 
-/// The temporal upscaler Ocarina uses this session: the settings, EDEN_NX2_DLSS_REPLACEMENT,
-/// DLSS availability, and native when FSR 3.1 is unsupported on the device.
-[[nodiscard]] VideoCommon::OcarinaUpscaleBackend ResolveOcarinaUpscaler(const Device& device);
+/// Where a skinned draw keeps its position, joint weights and joint indices in a vertex.
+struct OcarinaVertexLayout {
+    u32 stride{};
+    VkFormat position{}, weights{}, extra_weights{}, joints{}, extra_joints{};
+    u32 position_offset{}, weights_offset{}, extra_weights_offset{}, joints_offset{},
+        extra_joints_offset{};
+    u32 weight_count{}; ///< Weights used from the first group (joints with them)
+    u32 extra_count{};  ///< and from the second (0 without one)
+    u32 rigid{};        ///< A solid object: bone 0 is its whole transform, no weights
+
+    bool operator==(const OcarinaVertexLayout&) const = default;
+};
 
 struct OcarinaActorMesh {
-    std::vector<u8> vertices;
+    OcarinaVertexLayout layout;
+    u64 key{};               ///< Its vertex and index buffers; the GPU copy is kept by this key
+    std::vector<u8> vertices; ///< Empty when the GPU copy is kept (HasActorMesh)
     std::vector<u16> indices;
     std::array<f32, 4> current_origin;
     std::array<f32, 4> previous_origin;
@@ -33,35 +43,41 @@ struct OcarinaActorMesh {
     std::array<f32, 280 * 12> previous_bones;
 };
 
-class OcarinaUpscaler {
+/// Ocarina of Time's upscale replaced by AMD FSR (or NVIDIA DLSS with Streamline), with the
+/// motion vectors the game doesn't have and the inputs AMD's frame generation reads.
+class OcarinaLiveDlss {
 public:
-    OcarinaUpscaler(const Device& device, Scheduler& scheduler, DescriptorPool& pool,
-                   ComputePassDescriptorQueue& queue, MemoryAllocator& allocator,
-                   StagingBufferPool& staging, VideoCommon::OcarinaUpscaleBackend backend);
-    ~OcarinaUpscaler();
+    OcarinaLiveDlss(const Device& device, Scheduler& scheduler, DescriptorPool& pool,
+                    ComputePassDescriptorQueue& queue, MemoryAllocator& allocator);
+    ~OcarinaLiveDlss();
 
     [[nodiscard]] bool EvaluationFailed() const;
-    /// Save the 1440p temporal scene copy before the game adds its HUD.
+    /// Save the 1440p DLSS copy before the game adds its HUD.
     void SaveSceneReference(VkImageView color);
     /// Composite the HUD from the guest image over the matching 4K scene.
     void Composite4k(VkImageView native_composite, u64 frame);
-    /// Copy the scene colour once the fog is drawn, before the glows and particles that have no
-    /// motion vectors of their own.
-    void SaveEffectsBase(VkImageView scene, VkExtent2D extent, u64 frame);
-    /// Mark the pixels those glows and particles changed since SaveEffectsBase, so Record can
-    /// tell the temporal upscaler to use this frame's colour there.
-    void MarkEffects(VkImageView scene, u64 frame);
     VkImage CompositedImage() const;
     VkImageView CompositedView() const;
+    /// Whether a model's vertices and indices are already on the GPU (no need to read them).
+    [[nodiscard]] bool HasActorMesh(u64 key) const;
+    /// AMD frame generation: marks the pixels that differ between FSR 4's output before the
+    /// game drew its HUD and the same image at the final pass; the next frame's motion for AMD is
+    /// cleared there.
+    void MakeHudMask(VkImageView before_hud, VkImageView after_hud, VkExtent2D extent);
+    /// The same for the 4K mode (1440p scene, HUD composited over the 4K output): the 1440p scene
+    /// saved before the HUD against the game's 1440p composite, which differ slightly everywhere.
+    void MakeHudMask4k(VkImageView native_composite);
 
-    /// Queue motion, temporal evaluation and guest writeback for one frame. A false return leaves
+    /// Queue motion, DLSS evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.
     bool Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                 VkExtent2D output_extent, VkExtent2D target_extent, const std::array<f32, 16>& current,
-                const std::array<f32, 16>& previous, const OcarinaActorMesh& mesh,
-                VkImage depth_image, u64 frame, std::array<f32, 2> jitter = {});
+                const std::array<f32, 16>& previous, std::span<const OcarinaActorMesh> meshes,
+                VkImage depth_image, u64 frame);
 
 private:
+    void MakeHudMaskWith(bool four_k, VkImageView before_hud, VkImageView after_hud,
+                         VkExtent2D extent);
     struct Impl;
     std::unique_ptr<Impl> impl;
 };

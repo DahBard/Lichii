@@ -164,9 +164,6 @@ void Config::SetUpIni() {
             seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
             seed(Settings::values.oot_anti_aliasing,
                  ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
-            // Ocarina's FSR off: our FSR 4 and its camera jitter are removed, and upstream's FSR is
-            // opt-in (its jitter only with LICHII_FSR_JITTER=1).
-            seed(Settings::values.ocarina_fsr, ToString(false));
         }
         if (applied < 3) {
             // Round 17: offer upstream #781's shader precache at launch, the compute half of the

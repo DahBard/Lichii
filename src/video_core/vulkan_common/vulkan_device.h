@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <set>
 #include <span>
 #include <string>
@@ -330,6 +331,23 @@ public:
         return present_family;
     }
 
+    /// The queue AMD's frame generation swapchain presents on from its own threads: never the
+    /// graphics queue, which the emulator submits to. Null when AMD frame generation wasn't
+    /// picked at startup or the GPU has no spare present-capable queue.
+    VkQueue GetFrameGenPresentQueue() const {
+        return frame_gen_present_queue;
+    }
+
+    u32 GetFrameGenPresentFamily() const {
+        return frame_gen_present_family;
+    }
+
+    /// AMD frame generation's own queues in the present family: 0 presents, 1 is async compute,
+    /// 2 acquires images. Null past the count the GPU has to spare.
+    VkQueue GetFrameGenQueue(size_t index) const {
+        return index < frame_gen_queues.size() ? frame_gen_queues[index] : VK_NULL_HANDLE;
+    }
+
     /// Returns the current Vulkan API version provided in Vulkan-formatted version numbers.
     u32 ApiVersion() const {
         return properties.properties.apiVersion;
@@ -545,6 +563,11 @@ FN_MAX_LIMIT_LIST
     /// Returns true if the device supports int8 natively.
     bool IsInt8Supported() const {
         return features.shader_float16_int8.shaderInt8;
+    }
+
+    /// Returns true if the device has FP8 shader math (RDNA 4) enabled for AMD's FSR 4.
+    bool IsFloat8Supported() const {
+        return extensions.shader_float8 && features.shader_float8.shaderFloat8;
     }
 
     /// Returns true if the device allows 8-bit integer members in uniform/storage buffers.
@@ -1342,6 +1365,11 @@ private:
     u32 instance_version{};      ///< Vulkan instance version.
     u32 graphics_family{};       ///< Main graphics queue family index.
     u32 present_family{};        ///< Main present queue family index.
+    std::optional<std::pair<u32, u32>> frame_gen_present; ///< Family and index for AMD frame gen.
+    u32 frame_gen_present_family{};
+    VkQueue frame_gen_present_queue{};
+    u32 frame_gen_queue_count{};
+    std::array<VkQueue, 3> frame_gen_queues{};
     bool graphics_family_sparse_binding{};
 
     struct Extensions {
@@ -1417,6 +1445,7 @@ private:
     bool has_broken_compute{};                 ///< Compute shaders can cause crashes
     bool has_broken_cube_compatibility{};      ///< Has broken cube compatibility bit
     bool host_float16_supported{};             ///< shaderFloat16 for host-only shaders
+    bool fsr4_float16{};                       ///< shaderFloat16 kept on the device for AMD FSR
     bool has_broken_descriptor_aliasing{};     ///< Miscompiles descriptors aliased on one binding
     bool has_broken_parallel_compiling{};      ///< Has broken parallel shader compiling.
     bool has_renderdoc{};                      ///< Has RenderDoc attached

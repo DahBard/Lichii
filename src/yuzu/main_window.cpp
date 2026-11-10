@@ -1100,6 +1100,19 @@ void MainWindow::InitializeWidgets() {
             });
     statusBar()->insertPermanentWidget(0, frame_gen_status_button);
 
+    // AMD FSR (Ocarina's upscaler): whether it runs, which version and at what sizes.
+    upscale_status_button = new QPushButton();
+    upscale_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    upscale_status_button->setFocusPolicy(Qt::NoFocus);
+    upscale_status_button->setCheckable(true);
+    connect(upscale_status_button, &QPushButton::clicked, this, [this] {
+        Settings::values.amd_fsr4.SetValue(!Settings::values.amd_fsr4.GetValue());
+        OnSaveConfig();
+        UpdateUpscaleButton();
+    });
+    UpdateUpscaleButton();
+    statusBar()->insertPermanentWidget(0, upscale_status_button);
+
 #ifdef HAS_RESHADE
     post_shader_status_button = new QPushButton();
     post_shader_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
@@ -2329,6 +2342,9 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     status_bar_update_timer.start(500);
     renderer_status_button->setDisabled(true);
     frame_gen_status_button->setDisabled(true);
+    upscale_status_button->setDisabled(true);
+    upscale_frames = 0;
+    upscale_running = false;
     frame_gen_state = VideoCore::FrameGenState::Pending;
     frame_gen_frames = 0;
     frame_gen_generating = false;
@@ -2575,6 +2591,9 @@ void MainWindow::OnEmulationStopped() {
     emu_frametime_label->setVisible(false);
     renderer_status_button->setEnabled(!UISettings::values.has_broken_vulkan);
     frame_gen_status_button->setEnabled(true);
+    upscale_status_button->setEnabled(true);
+    upscale_running = false;
+    UpdateUpscaleButton();
     refresh_button->setEnabled(true);
 
     if (!firmware_label->text().isEmpty()) {
@@ -5153,19 +5172,44 @@ void MainWindow::UpdateStatusBar() {
         emu_speed_label->setText(tr("Speed: %1%").arg(results.emulation_speed * 100.0, 0, 'f', 0));
     }
 
-    QString fpsText = tr("Game: %1 FPS").arg(std::round(results.average_game_fps), 0, 'f', 0);
+    const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
+    frame_gen_generating = frame_gen.generated_frames > frame_gen_frames;
+    frame_gen_frames = frame_gen.generated_frames;
+
+    // AMD frame generation adds one frame per game frame after the emulator presents, where the
+    // game's frame rate can't see it: show what reaches the screen while it generates.
+    const bool amd_frame_gen = frame_gen_generating && Settings::values.frame_gen.GetValue() &&
+                               Settings::values.frame_gen_type.GetValue() ==
+                                   Settings::FrameGenType::AmdFsr;
+    QString fpsText =
+        amd_frame_gen
+            ? tr("Game: %1 FPS (%2 + FG)")
+                  .arg(std::round(results.average_game_fps * 2.0), 0, 'f', 0)
+                  .arg(std::round(results.average_game_fps), 0, 'f', 0)
+            : tr("Game: %1 FPS").arg(std::round(results.average_game_fps), 0, 'f', 0);
     if (!m_fpsSuffix.isEmpty())
         fpsText = fpsText % QStringLiteral(" (%1)").arg(m_fpsSuffix);
 
     game_fps_label->setText(fpsText);
 
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
-
-    const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
-    frame_gen_generating = frame_gen.generated_frames > frame_gen_frames;
-    frame_gen_frames = frame_gen.generated_frames;
     frame_gen_state = frame_gen.state;
+    frame_gen_idle_tag = QString::fromStdString(frame_gen.idle_tag);
+    frame_gen_idle_reason = QString::fromStdString(frame_gen.idle_reason);
     UpdateFrameGenButton();
+
+    const auto upscaler = QtCommon::system->GPU().Renderer().GetUpscalerStatus();
+    upscale_running = upscaler.upscaled_frames > upscale_frames;
+    upscale_frames = upscaler.upscaled_frames;
+    upscale_name = QString::fromStdString(upscaler.name);
+    upscale_sizes = tr("%1x%2 to %3x%4")
+                        .arg(upscaler.render_width)
+                        .arg(upscaler.render_height)
+                        .arg(upscaler.output_width)
+                        .arg(upscaler.output_height);
+    upscale_idle_tag = QString::fromStdString(upscaler.idle_tag);
+    upscale_idle_reason = QString::fromStdString(upscaler.idle_reason);
+    UpdateUpscaleButton();
 
     res_scale_label->setVisible(true);
     emu_speed_label->setVisible(!Settings::values.use_multi_core.GetValue());
@@ -5232,6 +5276,42 @@ void MainWindow::UpdatePostShaderText() {
 }
 #endif
 
+QString MainWindow::UpscaleStatusText() const {
+    return upscale_status_button ? upscale_status_button->text() : QString{};
+}
+
+QString MainWindow::FrameGenStatusText() const {
+    return frame_gen_status_button ? frame_gen_status_button->text() : QString{};
+}
+
+void MainWindow::UpdateUpscaleButton() {
+    if (!upscale_status_button) {
+        return;
+    }
+    const bool enabled = Settings::values.amd_fsr4.GetValue();
+    if (!emulation_running) {
+        upscale_status_button->setChecked(enabled);
+        upscale_status_button->setText(enabled ? tr("FSR") : tr("NO FSR"));
+        upscale_status_button->setToolTip(
+            enabled ? tr("AMD FSR is on: it replaces Ocarina of Time's upscaler (Windows). Whether "
+                         "it runs shows here once a game starts. Click to turn it off.")
+                    : tr("AMD FSR is off. Click to turn it on."));
+        return;
+    }
+    if (upscale_running) {
+        upscale_status_button->setChecked(true);
+        upscale_status_button->setText(upscale_name);
+        upscale_status_button->setToolTip(
+            tr("%1 is upscaling the game from %2.").arg(upscale_name, upscale_sizes));
+        return;
+    }
+    upscale_status_button->setChecked(false);
+    upscale_status_button->setText(upscale_idle_tag.isEmpty()
+                                       ? tr("FSR (IDLE)")
+                                       : tr("FSR (%1)").arg(upscale_idle_tag));
+    upscale_status_button->setToolTip(tr("AMD FSR is not upscaling. %1").arg(upscale_idle_reason));
+}
+
 void MainWindow::UpdateFrameGenButton() {
     const bool enabled = Settings::values.frame_gen.GetValue();
     frame_gen_status_button->setChecked(enabled);
@@ -5246,10 +5326,13 @@ void MainWindow::UpdateFrameGenButton() {
                                    ->second;
     const QString type = ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
     const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
-    const QString mode = target_rate == 0
+    // AMD's frame generation always adds one frame per game frame.
+    const bool amd = Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::AmdFsr;
+    const QString mode = amd ? tr("FG %1 2X").arg(type)
+                         : target_rate == 0
                              ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())
                              : tr("FG %1 AUTO").arg(type);
-    const QString target = target_rate == 0
+    const QString target = target_rate == 0 || amd
                                ? QString()
                                : tr(" It adds up to %1 frames per game frame to reach %2 FPS.")
                                      .arg(Settings::MAX_FRAME_GEN_MULTIPLIER - 1)
@@ -5302,6 +5385,13 @@ void MainWindow::UpdateFrameGenButton() {
         return;
     }
 
+    if (amd && !frame_gen_idle_tag.isEmpty()) {
+        // Why AMD's frame generation isn't generating (wrong resolution, restart, menus...).
+        frame_gen_status_button->setText(tr("%1 (%2)").arg(mode, frame_gen_idle_tag));
+        frame_gen_status_button->setToolTip(
+            tr("AMD frame generation is on but not generating. %1").arg(frame_gen_idle_reason));
+        return;
+    }
     const QString target_met =
         target_rate == 0
             ? QString()

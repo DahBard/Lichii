@@ -175,6 +175,11 @@ class MainWindow : public QMainWindow {
     static const int max_recent_files_item = 10;
 
 public:
+    /// The AMD FSR and frame generation status bar texts, for the performance overlay (shown
+    /// in fullscreen, where the status bar is hidden).
+    [[nodiscard]] QString UpscaleStatusText() const;
+    [[nodiscard]] QString FrameGenStatusText() const;
+
     void filterBarSetChecked(bool state);
     void UpdateUITheme();
     explicit MainWindow(bool has_broken_vulkan);
@@ -472,6 +477,7 @@ private:
     void UpdateAAText();
     void UpdatePostShaderText();
     void UpdateFrameGenButton();
+    void UpdateUpscaleButton();
     void UpdateVolumeUI();
     void UpdateStatusBar();
     void UpdateGPUAccuracyButton();
@@ -556,8 +562,17 @@ private:
     QPushButton* post_shader_status_button = nullptr;
     QPushButton* frame_gen_status_button = nullptr;
     VideoCore::FrameGenState frame_gen_state{};
+    QString frame_gen_idle_tag;
+    QString frame_gen_idle_reason;
     u64 frame_gen_frames = 0;
     bool frame_gen_generating = false;
+    QPushButton* upscale_status_button = nullptr;
+    QString upscale_name;        ///< "FSR 4.1.2"
+    QString upscale_sizes;       ///< "960x540 to 1920x1080"
+    QString upscale_idle_tag;    ///< Why it isn't upscaling, short
+    QString upscale_idle_reason; ///< and in full
+    u64 upscale_frames = 0;
+    bool upscale_running = false;
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
     QSlider* volume_slider = nullptr;

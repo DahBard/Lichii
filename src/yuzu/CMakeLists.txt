@@ -80,8 +80,6 @@ add_executable(yuzu
     configuration/configure_general.ui
     configuration/configure_graphics.cpp
     configuration/configure_graphics.h
-    configuration/amd_fsr4_panel.cpp
-    configuration/amd_fsr4_panel.h
     configuration/nvidia_dlss_panel.cpp
     configuration/nvidia_dlss_panel.h
     configuration/configure_graphics.ui
@@ -266,6 +264,26 @@ add_custom_command(TARGET yuzu POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${PROJECT_SOURCE_DIR}/dist/nx2_switches.txt" "$<TARGET_FILE_DIR:yuzu>/nx2_switches.txt"
     VERBATIM)
+
+# AMD FSR and frame generation: AMD's signed FidelityFX DLLs, loaded at runtime from the
+# executable's folder, and the license they are redistributed under. The DLLs are not in the
+# repository (externals/FidelityFX-SDK-2.4/README.md): each is copied only when placed in bin/
+# before configuring; the package workflow adds them itself.
+if (WIN32)
+    set(FFX_SDK_DIR "${PROJECT_SOURCE_DIR}/externals/FidelityFX-SDK-2.4")
+    set(FFX_COPY_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FFX_SDK_DIR}/LICENSE.md" "$<TARGET_FILE_DIR:yuzu>/AMD-FidelityFX-LICENSE.md")
+    foreach(FFX_DLL amd_fidelityfx_loader_vk.dll amd_fidelityfx_upscaler_vk.dll
+                    amd_fidelityfx_framegeneration_vk.dll)
+        if (EXISTS "${FFX_SDK_DIR}/bin/${FFX_DLL}")
+            list(APPEND FFX_COPY_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${FFX_SDK_DIR}/bin/${FFX_DLL}" "$<TARGET_FILE_DIR:yuzu>/${FFX_DLL}")
+        endif()
+    endforeach()
+    add_custom_command(TARGET yuzu POST_BUILD ${FFX_COPY_COMMANDS} VERBATIM)
+endif()
 
 if (YUZU_CRASH_DUMPS)
     target_sources(yuzu PRIVATE

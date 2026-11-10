@@ -11,6 +11,7 @@
 #include <QChartView>
 #include <QGraphicsLayout>
 #include <QGuiApplication>
+#include <QLabel>
 #include <QLineSeries>
 #include <QMouseEvent>
 #include <QPainter>
@@ -80,6 +81,13 @@ PerformanceOverlay::PerformanceOverlay(MainWindow* parent)
     ui->fps->setFont(font);
     ui->frametime->setFont(font);
 
+    // AMD FSR and frame generation status at the top: the status bar is hidden in fullscreen.
+    m_features = new QLabel(this);
+    m_features->setFont(font);
+    m_features->setStyleSheet(QStringLiteral("color: #ffd23f;"));
+    m_features->setVisible(false);
+    ui->verticalLayout->insertWidget(0, m_features);
+
     // pos/stats
     resetPosition(m_mainWindow->pos());
     connect(parent, &MainWindow::positionChanged, this, &PerformanceOverlay::resetPosition);
@@ -97,6 +105,20 @@ void PerformanceOverlay::resetPosition(const QPoint& _) {
 
 void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
                                      const VideoCore::ShaderNotify& shaders) {
+    {
+        const QString upscale = m_mainWindow->UpscaleStatusText();
+        const QString frame_gen = m_mainWindow->FrameGenStatusText();
+        QStringList parts;
+        if (!upscale.isEmpty()) {
+            parts << upscale;
+        }
+        if (!frame_gen.isEmpty()) {
+            parts << frame_gen;
+        }
+        m_features->setText(parts.join(QStringLiteral("  |  ")));
+        m_features->setVisible(!parts.isEmpty());
+    }
+
     auto fps = results.average_game_fps;
     if (!std::isnan(fps)) {
         // don't sample measurements < 3 fps because they are probably outliers or freezes

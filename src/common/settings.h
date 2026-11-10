@@ -65,6 +65,8 @@ SETTING(u16, false);
 SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
+SWITCHABLE(OotFsrPreset, false);
+SWITCHABLE(OotDockedOutput, false);
 SWITCHABLE(AspectRatio, true);
 SWITCHABLE(AstcDecodeMode, true);
 SWITCHABLE(AstcRecompression, true);
@@ -411,9 +413,9 @@ struct Values {
                                                   false};
     // NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS.
     SwitchableSetting<bool> nvidia_dlss{linkage, false, "nvidia_dlss", Category::Renderer};
-    SwitchableSetting<bool> ocarina_fsr{linkage, false, "ocarina_fsr", Category::Renderer};
-    // AMD FSR 4 in place of FSR 3.1 where FSR replaces a game's upscaler (Windows, AMD's driver).
-    SwitchableSetting<bool> amd_fsr4{linkage, false, "amd_fsr4", Category::Renderer};
+    // AMD FSR through AMD's FidelityFX runtime (Windows) in place of Ocarina of Time's upscale:
+    // FSR 4 where AMD offers it for the GPU, AMD's FSR 3.1 otherwise.
+    SwitchableSetting<bool> amd_fsr4{linkage, true, "amd_fsr4", Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
                                                       AspectRatio::R16_9,
                                                       "aspect_ratio",
@@ -433,6 +435,14 @@ struct Values {
     // pass, or the tonemapped image as the game renders it (video_core/oot_network.h).
     SwitchableSetting<OotAntiAliasing> oot_anti_aliasing{linkage, OotAntiAliasing::Game,
                                                          "oot_anti_aliasing", Category::Renderer};
+    // Ocarina of Time: the game renders its 3D scene at a fixed fraction of its own size (its
+    // dynamic resolution path, patched at load) and FSR upscales it. Native leaves it alone.
+    SwitchableSetting<OotFsrPreset> oot_fsr_preset{linkage, OotFsrPreset::Native, "oot_fsr_preset",
+                                                   Category::Renderer};
+    // Ocarina of Time docked: FSR writes 4K (the default), or 1440p, the game's own docked image,
+    // which costs less. FSR presets size the scene against that output.
+    SwitchableSetting<OotDockedOutput> oot_docked_output{linkage, OotDockedOutput::Output4k,
+                                                         "oot_docked_output", Category::Renderer};
 
     SwitchableSetting<std::string> post_shader_chain{linkage,
                                                      std::string(),
@@ -469,6 +479,17 @@ struct Values {
                                                    true,
                                                    false,
                                                    &frame_gen};
+
+    /// AMD FSR frame generation: Auto takes the newest AMD offers for the GPU (FSR 4's on
+    /// RX 9000), Fsr31 always FSR 3.1's (lighter).
+    SwitchableSetting<AmdFrameGenVersion> amd_frame_gen_version{linkage,
+                                                                AmdFrameGenVersion::Auto,
+                                                                "amd_frame_gen_version",
+                                                                Category::Renderer,
+                                                                Specialization::Default,
+                                                                true,
+                                                                false,
+                                                                &frame_gen};
 
     SwitchableSetting<u32, true> frame_gen_multiplier{linkage,
                                                       2,

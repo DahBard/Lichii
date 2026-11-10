@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <span>
+#include <string_view>
 
 #include "common/assert.h"
 #include "common/hex_util.h"
@@ -253,6 +255,125 @@ constexpr std::array OOT_POLL_BACKOFF_RECORDS{
     BuiltinPatchRecord{0x14ABC, OOT_POLL_RESCAN_BRANCH, OOT_POLL_RESCAN_ORIGINAL},
     BuiltinPatchRecord{0x17088, OOT_POLL_BACKOFF_CAVE, OOT_POLL_PADDING_ORIGINAL},
 };
+
+// Ocarina of Time's render scale: its "dynamic resolution disabled" path (the one Max Resolution
+// takes) returns a fixed 3D render scale of 1.0, `mov w9, #0x3f800000` at main+0x806420. An FSR
+// preset takes that path too and returns a smaller scale: the game draws its scene into a corner of
+// its full-size images, and FSR (or the game's own upscaler) brings it to the output. The game's
+// images are sized for 1.0, so no preset goes above it. No shader changes: saved shaders stay valid.
+constexpr size_t OCARINA_SCALE_OFFSET = 0x806420;
+constexpr std::array<u8, 4> OCARINA_SCALE_ORIGINAL{0x09, 0xF0, 0xA7, 0x52};
+// Where the renderer turns the scale into its render ratio (main+0x31D3FD8) it clamps the ratio to
+// 1 / the mode's factor (0.75 at 1080p: 1440x810) unless a flag is set: `tbnz w9, #19, #20`.
+// Native AA skips the clamp, so scale 1.0 renders the scene at the output's 1920x1080.
+constexpr size_t OCARINA_CLAMP_OFFSET = 0x31D3FDC;
+constexpr std::array<u8, 4> OCARINA_CLAMP_ORIGINAL{0xA9, 0x00, 0x98, 0x37};
+constexpr std::array<u8, 4> OCARINA_CLAMP_SKIP{0x05, 0x00, 0x00, 0x14}; // b #20
+
+void ApplyOcarinaFsrPreset(u64 title_id, std::string_view module, std::string_view build_id,
+                           std::vector<u8>& out) {
+    constexpr u64 ocarina = 0x0400486024DEC000ULL;
+    constexpr std::string_view ocarina_build = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348";
+    const auto preset = Settings::values.oot_fsr_preset.GetValue();
+    if (title_id != ocarina || module != "main" || preset == Settings::OotFsrPreset::Native) {
+        return;
+    }
+    if (build_id != ocarina_build) {
+        LOG_WARNING(Loader, "    - Ocarina of Time FSR preset: build id {} is not {}, not applied",
+                    build_id, ocarina_build);
+        return;
+    }
+    // The scale is a fraction of the game's base size: handheld 1920x1080, docked 2560x1440 (FSR
+    // brings docked to 4K, or keeps 1440p). The same values give AMD's ratios for both.
+    // The upper half of an f32 whose lower half is zero (movz w9, #imm16, lsl #16).
+    u16 scale_bits = 0x3F80;
+    const char* preset_name = "";
+    bool skip_clamp = false;
+    switch (preset) {
+    case Settings::OotFsrPreset::NativeAa:
+        scale_bits = 0x3F80; // 1.0 without the clamp: 1920x1080, FSR as anti-aliasing
+        preset_name = "Native AA";
+        skip_clamp = true;
+        break;
+    // The scene is 1920 * scale wide (1080 * scale high), kept between 640x360 and the game's own
+    // 1440x810: 0.25 drew 640x360, 0.5 960x540. AMD's ratios to 1080p:
+    case Settings::OotFsrPreset::Quality:
+        scale_bits = 0x3F2B; // 0.668: 1282x721 (1.5x)
+        preset_name = "Quality";
+        break;
+    case Settings::OotFsrPreset::Balanced:
+        scale_bits = 0x3F16; // 0.586: 1125x633 (1.7x)
+        preset_name = "Balanced";
+        break;
+    case Settings::OotFsrPreset::Performance:
+        scale_bits = 0x3F00; // 0.5: 960x540 (2x)
+        preset_name = "Performance";
+        break;
+    case Settings::OotFsrPreset::UltraPerformance:
+        scale_bits = 0x3EAB; // 0.334: 640x360 (3x, the game's minimum)
+        preset_name = "Ultra Performance";
+        break;
+    default:
+        return;
+    }
+    // A preset is a ratio of what FSR writes, as in PC games. Docked the game's scale is a
+    // fraction of 2560x1440 (Performance at 0.5 draws 1280x720), which suits 1440p output. With 4K
+    // output it is scaled by 1.5 so the ratios are AMD's to 4K: Quality 2560x1440 (1.5x), Balanced
+    // 2250x1265 (1.7x), Performance 1920x1080 (2x), Ultra Performance 1280x720 (3x). It stops at
+    // 2560x1440, the largest scene the game draws docked (drawing past its images could corrupt
+    // them), so Native AA with 4K output is Quality's 2560x1440.
+    const bool docked = Settings::IsDockedMode();
+    const bool docked_1440p =
+        docked &&
+        Settings::values.oot_docked_output.GetValue() == Settings::OotDockedOutput::Output1440p;
+    if (docked && !docked_1440p) {
+        const f32 scale = (std::min)(std::bit_cast<f32>(u32{scale_bits} << 16) * 1.5f, 1.0f);
+        scale_bits = static_cast<u16>(std::bit_cast<u32>(scale) >> 16); // rounded down
+        // The game keeps its fixed scale at 0.75 or below; the presets above that skip it, as
+        // Native AA does.
+        skip_clamp = skip_clamp || scale > 0.74f;
+    }
+    const size_t header = sizeof(Loader::NSOHeader);
+    const size_t branch_at = header + MAX_RESOLUTION_RECORDS[0].module_offset;
+    const size_t scale_at = header + OCARINA_SCALE_OFFSET;
+    if (out.size() < scale_at + 4 || out.size() < branch_at + 4) {
+        return;
+    }
+    const auto matches = [&](size_t at, std::span<const u8> bytes) {
+        return std::equal(bytes.begin(), bytes.end(), out.begin() + at);
+    };
+    // The branch to the fixed-scale path: already there when Max Resolution is on.
+    if (!matches(branch_at, MAX_RESOLUTION_BRANCH) &&
+        !matches(branch_at, MAX_RESOLUTION_ORIGINAL)) {
+        LOG_WARNING(Loader, "    - Ocarina of Time FSR preset: a mod changed main+{:#x}, not applied",
+                    MAX_RESOLUTION_RECORDS[0].module_offset);
+        return;
+    }
+    if (!matches(scale_at, OCARINA_SCALE_ORIGINAL)) {
+        LOG_WARNING(Loader, "    - Ocarina of Time FSR preset: a mod changed main+{:#x}, not applied",
+                    OCARINA_SCALE_OFFSET);
+        return;
+    }
+    const size_t clamp_at = header + OCARINA_CLAMP_OFFSET;
+    if (skip_clamp) {
+        if (out.size() < clamp_at + 4 || !matches(clamp_at, OCARINA_CLAMP_ORIGINAL)) {
+            LOG_WARNING(Loader, "    - Ocarina of Time FSR preset: unexpected bytes at main+{:#x}, "
+                                "not applied",
+                        OCARINA_CLAMP_OFFSET);
+            return;
+        }
+        std::memcpy(out.data() + clamp_at, OCARINA_CLAMP_SKIP.data(), OCARINA_CLAMP_SKIP.size());
+    }
+    std::memcpy(out.data() + branch_at, MAX_RESOLUTION_BRANCH.data(), MAX_RESOLUTION_BRANCH.size());
+    const u32 movz = 0x52A00000U | (u32{scale_bits} << 5) | 9U; // movz w9, #scale_bits, lsl #16
+    for (size_t i = 0; i < 4; ++i) {
+        out[scale_at + i] = static_cast<u8>(movz >> (8 * i));
+    }
+    LOG_INFO(Loader, "    - Ocarina of Time FSR preset {}: 3D render scale {:.4f}{}", preset_name,
+             std::bit_cast<f32>(u32{scale_bits} << 16),
+             docked_1440p ? " (docked, 1440p output)" : docked ? " (docked, 4K output)" : "");
+}
+
 
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
@@ -882,6 +1003,8 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             replaced.push_back(patch.replaces);
         }
     }
+
+    ApplyOcarinaFsrPreset(title_id, name, build_id, out);
 
     if (out.size() < sizeof(Loader::NSOHeader)) {
         return nso;

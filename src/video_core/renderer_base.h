@@ -43,6 +43,18 @@ enum class FrameGenState : u8 {
 struct FrameGenStatus {
     FrameGenState state{FrameGenState::UnsupportedRenderer};
     u64 generated_frames{};
+    std::string idle_tag;    ///< AMD FSR frame generation not generating: a short reason for the bar
+    std::string idle_reason; ///< and the full one for its tooltip.
+};
+
+/// The game-specific upscaler (Ocarina of Time's FSR / DLSS replacement), for the status bar.
+struct UpscalerStatus {
+    bool supported{};      ///< This build and platform have it at all
+    u64 upscaled_frames{}; ///< Frames it upscaled so far (rises while it runs)
+    std::string name;      ///< "FSR 4.1.2", "FSR 3.1.6", "DLSS"
+    u32 render_width{}, render_height{}, output_width{}, output_height{};
+    std::string idle_tag;    ///< Not upscaling: a short reason for the bar
+    std::string idle_reason; ///< and the full one for its tooltip.
 };
 
 struct RendererSettings {
@@ -75,6 +87,11 @@ public:
 
     /// Whether frame generation can run and how many frames it has generated so far
     [[nodiscard]] virtual FrameGenStatus GetFrameGenStatus() const {
+        return {};
+    }
+
+    /// Whether the game-specific upscaler runs, which one and at what sizes
+    [[nodiscard]] virtual UpscalerStatus GetUpscalerStatus() const {
         return {};
     }
 

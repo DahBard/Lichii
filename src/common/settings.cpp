@@ -47,6 +47,8 @@ SETTING(u16, false);
 SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
+SWITCHABLE(OotFsrPreset, false);
+SWITCHABLE(OotDockedOutput, false);
 SWITCHABLE(AspectRatio, true);
 SWITCHABLE(AstcDecodeMode, true);
 SWITCHABLE(AstcRecompression, true);
@@ -62,6 +64,7 @@ SWITCHABLE(Region, true);
 SWITCHABLE(RendererBackend, true);
 SWITCHABLE(ScalingFilter, false);
 SWITCHABLE(FrameGenType, false);
+SWITCHABLE(AmdFrameGenVersion, false);
 SWITCHABLE(SpirvOptimizeMode, true);
 SWITCHABLE(TimeZone, true);
 SETTING(VSyncMode, true);
@@ -402,14 +405,14 @@ u32 FrameGenMultiplier() {
 }
 
 size_t FrameGenGenerations() {
-    if (!values.frame_gen.GetValue()) {
+    if (!values.frame_gen.GetValue() || values.frame_gen_type.GetValue() == FrameGenType::AmdFsr) {
         return 0;
     }
     return FrameGenMultiplier() - 1;
 }
 
 size_t FrameGenMaxGenerations() {
-    if (!values.frame_gen.GetValue()) {
+    if (!values.frame_gen.GetValue() || values.frame_gen_type.GetValue() == FrameGenType::AmdFsr) {
         return 0;
     }
     if (values.frame_gen_target_rate.GetValue() != 0) {

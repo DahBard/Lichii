@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <utility>
 #include <optional>
@@ -21,7 +22,6 @@
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/oot_network.h"
-#include "video_core/ocarina_upscale.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/blit_image.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
@@ -32,6 +32,7 @@
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
+#include "video_core/renderer_vulkan/vk_ocarina_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
@@ -222,6 +223,7 @@ private:
     void TraceDrawFailure(std::string_view reason);
     /// Remembers render target 0 of a draw with one of Ocarina of Time's tonemap shaders.
     void TrackOotTonemappedImage(const GraphicsPipeline& pipeline);
+    void SaveOcarinaPreHud(VkImage source, VkFormat format, VkExtent2D extent);
     bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
 
     void FlushWork();
@@ -272,18 +274,35 @@ private:
     void UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs);
 
     void FrameDumpPass(const Framebuffer* framebuffer);
+
+public:
+    /// AMD FSR frame generation is on but not generating: a short tag and the full reason.
+    [[nodiscard]] std::pair<const char*, const char*> AmdFrameGenIdleReason() const;
+    /// Ocarina's FSR isn't upscaling: a short tag and the full reason.
+    [[nodiscard]] std::pair<const char*, const char*> UpscalerIdleReason() const;
+    /// Frames Ocarina's FSR upscaled so far.
+    [[nodiscard]] u64 UpscaledFrames() const noexcept {
+        return oot_upscaled_frames.load(std::memory_order_relaxed);
+    }
+    /// The last upscaled frame's sizes: render width, height, output width, height (16 bits
+    /// each, from the top).
+    [[nodiscard]] u64 UpscaleSizes() const noexcept {
+        return oot_upscale_sizes.load(std::memory_order_relaxed);
+    }
+
+private:
+    // Ocarina's FSR upscales (status bar).
+    std::atomic<u64> oot_upscaled_frames{};
+    std::atomic<u64> oot_upscale_sizes{};
+
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
-    bool OcarinaTemporalEnabled() const;
+    bool OcarinaDlssEnabled() const;
     void TrackOcarinaCamera();
-    /// Offsets the viewport of Ocarina's scene draws (depth-tested, into the scene depth) by a
-    /// sub-pixel amount that changes every frame while FSR replaces the game's upscale, so FSR
-    /// gets new sample positions each frame (the game renders without jitter). The offset goes to
-    /// FSR with the frame.
-    void UpdateOcarinaJitter();
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
-    bool TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace);
-    void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
+    [[nodiscard]] bool OcarinaFsrPresetActive() const;
+    bool TryOcarinaDlss(const ComputePipeline& pipeline, bool replace);
+    void ReadOcarinaActors(std::vector<OcarinaActorMesh>& meshes);
     /// Records the uniform and storage buffers of the current draw or dispatch for the frame dump.
     bool FrameDumpBuffers(bool compute, std::span<const u64> shader_hashes);
 
@@ -320,7 +339,6 @@ private:
 
     u32 draw_counter = 0;
     std::optional<u64> oot_camera_sample_frame;
-    mutable std::optional<VideoCommon::OcarinaUpscaleBackend> oot_backend;
     struct OcarinaMotionTrace {
         const Tegra::MemoryManager* camera_channel{};
         const Tegra::MemoryManager* depth_channel{};
@@ -328,32 +346,53 @@ private:
         GPUVAddr depth_address{};
         u32 depth_tic{};
         VkExtent2D extent{};
+        VkExtent2D render_extent{}; ///< the drawn top-left part (an FSR preset), else extent
+        /// The scene draw's depth buffer and its frame (an FSR preset takes depth from there).
+        VideoCommon::ImageViewId depth_target{};
+        u64 depth_target_frame{};
         std::array<f32, 16> current{};
         std::array<f32, 16> previous{};
     } oot_motion;
-    std::unique_ptr<class OcarinaUpscaler> oot_live_dlss;
+    std::unique_ptr<class OcarinaLiveDlss> oot_live_dlss;
     bool oot_live_failed{};
     const char* oot_fallback_reason{};
+    /// The last reason Ocarina's FSR path declined a frame, for the status bar (UI thread).
+    std::atomic<const char*> oot_idle_reason{};
     u32 oot_fallback_repeats{};
     std::optional<u64> oot_dlss_frame;
-    std::array<f32, 2> oot_jitter_applied{}; ///< in the viewport state now (render pixels)
-    std::array<f32, 2> oot_jitter_offset{};  ///< what oot_jitter_frame's scene draws used
-    std::optional<u64> oot_jitter_frame;
-    u32 oot_jitter_phases{8}; ///< Halton sequence length for the last FSR frame's scale
     std::optional<u64> oot_4k_scene_frame;
     VkImage oot_4k_guest_present{};
-    std::optional<u64> oot_effects_frame;
-    GPUVAddr oot_effects_address{};
-    VkImageView oot_effects_scene{};
+    /// AMD frame generation: FSR's output copied before the game draws its HUD into it.
+    vk::Image oot_pre_hud;
+    vk::ImageView oot_pre_hud_view;
+    VkExtent2D oot_pre_hud_extent{};
+    VkFormat oot_pre_hud_format{};
+    std::optional<u64> oot_pre_hud_frame;
+    VkImage oot_scene_image{};  ///< FSR's output this frame, only compared, never used
+    VkImageView oot_hud_view{}; ///< That image as the last HUD draw into it had it bound
+    std::optional<u64> oot_hud_frame;
     struct OcarinaActorPose {
-        u64 frame{};
+        OcarinaVertexLayout layout;
         const Tegra::MemoryManager* channel{};
         GPUVAddr vertex{};
         GPUVAddr indices{};
         s32 base_vertex{};
+        u32 index_count{};
         std::array<f32, 4> origin{};
         std::array<f32, 280 * 12> bones{};
-    } oot_actor, oot_previous_actor;
+
+        bool SameMesh(const OcarinaActorPose& other) const {
+            return channel == other.channel && vertex == other.vertex &&
+                   indices == other.indices && base_vertex == other.base_vertex &&
+                   index_count == other.index_count && layout == other.layout;
+        }
+    };
+    /// Skinned draws of this frame and the frame before (characters' motion for FSR and AMD
+    /// frame generation), at most MaxOcarinaActors a frame.
+    std::vector<OcarinaActorPose> oot_actors;
+    std::vector<OcarinaActorPose> oot_previous_actors;
+    u64 oot_actors_frame{};
+    static constexpr size_t MaxOcarinaActors = 64;
     u64 render_trace_frame = 0;
     u32 render_trace_draws = 0;
     u32 render_trace_clears = 0;

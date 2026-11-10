@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Layout {
@@ -42,9 +43,12 @@ public:
     bool AcquireNextImage(bool may_flush = true);
 
     /// Presents the rendered image to the swapchain. Returns its present id for
-    /// vkWaitForPresentKHR, or 0 (no present ids, or the present failed).
-    u64 Present(VkSemaphore render_semaphore);
+    /// vkWaitForPresentKHR, or 0 (no present ids, AMD's swapchain, or the present failed).
+    /// `frame_gen` says which prepared game frame the image shows, for AMD's frame generation
+    /// swapchain.
+    u64 Present(VkSemaphore render_semaphore, const AmdFrameGen::PresentTarget& frame_gen = {});
 
+    /// The emulator's own swapchain; null while AMD's frame generation swapchain presents.
     VkSwapchainKHR Handle() const {
         return *swapchain;
     }
@@ -55,11 +59,16 @@ public:
 
     /// Returns true when the swapchain needs to be recreated.
     bool NeedsRecreation() const {
-        return !swapchain || IsSubOptimal() || NeedsPresentModeUpdate();
+        return !IsCreated() || IsSubOptimal() || NeedsPresentModeUpdate();
     }
 
     bool IsCreated() const {
-        return static_cast<bool>(swapchain);
+        return static_cast<bool>(swapchain) || frame_gen_swapchain != VK_NULL_HANDLE;
+    }
+
+    /// True while AMD's frame generation swapchain presents.
+    bool IsFrameGeneration() const {
+        return frame_gen_swapchain != VK_NULL_HANDLE;
     }
 
     /// Returns true when the swapchain is outdated.
@@ -139,6 +148,8 @@ private:
     Scheduler& scheduler;
 
     vk::SwapchainKHR swapchain;
+    VkSwapchainKHR frame_gen_swapchain{}; ///< AMD's, in place of `swapchain` when picked.
+    u32 frame_gen_failures{};             ///< AMD's swapchain failed to start this many times.
 
     std::size_t image_count{};
     std::vector<VkImage> images;
