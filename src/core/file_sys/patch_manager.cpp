@@ -374,7 +374,6 @@ void ApplyOcarinaFsrPreset(u64 title_id, std::string_view module, std::string_vi
              docked_1440p ? " (docked, 1440p output)" : docked ? " (docked, 4K output)" : "");
 }
 
-
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
