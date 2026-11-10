@@ -1098,6 +1098,22 @@ Own changes:
     windows were 34.0 fps (p99 104 ms) and 39.4 fps. Title and menus were capped at 60 Hz.
   - r44 prepares once more (new stamp format and name), with AMD's driver cache warm from this
     run.
+- r44 tests (owner, 2026-11-10):
+  - The preparation ran once and then held. A later launch logged '... was prepared for this
+    driver already'. The two LP E-cores sit idle and parked during it, by design (round 17's
+    placement keeps every thread off the SoC tile).
+  - With FSR 4 on: 'Looks much better. No screen border glimmer.' AMD's runtime downloaded into
+    `%APPDATA%\eden\fidelityfx` (FidelityFX SDK 2.4.0, upscalers 4.1.2, 3.1.6 and 2.3.4 offered).
+    FSR 4.1.2 runs 2560x1440 -> 3840x2160 with jitter (0.000,0.000).
+  - Play (101-191 s, 10-s windows): 44.4-57.1 fps, p50 16.6-22.3 ms, p99 25-39 ms, 1% lows
+    18.6-32.8 fps, 0.4-2.4% of frames over 33 ms. The 600-present windows were 17.4-21.8 ms.
+    FSR 4 costs no frame rate here: the GPU has room.
+  - Owner's other settings: anti-aliasing None, scaling filter NearestNeighbor, OoT AA
+    NoSharpening.
+- Frame generation: the tree has upstream's built-in one ('Enable Frame Generation': type FSR 3
+  (default) or LSFG, multiplier 2-4, target frame rate). It runs on host shaders, without AMD's
+  runtime. Try it before porting CheezyEmu's AMD frame generation (AMD's FidelityFX runtime, HUD
+  mask, swapchain hooks: large and risky).
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
