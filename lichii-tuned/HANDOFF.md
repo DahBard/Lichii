@@ -1135,6 +1135,22 @@ Own changes:
 - Run #45 (tuned4 `9073c8718`): all three variants built (success, ~6 minutes; artifacts
   `lichii-tuned-r45-*`). r45 is r44 plus the frame generation swapchain fix and its log lines. No
   new shader preparation: PreparationVersion is unchanged.
+- r45 frame generation test (owner): 'Framegen still did not work', yet the status bar showed 'FG
+  OPTICAL FLOW INTERPOLATION (BUILT-IN) 2X' the whole time. The owner also raised
+  nx2_frame_rate_limit to 120. The log:
+  - 'Swapchain: VK_FORMAT_B8G8R8A8_UNORM, present mode VK_PRESENT_MODE_FIFO_KHR, shader writes to
+    it supported'. The driver can store to BGRA8, so r45's format change never applied (harmless,
+    kept for drivers that can't).
+  - 'Frame generation (Optical Flow): 42 game frames + 42 generated per second at 3840x1976': it
+    ran and generated one frame per game frame (82+71, 94+62, 27+21, 40+37 ... 53+53).
+  - The swapchain was 3840x1976 with the status bar visible: a maximized window, not
+    fullscreen. FSR 4's 4K output was shrunk with Nearest Neighbor, and FreeSync may not engage
+    behind DWM.
+  - The cause: renderer_vulkan.cpp presents each generated frame and then its game frame back to
+    back. With VRR (or a refresh that is no multiple of the game's rate) the generated frame shows
+    for one 6 ms refresh, so motion looks unchanged.
+  - Fixed in tuned4 (for r46): the present thread spaces a sequence's frames by
+    interval / (generations + 1). LICHII_FG_PACING=0 restores upstream's back-to-back presents.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync

@@ -30772,7 +30772,7 @@ index 6454ca048..3455557d1 100644
      const VkExtent2D input_extent = (*frames)[0].Extent();
      flow_extent = VkExtent2D{
 diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
-index 48757b88a..ecb8a5d3e 100644
+index 48757b88a..12219d146 100644
 --- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 +++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 @@ -218,8 +218,12 @@ RendererVulkan::~RendererVulkan() {
@@ -30790,8 +30790,16 @@ index 48757b88a..ecb8a5d3e 100644
      SCOPE_EXIT {
          render_window.OnFrameDisplayed();
      };
-@@ -260,7 +264,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
+@@ -256,11 +260,15 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
+                       GuestExtent(framebuffers));
+ 
+     const size_t generated_frames = frame_gen.GeneratedFrameCount();
++    frame->generated_count = static_cast<u32>(generated_frames);
++    frame->generated_index = 0;
+     for (size_t generation = 0; generation < generated_frames; ++generation) {
          Frame* generated = present_manager.GetRenderFrame();
++        generated->generated_count = static_cast<u32>(generated_frames);
++        generated->generated_index = static_cast<u32>(generation + 1);
          blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
          frame_gen.GenerateInto(device, generated, generation);
 -        scheduler.Flush(*generated->render_ready);
@@ -30799,7 +30807,7 @@ index 48757b88a..ecb8a5d3e 100644
          present_manager.Present(generated);
      }
  #endif
-@@ -268,7 +272,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
+@@ -268,7 +276,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
      if (trace) {
          scheduler.MarkFrameEnd(++trace_frame);
      }
@@ -30808,7 +30816,7 @@ index 48757b88a..ecb8a5d3e 100644
  
      const auto presenting = trace ? std::chrono::steady_clock::now()
                                    : std::chrono::steady_clock::time_point{};
-@@ -320,6 +324,33 @@ void RendererVulkan::Report() const {
+@@ -320,6 +328,33 @@ void RendererVulkan::Report() const {
      LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
      LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
      LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
@@ -35709,21 +35717,22 @@ index 000000000..a63d170fe
 +
 +} // namespace Vulkan
 diff --git a/src/video_core/renderer_vulkan/vk_present_manager.cpp b/src/video_core/renderer_vulkan/vk_present_manager.cpp
-index ea2a913ad..ad399dc00 100644
+index ea2a913ad..d912bad66 100644
 --- a/src/video_core/renderer_vulkan/vk_present_manager.cpp
 +++ b/src/video_core/renderer_vulkan/vk_present_manager.cpp
-@@ -4,6 +4,10 @@
+@@ -4,6 +4,11 @@
  // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
  // SPDX-License-Identifier: GPL-2.0-or-later
  
 +#include <algorithm>
++#include <cstdlib>
 +#include <thread>
 +
 +#include "common/logging.h"
  #include "common/settings.h"
  #include "common/thread.h"
  #include "core/frontend/emu_window.h"
-@@ -11,6 +15,7 @@
+@@ -11,6 +16,7 @@
  #ifdef HAS_LSFG
  #include "video_core/renderer_vulkan/present/lsfg_common.h"
  #endif
@@ -35731,7 +35740,7 @@ index ea2a913ad..ad399dc00 100644
  #include "video_core/renderer_vulkan/vk_present_manager.h"
  #include "video_core/renderer_vulkan/vk_scheduler.h"
  #include "video_core/renderer_vulkan/vk_swapchain.h"
-@@ -163,12 +168,34 @@ PresentManager::PresentManager(const vk::Instance& instance_,
+@@ -163,12 +169,34 @@ PresentManager::PresentManager(const vk::Instance& instance_,
          free_queue.push_back(&frame);
      }
  
@@ -35767,7 +35776,7 @@ index ea2a913ad..ad399dc00 100644
  
  Frame* PresentManager::GetRenderFrame() {
  
-@@ -191,6 +218,7 @@ Frame* PresentManager::GetRenderFrame() {
+@@ -191,6 +219,7 @@ Frame* PresentManager::GetRenderFrame() {
  void PresentManager::Present(Frame* frame) {
      if (use_present_thread) {
          scheduler.Record([this, frame](vk::CommandBuffer) {
@@ -35775,7 +35784,7 @@ index ea2a913ad..ad399dc00 100644
              std::unique_lock lock{queue_mutex};
              present_queue.push_back(frame);
              frame_cv.notify_one();
-@@ -341,6 +369,15 @@ void PresentManager::PresentThread(std::stop_token token) {
+@@ -341,6 +370,22 @@ void PresentManager::PresentThread(std::stop_token token) {
          // Wait for presentation frames
          frame_cv.wait(lock, token, [this] { return !present_queue.empty(); });
          if (!token.stop_requested()) {
@@ -35788,10 +35797,17 @@ index ea2a913ad..ad399dc00 100644
 +                held = PaceFrame(next, token);
 +                lock.lock();
 +            }
++            {
++                // Held at the queue's front like PaceFrame's frames, with no lock taken.
++                const Frame* const next = present_queue.front();
++                lock.unlock();
++                PaceGeneratedFrame(next, token);
++                lock.lock();
++            }
              // Take the frame and notify anyone waiting
              Frame* frame = present_queue.front();
              present_queue.pop_front();
-@@ -350,7 +387,19 @@ void PresentManager::PresentThread(std::stop_token token) {
+@@ -350,7 +395,19 @@ void PresentManager::PresentThread(std::stop_token token) {
              // before the queue lock goes out of scope. This way the swapchain
              // lock in WaitPresent is guaranteed to occur after here.
              void(std::exchange(lock, std::unique_lock{swapchain_mutex}));
@@ -35811,10 +35827,57 @@ index ea2a913ad..ad399dc00 100644
  
              // Free the frame for reuse
              std::scoped_lock fl{free_mutex};
-@@ -360,7 +409,157 @@ void PresentManager::PresentThread(std::stop_token token) {
+@@ -360,7 +417,204 @@ void PresentManager::PresentThread(std::stop_token token) {
      }
  }
  
++void PresentManager::PaceGeneratedFrame(const Frame* frame, std::stop_token token) {
++    using Clock = std::chrono::steady_clock;
++    // LICHII_FG_PACING=0: generated frames go out back to back with their game frame, as
++    // upstream does. That suits a fixed refresh at a multiple of the game's rate, where the
++    // vblanks space them. With variable refresh (or another rate) the generated frame shows for
++    // one refresh and the game frame right after it, so motion looks as it did without them.
++    static const bool enabled = [] {
++        const char* const value = std::getenv("LICHII_FG_PACING");
++        return value == nullptr || value[0] != '0';
++    }();
++    if (frame->generated_index == 0) {
++        // The game frame interval, from when game frames reached the queue.
++        if (last_game_frame_queued != Clock::time_point{}) {
++            const auto measured = frame->queued_at - last_game_frame_queued;
++            if (measured > std::chrono::nanoseconds{0} && measured < std::chrono::milliseconds{250}) {
++                game_frame_interval = game_frame_interval == std::chrono::nanoseconds{0}
++                                          ? measured
++                                          : game_frame_interval + (measured - game_frame_interval) / 4;
++            }
++        }
++        last_game_frame_queued = frame->queued_at;
++    }
++    if (!enabled || frame->generated_count == 0 ||
++        game_frame_interval == std::chrono::nanoseconds{0}) {
++        next_generated_present = {};
++        return;
++    }
++    const auto spacing = game_frame_interval / (frame->generated_count + 1);
++    // The first generated frame starts its game frame's sequence; each later frame waits a
++    // spacing after the one before, never longer than a spacing from now.
++    if (frame->generated_index != 1) {
++        const auto until = std::min(next_generated_present, Clock::now() + spacing);
++        while (!token.stop_requested()) {
++            const auto left = until - Clock::now();
++            if (left <= Clock::duration::zero()) {
++                break;
++            }
++            if (left > std::chrono::milliseconds{2}) {
++                std::this_thread::sleep_for(left - std::chrono::milliseconds{1});
++            } else {
++                std::this_thread::yield();
++            }
++        }
++    }
++    next_generated_present = Clock::now() + spacing;
++}
++
 +bool PresentManager::PaceFrame(Frame* frame, std::stop_token token) {
 +    using Clock = std::chrono::steady_clock;
 +    pacer.NoteQueued(frame->queued_at);
@@ -35969,7 +36032,7 @@ index ea2a913ad..ad399dc00 100644
      swapchain.Create(*surface, frame->width, frame->height); // Pass raw pointer
      SetImageCount();
  }
-@@ -593,7 +792,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
+@@ -593,7 +847,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
      }
  
      // Present
@@ -35979,7 +36042,7 @@ index ea2a913ad..ad399dc00 100644
  
  } // namespace Vulkan
 diff --git a/src/video_core/renderer_vulkan/vk_present_manager.h b/src/video_core/renderer_vulkan/vk_present_manager.h
-index ab2b76f10..513dba549 100644
+index ab2b76f10..f87bee951 100644
 --- a/src/video_core/renderer_vulkan/vk_present_manager.h
 +++ b/src/video_core/renderer_vulkan/vk_present_manager.h
 @@ -7,12 +7,16 @@
@@ -35999,22 +36062,29 @@ index ab2b76f10..513dba549 100644
  #include "video_core/vulkan_common/vulkan_memory_allocator.h"
  #include "video_core/vulkan_common/vulkan_wrapper.h"
  
-@@ -38,6 +42,8 @@ struct Frame {
+@@ -38,6 +42,12 @@ struct Frame {
      vk::Semaphore render_ready;
      vk::Fence present_done;
      bool storage_capable{};
 +    u64 render_tick{};                               ///< Scheduler tick that renders the frame
 +    std::chrono::steady_clock::time_point queued_at; ///< When it reached the present queue
++    /// Frame generation: frames generated for this frame's game frame (0: none), and which of
++    /// them this is (1..generated_count; 0 for the game frame, presented after them).
++    u32 generated_count{};
++    u32 generated_index{};
  };
  
  class PresentManager {
-@@ -75,6 +81,17 @@ public:
+@@ -75,6 +85,20 @@ public:
  private:
      void PresentThread(std::stop_token token);
  
 +    /// Host frame pacer (vk_host_pacer.h): collects when earlier frames were shown and holds
 +    /// `frame` until its target. Returns whether it was held.
 +    bool PaceFrame(Frame* frame, std::stop_token token);
++    /// Spaces a game frame's generated frames and the game frame itself evenly over the game
++    /// frame interval, instead of presenting them back to back (present thread only).
++    void PaceGeneratedFrame(const Frame* frame, std::stop_token token);
 +
 +    /// Waits for each present id until it is shown (VK_KHR_present_wait).
 +    void PresentWaitThread(std::stop_token token);
@@ -36026,7 +36096,7 @@ index ab2b76f10..513dba549 100644
      void CopyToSwapchain(Frame* frame);
  
      void CopyToSwapchainImpl(Frame* frame);
-@@ -109,6 +126,29 @@ private:
+@@ -109,6 +133,32 @@ private:
      std::atomic<std::size_t> image_count{};
      std::atomic<std::size_t> swapchain_image_count{};
      std::atomic<VkFormat> swapchain_image_format{};
@@ -36045,6 +36115,9 @@ index ab2b76f10..513dba549 100644
 +    bool present_wait_enabled{};
 +    HostPacer pacer;
 +    u64 last_present_id{};
++    std::chrono::steady_clock::time_point last_game_frame_queued{};
++    std::chrono::nanoseconds game_frame_interval{};
++    std::chrono::steady_clock::time_point next_generated_present{};
 +    std::mutex present_wait_mutex; ///< Held while waiting on a swapchain; recreation takes it
 +    std::mutex wait_queue_mutex;
 +    std::condition_variable_any wait_queue_cv;
