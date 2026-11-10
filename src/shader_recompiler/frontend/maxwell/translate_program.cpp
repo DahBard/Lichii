@@ -22,7 +22,6 @@
 #include "shader_recompiler/frontend/maxwell/translate_program.h"
 #include "shader_recompiler/host_translate_info.h"
 #include "shader_recompiler/ir_opt/passes.h"
-#include "shader_recompiler/translate_profile.h"
 
 namespace Shader::Maxwell {
 namespace {
@@ -371,18 +370,10 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     HostTranslateInfo normalized_host_info{host_info};
     normalized_host_info.ApplyDescriptorLimitPolicy();
 
-    using TranslateProfile::Scope;
-    using TranslateProfile::Step;
     IR::Program program;
-    {
-        Scope scope{Step::BuildAsl};
-        program.syntax_list = BuildASL(inst_pool, block_pool, env, cfg, normalized_host_info);
-    }
-    {
-        Scope scope{Step::Blocks};
-        program.blocks = GenerateBlocks(program.syntax_list);
-        program.post_order_blocks = PostOrder(program.syntax_list.front());
-    }
+    program.syntax_list = BuildASL(inst_pool, block_pool, env, cfg, normalized_host_info);
+    program.blocks = GenerateBlocks(program.syntax_list);
+    program.post_order_blocks = PostOrder(program.syntax_list.front());
     program.stage = env.ShaderStage();
     program.local_memory_size = env.LocalMemorySize();
     switch (program.stage) {
@@ -442,13 +433,9 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     default:
         break;
     }
-    {
-        Scope scope{Step::RemoveUnreachable};
-        RemoveUnreachableBlocks(program);
-    }
+    RemoveUnreachableBlocks(program);
 
     // Replace instructions before the SSA rewrite
-    std::optional<Scope> lower_scope{std::in_place, Step::LowerTypes};
     if (!normalized_host_info.support_float64) {
         Optimization::LowerFp64ToFp32(program);
     }
@@ -461,37 +448,26 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     if (!normalized_host_info.support_conditional_barrier) {
         Optimization::ConditionalBarrierPass(program);
     }
-    lower_scope.reset();
-    // Each pass, timed when the translation profile is on.
-    const auto pass = [](Step step, auto&& run) {
-        Scope scope{step};
-        run();
-    };
-    pass(Step::SsaRewrite, [&] { Optimization::SsaRewritePass(program); });
+    Optimization::SsaRewritePass(program);
 
-    pass(Step::ConstantPropagation, [&] { Optimization::ConstantPropagationPass(env, program); });
+    Optimization::ConstantPropagationPass(env, program);
 
-    pass(Step::Position, [&] { Optimization::PositionPass(env, program); });
-    pass(Step::BlitConstants, [&] { Optimization::BlitConstantsPass(env, program); });
+    Optimization::PositionPass(env, program);
+    Optimization::BlitConstantsPass(env, program);
 
-    pass(Step::GlobalMemoryToStorageBuffer, [&] {
-        Optimization::GlobalMemoryToStorageBufferPass(env, program, normalized_host_info);
-    });
-    pass(Step::GeometryCompaction,
-         [&] { Optimization::GeometryCompactionPass(program, normalized_host_info); });
-    pass(Step::Texture, [&] { Optimization::TexturePass(env, program, normalized_host_info); });
+    Optimization::GlobalMemoryToStorageBufferPass(env, program, normalized_host_info);
+    Optimization::GeometryCompactionPass(program, normalized_host_info);
+    Optimization::TexturePass(env, program, normalized_host_info);
 
     if (Settings::values.resolution_info.active) {
-        pass(Step::Rescaling, [&] { Optimization::RescalingPass(program); });
+        Optimization::RescalingPass(program);
     }
-    pass(Step::DeadCodeElimination, [&] {
-        Optimization::DeadCodeEliminationPass(program);
-        TightenOutputVertices(program);
-    });
+    Optimization::DeadCodeEliminationPass(program);
+    TightenOutputVertices(program);
     if (Settings::values.renderer_debug) {
         Optimization::VerificationPass(program);
     }
-    pass(Step::CollectShaderInfo, [&] { Optimization::CollectShaderInfoPass(env, program); });
+    Optimization::CollectShaderInfoPass(env, program);
     program.info.is_task = program.stage == Stage::Task;
     program.info.is_mesh = program.stage == Stage::Mesh;
     if (program.stage == Stage::Mesh) {
@@ -504,19 +480,17 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
             program.info.stores.Set(static_cast<IR::Attribute>(line), true);
         }
     }
-    pass(Step::Layer, [&] { Optimization::LayerPass(program, normalized_host_info); });
-    pass(Step::VendorWorkaround, [&] { Optimization::VendorWorkaroundPass(program); });
+    Optimization::LayerPass(program, normalized_host_info);
+    Optimization::VendorWorkaroundPass(program);
 
-    pass(Step::Interpolation, [&] { CollectInterpolationInfo(env, program); });
-    pass(Step::NvnStorageBuffers, [&] { AddNVNStorageBuffers(program, normalized_host_info); });
-    pass(Step::LimitSampledTextureArrays,
-         [&] { Optimization::LimitSampledTextureArrays(program, normalized_host_info); });
+    CollectInterpolationInfo(env, program);
+    AddNVNStorageBuffers(program, normalized_host_info);
+    Optimization::LimitSampledTextureArrays(program, normalized_host_info);
     return program;
 }
 
 IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b,
                                     Environment& env_vertex_b, const HostTranslateInfo& host_info) {
-    TranslateProfile::Scope profile_scope{TranslateProfile::Step::MergeDualVertex};
     IR::Program result{};
     Optimization::VertexATransformPass(vertex_a);
     Optimization::VertexBTransformPass(vertex_b);
@@ -551,7 +525,6 @@ IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b
 }
 
 void ConvertLegacyToGeneric(IR::Program& program, const Shader::RuntimeInfo& runtime_info) {
-    TranslateProfile::Scope profile_scope{TranslateProfile::Step::ConvertLegacyToGeneric};
     auto& stores = program.info.stores;
     if (stores.Legacy()) {
         std::queue<IR::Attribute> unused_output_generics{};

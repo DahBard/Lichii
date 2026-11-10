@@ -25,6 +25,9 @@
 #include "common/common_types.h"
 #include "core/core.h"
 #include "core/file_sys/nup_writer.h"
+#ifdef LICHII_NX_TOOLS
+#include "yuzu/nx_tools.h"
+#endif
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "qt_common/config/uisettings.h"
@@ -105,6 +108,10 @@ void GameList::SetNupConversionRunning(bool running) {
     nup_conversion_running = running;
 }
 
+void GameList::SetNxToolRunning(bool running) {
+    nx_tool_running = running;
+}
+
 GameList::~GameList() {
     UnloadController();
 }
@@ -142,6 +149,7 @@ bool GameList::IsEmpty() const {
 }
 
 void GameList::OnPopulate() {
+    m_populating = true;
     m_currentView->setEnabled(false);
 
     switch (game_list_mode) {
@@ -219,7 +227,9 @@ void GameList::ResetViewMode() {
     carousel_view->setEnabled(false);
 
     m_currentView->setVisible(true);
-    m_currentView->setEnabled(true);
+    // MainWindow switches the view right after starting the first populate; keep it disabled
+    // until that finishes, as OnPopulate does for every other populate.
+    m_currentView->setEnabled(!m_populating);
     layout->insertWidget(0, m_currentView);
 
     auto view = m_currentView->viewport();
@@ -326,6 +336,7 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
 
     slice(to_add, [watcher](const QStringList& chunk) { watcher->addPaths(chunk); });
 
+    m_populating = false;
     m_currentView->setEnabled(true);
 
     int children_total = 0;
@@ -341,6 +352,12 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
     // TODO: carousel/grid impl.
     item_model->sort(tree_view->header()->sortIndicatorSection(),
                      tree_view->header()->sortIndicatorOrder());
+
+    // A repopulate (a directory removed, deep scan toggled) replaces the rows: apply the search
+    // text the user still has typed to them.
+    if (!search_field->filterText().isEmpty()) {
+        OnTextChanged(search_field->filterText());
+    }
 
     emit PopulatingCompleted();
 }
@@ -455,6 +472,10 @@ void GameList::PopupContextMenu(const QPoint& menu_location) {
     context_menu.exec(m_currentView->viewport()->mapToGlobal(menu_location));
 }
 
+void GameList::SetReportableProgramId(u64 program_id) {
+    reportable_program_id = program_id;
+}
+
 void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::string& path) {
     // TODO(crueter): Refactor this and make it less bad
     QAction* favorite = context_menu.addAction(tr("Favorite"));
@@ -469,10 +490,10 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         context_menu.addAction(tr("Open Transferable Pipeline Cache"));
     const bool has_shader_warm = ShaderWarmFilesExist(program_id);
     QAction* prepare_shaders = context_menu.addAction(
-        has_shader_warm ? tr("Rebuild shader warm-up") : tr("Prepare shaders (warm-up)"));
+        has_shader_warm ? tr("Rebuild Shader Precache") : tr("Build Shader Precache"));
     QAction* delete_shader_warm = nullptr;
     if (has_shader_warm) {
-        delete_shader_warm = context_menu.addAction(tr("Delete shader warm-up"));
+        delete_shader_warm = context_menu.addAction(tr("Delete Shader Precache"));
     }
     QAction* ryujinx = context_menu.addAction(tr("Link to Ryujinx"));
     context_menu.addSeparator();
@@ -507,6 +528,24 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         convert_nup = context_menu.addAction(tr("Convert to NUP..."));
         convert_nup->setEnabled(!nup_conversion_running);
     }
+    QAction* convert_nx = nullptr;
+    QAction* add_to_nx = nullptr;
+    QAction* remove_from_nx = nullptr;
+    QAction* edit_nx_metadata = nullptr;
+#ifdef LICHII_NX_TOOLS
+    if (NxTools::CanConvert(path)) {
+        convert_nx = context_menu.addAction(tr("Convert to NX..."));
+        convert_nx->setEnabled(!nx_tool_running);
+    }
+    if (NxTools::IsNxArchive(path)) {
+        QMenu* nx_menu = context_menu.addMenu(tr("Manage NX Archive"));
+        add_to_nx = nx_menu->addAction(tr("Add Update or DLC..."));
+        remove_from_nx = nx_menu->addAction(tr("Remove Update or DLC..."));
+        nx_menu->addSeparator();
+        edit_nx_metadata = nx_menu->addAction(tr("Edit Title and Icon..."));
+        nx_menu->setEnabled(!nx_tool_running);
+    }
+#endif
 #if !defined(__APPLE__)
     QMenu* shortcut_menu = context_menu.addMenu(tr("Create Shortcut"));
     QAction* create_desktop_shortcut = shortcut_menu->addAction(tr("Add to Desktop"));
@@ -520,6 +559,11 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         edit_nup->setEnabled(!nup_conversion_running);
     }
     QAction* properties = context_menu.addAction(tr("Configure Game"));
+    if (program_id != 0 && program_id == reportable_program_id) {
+        auto* report = context_menu.addAction(tr("Submit compatibility report…"));
+        connect(report, &QAction::triggered, this,
+                [this, program_id] { emit ReportCompatibilityRequested(program_id); });
+    }
 
     favorite->setVisible(program_id != 0);
     favorite->setCheckable(true);
@@ -603,6 +647,18 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         connect(convert_nup, &QAction::triggered, this,
                 [this, path]() { emit ConvertToNupRequested(path); });
     }
+    if (convert_nx) {
+        connect(convert_nx, &QAction::triggered, this,
+                [this, path]() { emit ConvertToNxRequested(path); });
+    }
+    if (add_to_nx) {
+        connect(add_to_nx, &QAction::triggered, this,
+                [this, path]() { emit AddToNxRequested(path); });
+        connect(remove_from_nx, &QAction::triggered, this,
+                [this, path]() { emit RemoveFromNxRequested(path); });
+        connect(edit_nx_metadata, &QAction::triggered, this,
+                [this, path]() { emit EditNxMetadataRequested(path); });
+    }
     if (extract_nup) {
         connect(extract_nup, &QAction::triggered, this,
                 [this, path]() { emit ExtractNupRequested(path); });
@@ -641,10 +697,11 @@ void GameList::AddCustomDirPopup(QMenu& context_menu, QModelIndex selected) {
         game_dir.deep_scan = !game_dir.deep_scan;
         PopulateAsync(UISettings::values.game_dirs);
     });
-    connect(delete_dir, &QAction::triggered, this, [this, &game_dir, selected] {
+    connect(delete_dir, &QAction::triggered, this, [this, &game_dir] {
         UISettings::values.game_dirs.removeOne(game_dir);
-        item_model->invisibleRootItem()->removeRow(selected.row());
-        OnTextChanged(search_field->filterText());
+        // Repopulate instead of removing the row: a running worker adds games under the
+        // directory rows it created, and the other rows' GameDirRole indices would shift.
+        PopulateAsync(UISettings::values.game_dirs);
     });
 }
 

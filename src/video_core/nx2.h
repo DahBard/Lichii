@@ -6,22 +6,36 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstdlib>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <shared_mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "common/bit_util.h"
 #include "common/common_types.h"
-#include "common/nx2_gpu_write_listener.h"
-#include "video_core/nx2_frame_fence.h"
 
 namespace Tegra {
 
 // Set once a Switch 2 (Ampere, NVN2) driver is talking to the GPU. Its command streams use
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
+
+// GPU VA that nx2:gpu GetVaRange and GetUserPartition report to NVN. The in-process
+// allocator hands out addresses in [Nx2GpuVaStart, Nx2GpuVaEnd). NvRm's AllocAsEx range
+// can be smaller; the GMMU page tables still have to cover this one.
+inline constexpr u64 Nx2GpuVaStart = 0x8000000ULL;
+inline constexpr u64 Nx2GpuVaEnd = 0xC000000000ULL;
+
+/// Bytes a Switch 2 GMMU covers when it is sized from Nx2GpuVaEnd. That end is not a
+/// power of two, so the page tables round up (Log2Ceil). NvRm's va_range_end can only
+/// make this larger. A range past it is left mapped, and its backing must stay.
+inline constexpr u64 Nx2GpuAddressSpaceSize = 1ULL << Common::Log2Ceil(Nx2GpuVaEnd);
+static_assert(Nx2GpuAddressSpaceSize == (1ULL << 40));
 
 // Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Title 1
 // runs command lists the GPU writes each frame (20-byte entries its culling fills in); read
@@ -31,26 +45,20 @@ inline std::atomic<bool> g_nx2_ampere{false};
 inline constexpr u64 Nx2WrittenPageBits = 12;
 inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_gpu_written_pages{};
 
-/// Bumped when a page is marked GPU-written for the first time (read by nothing since
-/// EDEN_NX2_LIST_FAST went; a diagnostic count).
-inline std::atomic<u64> g_nx2_new_written_pages{};
-
 inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
     if (size == 0) {
         return;
     }
     const u64 last = std::min<u64>((device_address + size - 1) >> Nx2WrittenPageBits,
                                    g_nx2_gpu_written_pages.size() * 64 - 1);
-    // A word at a time: storage buffer binds mark megabytes, mostly marked already.
+    // A word at a time: storage buffers of several MiB are marked on every draw that binds them.
     for (u64 page = device_address >> Nx2WrittenPageBits; page <= last;) {
         const u64 first_bit = page % 64;
-        const u64 bits = std::min<u64>(64 - first_bit, last - page + 1);
+        const u64 bits = (std::min<u64>)(64 - first_bit, last - page + 1);
         const u64 mask = (bits == 64 ? ~u64{0} : (u64{1} << bits) - 1) << first_bit;
         auto& word = g_nx2_gpu_written_pages[page / 64];
         if ((word.load(std::memory_order_relaxed) & mask) != mask) {
-            if ((word.fetch_or(mask, std::memory_order_relaxed) & mask) != mask) {
-                g_nx2_new_written_pages.fetch_add(1, std::memory_order_relaxed);
-            }
+            word.fetch_or(mask, std::memory_order_relaxed);
         }
         page += bits;
     }
@@ -84,104 +92,6 @@ inline void Nx2MarkCommandListPage(u64 device_address) {
     return (g_nx2_command_list_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
 }
 
-// Query results written when their host work completes (counter reports): per 16-byte slot
-// hash, how many the back issued and how many completed. Equal counts mean the words in memory
-// are final, so the split's front can read them without draining the back.
-inline constexpr u64 Nx2AsyncReportSlots = u64{1} << 16;
-inline std::array<std::atomic<u32>, Nx2AsyncReportSlots> g_nx2_async_reports_issued{};
-inline std::array<std::atomic<u32>, Nx2AsyncReportSlots> g_nx2_async_reports_completed{};
-
-[[nodiscard]] inline u64 Nx2AsyncReportSlot(u64 device_address) {
-    return (device_address >> 4) % Nx2AsyncReportSlots;
-}
-
-[[nodiscard]] inline bool Nx2AsyncReportsSettled(u64 device_address, u64 size) {
-    if (size == 0) {
-        return true;
-    }
-    for (u64 slot = device_address >> 4; slot <= (device_address + size - 1) >> 4; ++slot) {
-        const u64 index = slot % Nx2AsyncReportSlots;
-        if (g_nx2_async_reports_completed[index].load(std::memory_order_acquire) !=
-            g_nx2_async_reports_issued[index].load(std::memory_order_acquire)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Bumped after every completed report; threads in Nx2WaitAsyncReportsSettled wait on it
-// (zortos293/Lichii#559).
-inline std::atomic<u32> g_nx2_async_reports_generation{};
-inline std::atomic<u32> g_nx2_async_reports_waiters{};
-
-/// A report was issued to device_address (the thread that owns the query cache).
-inline void Nx2IssueAsyncReport(u64 device_address) {
-    g_nx2_async_reports_issued[Nx2AsyncReportSlot(device_address)].fetch_add(
-        1, std::memory_order_release);
-}
-
-/// A report's host work completed and its words are in memory (the fencing thread).
-inline void Nx2CompleteAsyncReport(u64 device_address) {
-    g_nx2_async_reports_completed[Nx2AsyncReportSlot(device_address)].fetch_add(
-        1, std::memory_order_release);
-    g_nx2_async_reports_generation.fetch_add(1, std::memory_order_seq_cst);
-    if (g_nx2_async_reports_waiters.load(std::memory_order_seq_cst) != 0) {
-        g_nx2_async_reports_generation.notify_all();
-    }
-}
-
-/// One asynchronous report's issued/completed pair. Complete counts it once, and destruction
-/// does if nothing did: an operation dropped without running (fences discarded when emulation
-/// stops) would otherwise leave its slot unequal for good, and a later wait on that slot would
-/// never end. Owned by the report's operation (shared by its copies); not thread-safe, as the
-/// operation runs or is dropped on one thread at a time.
-class Nx2AsyncReport {
-public:
-    explicit Nx2AsyncReport(u64 device_address_) : device_address{device_address_} {}
-    ~Nx2AsyncReport() {
-        Complete();
-    }
-    Nx2AsyncReport(const Nx2AsyncReport&) = delete;
-    Nx2AsyncReport& operator=(const Nx2AsyncReport&) = delete;
-
-    void Issue() {
-        if (!issued) {
-            issued = true;
-            Nx2IssueAsyncReport(device_address);
-        }
-    }
-    void Complete() {
-        if (issued && !completed) {
-            completed = true;
-            Nx2CompleteAsyncReport(device_address);
-        }
-    }
-
-private:
-    u64 device_address;
-    bool issued{};
-    bool completed{};
-};
-
-/// Blocks until every report issued so far to [device_address, device_address + size) is in
-/// memory. Only for the thread that issues reports, so none can be issued while it waits; the
-/// fences carrying them must already be submitted. A slot shared with another address only
-/// waits for that report too.
-inline void Nx2WaitAsyncReportsSettled(u64 device_address, u64 size) {
-    if (Nx2AsyncReportsSettled(device_address, size)) {
-        return;
-    }
-    g_nx2_async_reports_waiters.fetch_add(1, std::memory_order_seq_cst);
-    for (;;) {
-        const u32 generation = g_nx2_async_reports_generation.load(std::memory_order_seq_cst);
-        if (Nx2AsyncReportsSettled(device_address, size)) {
-            break;
-        }
-        g_nx2_async_reports_generation.wait(generation, std::memory_order_seq_cst);
-    }
-    g_nx2_async_reports_waiters.fetch_sub(1, std::memory_order_relaxed);
-}
-
 /// A new emulation session starts: no page has been written by its GPU yet.
 inline void Nx2ClearGpuWrittenPages() {
     for (auto& word : g_nx2_gpu_written_pages) {
@@ -201,15 +111,9 @@ inline void Nx2ClearGpuWrittenPages() {
     return (g_nx2_gpu_written_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
 }
 
-/// Guest writes of cached pages no GPU write ever marked, collected for the split's back without
-/// OnCPUWrite's cache mutexes (EDEN_NX2_EXP35, Core::Memory::HandleRasterizerWrite); counted for
-/// RasterizerVulkan's guest access log.
-inline std::atomic<u64> g_nx2_guest_writes_collected{};
-/// Guest reads of cached memory sent to the split's back as flush requests because the cache
-/// mutexes stayed taken (EDEN_NX2_EXP60).
-inline std::atomic<u64> g_nx2_guest_reads_handed{};
-
-/// Whether any page of the range may have been written by the GPU (zortos293/Lichii#463).
+/// False only when no page of [device_address, device_address + size) has been GPU-written.
+/// Every range the buffer cache records as GPU-modified also marks its pages here, under its
+/// lock, so this answers MustFlushRegion without taking it. Ranges past the bitmap answer true.
 [[nodiscard]] inline bool Nx2MayBeGpuWritten(u64 device_address, u64 size) {
     if (size == 0) {
         return false;
@@ -227,36 +131,140 @@ inline std::atomic<u64> g_nx2_guest_reads_handed{};
     return false;
 }
 
-inline constexpr size_t Nx2MaxSemaphoreRegions = 32;
-inline std::array<std::atomic<u64>, Nx2MaxSemaphoreRegions> g_nx2_semaphore_regions{}; // starts
+// NVN2 queues release their progress values into the second page of a two-page GPU-accessible
+// region and GPU acquires read the same offsets in the first page (the CPU polls the second).
+// Something on the console copies one into the other; until that is known, the puller mirrors
+// releases that land in a second page. Every queue has such a region, and games make well over
+// 32 of them. Region starts are page aligned, so a lookup is one hash probe.
+inline std::shared_mutex g_nx2_semaphore_regions_mutex;
+inline std::unordered_set<u64> g_nx2_semaphore_regions; // starts
 
 inline void Nx2AddSemaphoreRegion(u64 start) {
-    for (auto& region : g_nx2_semaphore_regions) {
-        if (region.load() == start) {
-            return;
-        }
-    }
-    for (auto& region : g_nx2_semaphore_regions) {
-        u64 expected = 0;
-        if (region.compare_exchange_strong(expected, start)) {
-            return;
-        }
-    }
+    std::unique_lock lock{g_nx2_semaphore_regions_mutex};
+    g_nx2_semaphore_regions.insert(start);
 }
 
 /// The region's memory was destroyed: stop mirroring into it.
 inline void Nx2RemoveSemaphoreRegion(u64 start) {
-    for (auto& region : g_nx2_semaphore_regions) {
-        u64 expected = start;
-        region.compare_exchange_strong(expected, 0);
-    }
+    std::unique_lock lock{g_nx2_semaphore_regions_mutex};
+    g_nx2_semaphore_regions.erase(start);
 }
+
+[[nodiscard]] inline bool Nx2IsSemaphoreRegion(u64 start) {
+    std::shared_lock lock{g_nx2_semaphore_regions_mutex};
+    return g_nx2_semaphore_regions.contains(start);
+}
+
+inline bool Nx2InSemaphoreFirstPage(u64 address) {
+    return Nx2IsSemaphoreRegion(address & ~u64{0xfff});
+}
+
+/// Some first-page words also get direct releases of their own counter (a queue's fence at
+/// offset 0). A mirrored release into such a word would show the guest CPU another counter's
+/// progress, so its waits end before the work they wait for has run. Mirrored releases into
+/// those words go to this table instead, and only GPU acquires read it. Words only the mirror
+/// writes keep getting guest memory writes. Keyed by device word address. Ported from
+/// jpasqui/Eglantine f8941169650 and ca73069b2e.
+class Nx2MirrorShadow {
+public:
+    static Nx2MirrorShadow& Get() {
+        static Nx2MirrorShadow instance;
+        return instance;
+    }
+
+    /// A release that is not the mirror's landed at gpu_address (device_address).
+    void NoteDirectRelease(u64 device_address, u64 gpu_address) {
+        if (!Nx2InSemaphoreFirstPage(gpu_address)) {
+            return;
+        }
+        const u64 word = device_address & ~u64{3};
+        std::scoped_lock lock{mutex};
+        if (direct_words.size() < MaxDirectWords) {
+            direct_words.insert(word);
+            has_direct.store(true, std::memory_order_release);
+        }
+        words.erase(word);
+    }
+
+    /// A direct release that combines with the word it lands on (a QMD max or reduction) took guest
+    /// memory from guest_before to guest_after. While the word holds a mirrored value, GPU acquires
+    /// see combine(mirrored), what the word would hold without the shadow. Returns what they see.
+    template <typename Combine>
+    u32 NoteCombinedRelease(u64 device_address, u64 gpu_address, u32 guest_before, u32 guest_after,
+                            Combine&& combine) {
+        const auto mirrored = Read(device_address, guest_before);
+        NoteDirectRelease(device_address, gpu_address);
+        if (!mirrored) {
+            return guest_after;
+        }
+        const u32 seen = combine(*mirrored);
+        Set(device_address, seen, guest_after);
+        return seen;
+    }
+
+    /// Whether a mirrored release into this word goes to the table instead of guest memory.
+    bool Diverts(u64 device_address) const {
+        if (!has_direct.load(std::memory_order_acquire)) {
+            return false;
+        }
+        std::scoped_lock lock{mutex};
+        return direct_words.contains(device_address & ~u64{3});
+    }
+
+    /// guest: what guest memory holds at the word now.
+    void Set(u64 device_address, u32 value, u32 guest) {
+        std::scoped_lock lock{mutex};
+        words.insert_or_assign(device_address & ~u64{3}, Word{value, guest});
+        has_words.store(true, std::memory_order_release);
+    }
+
+    /// The mirrored value of a word whose guest memory holds guest, or none. Once the guest word
+    /// changed (a direct release or a CPU write), it is newer than the mirrored value.
+    std::optional<u32> Read(u64 device_address, u32 guest) {
+        if (!has_words.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        std::scoped_lock lock{mutex};
+        const auto it = words.find(device_address & ~u64{3});
+        if (it == words.end()) {
+            return std::nullopt;
+        }
+        if (it->second.guest != guest) {
+            words.erase(it);
+            return std::nullopt;
+        }
+        return it->second.value;
+    }
+
+    void Clear() {
+        std::scoped_lock lock{mutex};
+        direct_words.clear();
+        words.clear();
+        has_direct.store(false, std::memory_order_release);
+        has_words.store(false, std::memory_order_release);
+    }
+
+private:
+    struct Word {
+        u32 value;
+        u32 guest;
+    };
+    static constexpr size_t MaxDirectWords = 1024;
+
+    mutable std::mutex mutex;
+    std::atomic<bool> has_direct{};
+    std::atomic<bool> has_words{};
+    std::unordered_set<u64> direct_words;
+    std::unordered_map<u64, Word> words;
+};
 
 /// A new emulation session starts: no queue has a region yet.
 inline void Nx2ClearSemaphoreRegions() {
-    for (auto& region : g_nx2_semaphore_regions) {
-        region.store(0);
+    {
+        std::unique_lock lock{g_nx2_semaphore_regions_mutex};
+        g_nx2_semaphore_regions.clear();
     }
+    Nx2MirrorShadow::Get().Clear();
 }
 
 // Switch 2 sparse regions (nx2:gpu 214, word 7 bit 0x200: title 1's terrain texture arrays and
@@ -463,51 +471,55 @@ inline bool Nx2SparseUnwritten(u64 gpu_address, u64 size) {
     return true;
 }
 
-// GPU semaphore writes as they land in guest memory: EXP13=2 marks the release records they
-// belong to (#717's landed counter, per record: VideoCommon::QmdPrediction::NoteLanded, which
-// sets the hook once it records). The landing sites call it BEFORE they write the word, so a
-// front that reads the new word also finds the record marked.
-enum class Nx2Landing : u32 {
-    QueryCompletion, ///< A query cache payload write when its fence or query completes (plain)
-    QueryImmediate,  ///< A query cache payload write as the back runs it (plain)
-    QmdMax,          ///< A QMD max release: max(word, payload)
-    QmdReduction,    ///< A QMD release reduction's result
-    ReportReduction, ///< A compute report semaphore reduction's result
-};
-inline std::atomic<void (*)(u64, u32, Nx2Landing)> g_nx2_landed_hook{};
-
-/// Whether anything listens for landings (EXP13=2 recorded once this session).
-[[nodiscard]] inline bool Nx2LandedHooked() {
-    return g_nx2_landed_hook.load(std::memory_order_relaxed) != nullptr;
-}
-
-/// A GPU semaphore write of `value` to the u32 at `device_address` is about to land.
-inline void Nx2NoteLanded(u64 device_address, u32 value, Nx2Landing kind) {
-    if (const auto hook = g_nx2_landed_hook.load(std::memory_order_acquire)) [[unlikely]] {
-        hook(device_address, value, kind);
-    }
+/// GPU VA in the first page that mirrors a release at `address`, or 0.
+inline u64 Nx2SemaphoreMirror(u64 address) {
+    return Nx2IsSemaphoreRegion((address & ~u64{0xfff}) - 0x1000) ? address - 0x1000 : 0;
 }
 
 /// Channels suspended on a semaphore acquire. A console channel polls and sees every release;
 /// Eden writes releases in bursts when fences signal and resumes waiters only between command
 /// lists, so an acquire-equal could miss its value. Writes latch the waiters they satisfy.
+/// The channels' acquires (Add, Remove, Latched) all run on the GPU thread (the split's front);
+/// writes (OnWrite) come from the thread that runs the engines. Latched takes no lock: a waiter
+/// polls its own slot, which only its own thread fills and empties.
 class Nx2SemaphoreWaiters {
 public:
     // Puller GpuSemaphoreOperation values.
     static constexpr u32 AcquireEqual = 0x1;
     static constexpr u32 AcquireGequal = 0x4;
     static constexpr u32 AcquireMask = 0x8;
+    /// One per channel suspended at once.
+    static constexpr size_t MaxWaiters = 64;
 
     static Nx2SemaphoreWaiters& Get() {
         static Nx2SemaphoreWaiters waiters;
         return waiters;
     }
 
-    void Add(const void* owner, u64 device_address, u32 value, u32 operation) {
+    /// False, and nothing is latched for owner, when MaxWaiters others wait already.
+    bool Add(const void* owner, u64 device_address, u32 value, u32 operation) {
         std::scoped_lock lk{mutex};
-        std::erase_if(waiters, [owner](const Waiter& w) { return w.owner == owner; });
-        waiters.push_back({owner, device_address, value, operation, false});
-        count.store(waiters.size(), std::memory_order_release);
+        Slot* free_slot = nullptr;
+        for (Slot& slot : slots) {
+            const void* const current = slot.owner.load(std::memory_order_relaxed);
+            if (current == owner) {
+                slot.owner.store(nullptr, std::memory_order_relaxed);
+                count.fetch_sub(1, std::memory_order_relaxed);
+            }
+            if ((current == nullptr || current == owner) && free_slot == nullptr) {
+                free_slot = &slot;
+            }
+        }
+        if (free_slot == nullptr) {
+            return false;
+        }
+        free_slot->address = device_address;
+        free_slot->value = value;
+        free_slot->operation = operation;
+        free_slot->latched.store(false, std::memory_order_relaxed);
+        free_slot->owner.store(owner, std::memory_order_relaxed);
+        count.fetch_add(1, std::memory_order_release);
+        return true;
     }
 
     void Remove(const void* owner) {
@@ -515,123 +527,66 @@ public:
             return;
         }
         std::scoped_lock lk{mutex};
-        std::erase_if(waiters, [owner](const Waiter& w) { return w.owner == owner; });
-        count.store(waiters.size(), std::memory_order_release);
+        for (Slot& slot : slots) {
+            if (slot.owner.load(std::memory_order_relaxed) == owner) {
+                slot.owner.store(nullptr, std::memory_order_relaxed);
+                count.fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
     }
 
-    [[nodiscard]] bool Latched(const void* owner) {
+    [[nodiscard]] bool Latched(const void* owner) const {
         if (count.load(std::memory_order_acquire) == 0) {
             return false;
         }
-        std::scoped_lock lk{mutex};
-        return std::ranges::any_of(waiters,
-                                   [owner](const Waiter& w) { return w.owner == owner && w.latched; });
+        for (const Slot& slot : slots) {
+            if (slot.owner.load(std::memory_order_relaxed) == owner) {
+                // Acquire: what the engine wrote before the latch is visible after it.
+                return slot.latched.load(std::memory_order_acquire);
+            }
+        }
+        return false;
     }
 
-    /// A GPU write of `value` to the u32 at `device_address`.
+    /// A GPU write of value to the u32 at device_address.
     void OnWrite(u64 device_address, u32 value) {
-        // (Common::Nx2GpuWrite::Notify, for Ocarina of Time's present poll, and Nx2NoteLanded
-        // are called by each write site itself.)
         if (count.load(std::memory_order_acquire) == 0) {
             return;
         }
         std::scoped_lock lk{mutex};
-        for (auto& w : waiters) {
-            if (w.address == device_address && !w.latched && Matches(w, value)) {
-                w.latched = true;
+        for (Slot& slot : slots) {
+            if (slot.owner.load(std::memory_order_relaxed) != nullptr &&
+                slot.address == device_address && Matches(slot, value)) {
+                slot.latched.store(true, std::memory_order_release);
             }
         }
     }
 
 private:
-    struct Waiter {
-        const void* owner;
-        u64 address;
-        u32 value;
-        u32 operation;
-        bool latched;
+    struct Slot {
+        std::atomic<const void*> owner{};
+        u64 address{};
+        u32 value{};
+        u32 operation{};
+        std::atomic<bool> latched{};
     };
 
-    static bool Matches(const Waiter& w, u32 current) {
-        switch (w.operation) {
+    static bool Matches(const Slot& slot, u32 current) {
+        switch (slot.operation) {
         case AcquireEqual:
-            return current == w.value;
+            return current == slot.value;
         case AcquireGequal:
-            return current >= w.value;
+            return current >= slot.value;
         case AcquireMask:
-            return (current & w.value) != 0;
+            return (current & slot.value) != 0;
         default:
             return false;
         }
     }
 
-    std::mutex mutex;
-    std::vector<Waiter> waiters;
+    std::mutex mutex; ///< Held to fill, empty and latch slots
+    std::array<Slot, MaxWaiters> slots{};
     std::atomic<size_t> count{};
 };
-
-// Render-frame clock (EDEN_NX2_RENDER_CLOCK=1, fable_answer_16 1b and 17): one count per guest
-// frame, bumped where the frame's last GPU work is, so the texture cache's relocation rules can
-// tell frames apart where the host present tick (mid-stream) cannot. Sources:
-// - by default the flip's frame fence (Nx2FrameFenceClock, video_core/nx2_frame_fence.h),
-//   bumped on the split's back in stream order (FenceManager::SignalSyncPoint);
-// - EDEN_NX2_RENDER_CLOCK_SYNCPT=<id>: every back signal of that syncpoint (manual override);
-// - EDEN_NX2_RENDER_CLOCK=2: a write to the present poll's learned word
-//   (core/hle/kernel/svc/svc_nx2_oot_present.cpp OnGpuWrite, needs EXP24=1). A guest thread
-//   writes that word, so it never fires (fable_answer_17 0); kept to compare.
-// Nothing counts while the texture cache does not want the clock (EDEN_NX2_RENDER_CLOCK or
-// EXP43=4).
-inline std::atomic<bool> g_nx2_render_clock_wanted{false};
-inline std::atomic<u64> g_nx2_render_frame{};
-// Read on first use, not at static initialization: that runs before main() applies
-// nx2_switches.txt, so the file's value would be lost.
-inline int Nx2RenderClockSyncpt() {
-    static const int syncpt = [] {
-        const char* value = std::getenv("EDEN_NX2_RENDER_CLOCK_SYNCPT");
-        return value != nullptr && value[0] != '\0' ? std::atoi(value) : -1;
-    }();
-    return syncpt;
-}
-/// EDEN_NX2_RENDER_CLOCK: 0 unset, 1 the clock, 2 the clock on the poll-word source.
-inline int Nx2RenderClockEnv() {
-    static const int env = [] {
-        // On (1) by default since 2026-11-08: flip-fence clock at 1.00 per host frame, 0 tombstone
-        // hits under EXP43=4, 11 loads 0 washed out. EDEN_NX2_RENDER_CLOCK=0 turns it off.
-        const char* value = std::getenv("EDEN_NX2_RENDER_CLOCK");
-        return value == nullptr ? 1 : value[0] == '1' ? 1 : value[0] == '2' ? 2 : 0;
-    }();
-    return env;
-}
-inline bool Nx2RenderClockWordSource() {
-    return Nx2RenderClockSyncpt() < 0 && Nx2RenderClockEnv() == 2;
-}
-inline bool Nx2RenderClockFlipSource() {
-    return Nx2RenderClockSyncpt() < 0 && Nx2RenderClockEnv() != 2;
-}
-// Syncpoint signals by id while the clock is wanted (logged with the clock).
-inline constexpr size_t Nx2SyncpointSignalSlots = 192;
-inline std::array<std::atomic<u32>, Nx2SyncpointSignalSlots> g_nx2_syncpoint_signals{};
-// Numbers the nx2:syncpt sessions (the frame fence's slot key is (session << 32) | slot).
-inline std::atomic<u32> g_nx2_syncpt_sessions{};
-
-/// The back signals syncpoint `id`, which then reads `new_value` (FenceManager::SignalSyncPoint,
-/// before the increment; only called while the clock is wanted).
-inline void Nx2NoteSyncpointSignal(u32 id, u32 new_value) {
-    if (!g_nx2_render_clock_wanted.load(std::memory_order_relaxed) ||
-        id >= Nx2SyncpointSignalSlots) {
-        return;
-    }
-    g_nx2_syncpoint_signals[id].fetch_add(1, std::memory_order_relaxed);
-    if (const int override_id = Nx2RenderClockSyncpt(); override_id >= 0) {
-        if (static_cast<int>(id) == override_id) {
-            g_nx2_render_frame.fetch_add(1, std::memory_order_relaxed);
-        }
-    } else if (id == g_nx2_frame_fence.syncpoint.load(std::memory_order_relaxed) &&
-               Nx2RenderClockFlipSource()) {
-        if (g_nx2_frame_fence.NoteSignal(new_value)) {
-            g_nx2_render_frame.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-}
 
 } // namespace Tegra

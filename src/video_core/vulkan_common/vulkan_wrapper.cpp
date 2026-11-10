@@ -228,8 +228,13 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkGetMemoryWin32HandleKHR);
 #endif
     X(vkGetQueryPoolResults);
+    X(vkGetDeviceFaultInfoEXT);
     X(vkGetPipelineExecutablePropertiesKHR);
-    X(vkWaitForPresentKHR);
+    X(vkGetPipelineKeyKHR);
+    X(vkCreatePipelineBinariesKHR);
+    X(vkDestroyPipelineBinaryKHR);
+    X(vkGetPipelineBinaryDataKHR);
+    X(vkReleaseCapturedPipelineDataKHR);
     X(vkGetPipelineExecutableStatisticsKHR);
     X(vkGetSemaphoreCounterValue);
     X(vkMapMemory);
@@ -540,15 +545,6 @@ Image::MemoryBlock Image::GetMemoryBlock() const noexcept {
     }
     return {reinterpret_cast<u64>(info.allocationInfo.deviceMemory), info.blockSize,
             info.allocationInfo.size};
-}
-
-bool Image::IsDeviceLocal() const noexcept {
-    if (allocation == nullptr) {
-        return false;
-    }
-    VkMemoryPropertyFlags flags{};
-    vmaGetAllocationMemoryProperties(allocator, allocation, &flags);
-    return (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
 }
 
 void Buffer::Flush() const {

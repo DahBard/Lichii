@@ -6,7 +6,6 @@
 
 #include "common/assert.h"
 #include "common/common_types.h"
-#include "common/nx2_timeline.h"
 #include "common/scratch_buffer.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_scheduler_lock_and_sleep.h"
@@ -43,13 +42,6 @@ public:
 
         // Set the waiting thread as not cancellable.
         waiting_thread->ClearCancellable();
-
-        // Which of the objects ended the wait (the "guest wait" marker names only the first).
-        if (Common::Nx2Timeline::Guest()) [[unlikely]] {
-            Common::Nx2Timeline::Instant(
-                "guest wake object", {"tid", waiting_thread->GetThreadId()},
-                {"object", reinterpret_cast<uintptr_t>(static_cast<const void*>(signaled_object))});
-        }
 
         // Invoke the base end wait handler.
         KThreadQueue::EndWait(kernel, waiting_thread, wait_result);
@@ -144,8 +136,7 @@ Result KSynchronizationObject::Wait(KernelCore& kernel, s32* out_index,
         // Wait for an object to be signaled.
         wait_queue.SetHardwareTimer(timer);
         thread->BeginWait(kernel, std::addressof(wait_queue));
-        thread->SetWaitReasonForDebugging(ThreadWaitReasonForDebugging::Synchronization,
-                                          num_objects > 0 ? objects[0] : nullptr);
+        thread->SetWaitReasonForDebugging(ThreadWaitReasonForDebugging::Synchronization);
     }
 
     // Set the output index.

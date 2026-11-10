@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "common/logging.h"
-#include "common/nx2_timeline.h"
 #include "video_core/host1x/syncpoint_manager.h"
 
 namespace Tegra {
@@ -63,19 +62,14 @@ void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
         LOG_ERROR(HW_GPU, "Ignoring increment of invalid syncpoint {:#x}", syncpoint_id);
         return;
     }
-    Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id],
-              "syncpoint: guest increment", syncpoint_id);
-    if (const auto hook = guest_increment_hook.load(std::memory_order_acquire)) {
-        hook(guest_increment_context.load(std::memory_order_relaxed));
-    }
+    Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id]);
 }
 
 void SyncpointManager::IncrementHost(u32 syncpoint_id) {
     if (syncpoint_id >= NUM_MAX_SYNCPOINTS) {
         return;
     }
-    Increment(syncpoints_host[syncpoint_id], wait_host_cv, host_action_storage[syncpoint_id],
-              "syncpoint: host increment", syncpoint_id);
+    Increment(syncpoints_host[syncpoint_id], wait_host_cv, host_action_storage[syncpoint_id]);
 }
 
 void SyncpointManager::WaitGuest(u32 syncpoint_id, u32 expected_value) {
@@ -87,13 +81,8 @@ void SyncpointManager::WaitHost(u32 syncpoint_id, u32 expected_value) {
 }
 
 void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
-                                 std::list<RegisteredAction>& action_storage,
-                                 const char* timeline_name, u32 syncpoint_id) {
+                                 std::list<RegisteredAction>& action_storage) {
     auto new_value{syncpoint.fetch_add(1, std::memory_order_acq_rel) + 1};
-    // Before the actions it runs: what ends the waits on this value (critical_path.py).
-    if (Common::Nx2Timeline::Active()) {
-        Common::Nx2Timeline::Instant(timeline_name, {"id", syncpoint_id}, {"value", new_value});
-    }
 
     std::scoped_lock lk(guard);
     auto it = action_storage.begin();

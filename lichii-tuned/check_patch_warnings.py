@@ -10,7 +10,7 @@ and test files are skipped: review their added lines by hand.
 Needs clang++, g++ and the Boost headers (Ubuntu: clang g++ libboost-dev). The header-only
 dependencies are cloned at their cpmfile.json versions into --deps.
 
-usage: python3 -I lichii-tuned/check_patch_warnings.py <tuned4 checkout> [--base cbb512ee7]
+usage: python3 -I lichii-tuned/check_patch_warnings.py <tuned4 checkout> [--base d2eaae4f3]
        [--deps DIR] [--jobs N]
 """
 import argparse
@@ -84,7 +84,7 @@ def added_lines(source: pathlib.Path, base: str) -> dict[str, set[int]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=pathlib.Path)
-    parser.add_argument("--base", default="cbb512ee7")
+    parser.add_argument("--base", default="d2eaae4f3")
     parser.add_argument("--deps", type=pathlib.Path,
                         default=pathlib.Path.home() / ".cache" / "lichii-tuned-deps")
     parser.add_argument("--jobs", type=int, default=4)
@@ -116,8 +116,8 @@ def main() -> int:
                 if not re.search(r'diagnostic ignored "-W(shadow|conversion)"', l)))
         paths = ["-I", overlay, "-I", "src", "-I", "src/video_core", "-I", "src/dynarmic/src",
                  "-I", "src/dynarmic/src/dynarmic", "-I", "externals", "-I",
-                 "externals/glad/include", "-I", "externals/tz", "-I",
-                 "externals/ffx-api/include", *includes]
+                 "externals/glad/include", "-I", "externals/tz", "-I", "externals/ffx-api",
+                 "-I", "externals/ffx-api/include", *includes]
 
         def compile_unit(unit: str, flags: list[str]):
             extra = ["-Wconversion", "-Wno-sign-conversion"] if unit.startswith(

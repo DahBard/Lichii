@@ -80,8 +80,6 @@ public:
     static constexpr int FullPathRole = SortRole + 2;
     static constexpr int ProgramIdRole = SortRole + 3;
     static constexpr int FileTypeRole = SortRole + 4;
-    /// The game's icon file as read, before scaling (the Fritchii home cover).
-    static constexpr int IconDataRole = SortRole + 5;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,
@@ -92,9 +90,6 @@ public:
         setData(game_name, TitleRole);
         setData(qulonglong(program_id), ProgramIdRole);
         setData(game_type, FileTypeRole);
-        setData(QByteArray(reinterpret_cast<const char*>(picture_data.data()),
-                           static_cast<qsizetype>(picture_data.size())),
-                IconDataRole);
 
         const auto readable_play_time =
             play_time > 0 ? QObject::tr("Play Time: %1")

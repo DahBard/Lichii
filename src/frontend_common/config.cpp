@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -89,18 +90,23 @@ void Config::WriteToIni() const {
 
     CSimpleIniA::FileWriter writer(fp);
     const SI_Error rc = config->Save(writer, false);
-    fclose(fp);
     if (rc < 0) {
         LOG_ERROR(Frontend, "Config file could not be saved!");
-    } else if (on_written) {
-        on_written(*this);
     }
+    fclose(fp);
 }
 
 void Config::SetUpIni() {
     config = std::make_unique<CSimpleIniA>();
     config->SetUnicode(true);
     config->SetSpaces(false);
+
+#ifndef __ANDROID__
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(FS::ToU8String(config_loc), error);
+    const bool new_global_config = global && status.type() == std::filesystem::file_type::not_found &&
+                                   (!error || error == std::errc::no_such_file_or_directory);
+#endif
 
     FILE* fp = nullptr;
 #ifdef _WIN32
@@ -120,10 +126,28 @@ void Config::SetUpIni() {
         return;
     }
 
-    if (SI_Error rc = config->LoadFile(fp); rc < 0) {
-        LOG_ERROR(Frontend, "Config file could not be loaded!");
-    }
+    const SI_Error rc = config->LoadFile(fp);
     fclose(fp);
+    if (rc < 0) {
+        LOG_ERROR(Frontend, "Config file could not be loaded!");
+        return;
+    }
+
+#ifndef __ANDROID__
+    if (new_global_config) {
+        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
+        const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
+            WriteStringSetting(setting.GetLabel(), value);
+            WriteBooleanSetting(setting.GetLabel() + "\\default", false);
+        };
+        seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+        seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
+        seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
+        seed(Settings::values.async_presentation, ToString(true));
+        seed(Settings::values.use_asynchronous_shaders, ToString(true));
+        EndGroup();
+    }
+#endif
 }
 
 bool Config::IsCustomConfig() const {

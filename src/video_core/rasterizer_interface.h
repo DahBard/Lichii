@@ -44,12 +44,14 @@ enum class LoadCallbackStage {
     Prepare,
     Build,
     Complete,
+    /// The shader precache running before the game starts (programs built / total).
+    /// Last, so the values of the others stay as frontends that know only those expect.
+    Warm,
 };
 using DiskResourceLoadCallback = std::function<void(LoadCallbackStage, std::size_t, std::size_t)>;
 
-/// EXP33 (zortos293/Lichii#337): set while the query cache signals the fence that writes a
-/// fence-flagged report, so the fence manager makes that fence and delays its operation even when
-/// it is empty (FenceManager::SignalFence).
+/// Set while the query cache signals the fence that writes a fence-flagged report, so the fence
+/// manager makes that fence even when it is empty (FenceManager::SignalFence).
 inline thread_local bool g_signaling_query_report_fence = false;
 
 class RasterizerInterface {
@@ -100,17 +102,6 @@ public:
     /// Release all pending fences.
     virtual void ReleaseFences(bool force = true) = 0;
 
-    /// GPU thread, between commands: whether ReleaseFences() would only invalidate the GPU cache
-    /// (FenceManager::FencesQuiet). `epoch` gets FenceWorkEpoch() as of the check.
-    virtual bool FencesQuiet([[maybe_unused]] bool strict, [[maybe_unused]] u64& epoch) {
-        return false;
-    }
-
-    /// Any thread: changes whenever a fence or a fence operation is added.
-    [[nodiscard]] virtual u64 FenceWorkEpoch() const {
-        return 0;
-    }
-
     /// Writes the region's query reports to guest memory, waiting for pending host results.
     virtual void FlushQueryResults(DAddr addr, u64 size) {
         FlushRegion(addr, size, VideoCommon::CacheType::QueryCache);
@@ -123,6 +114,24 @@ public:
     virtual void FlushRegion(DAddr addr, u64 size,
                              VideoCommon::CacheType which = VideoCommon::CacheType::All) = 0;
 
+    /// FlushRegion for a guest CPU read of the region (GPU::OnCPURead), on the GPU thread: a
+    /// cache may submit its downloads without waiting for the host GPU, for FinishRead to write.
+    virtual void FlushRegionForRead(DAddr addr, u64 size) {
+        FlushRegion(addr, size);
+    }
+
+    /// Writes to guest memory what FlushRegionForRead submitted over the region (and anything
+    /// submitted before it), waiting for the host GPU if it must. Any thread: the reading one
+    /// before it reads, and the GPU's side before it writes guest memory there.
+    virtual void FinishRead([[maybe_unused]] DAddr addr, [[maybe_unused]] u64 size) {}
+
+    /// A query result the query cache writes to guest memory later, at a fence or sync point.
+    /// When this returns true, FinishReport once it wrote or dropped it.
+    virtual bool NoteReportPending([[maybe_unused]] DAddr addr, [[maybe_unused]] u64 size) {
+        return false;
+    }
+    virtual void FinishReport([[maybe_unused]] DAddr addr, [[maybe_unused]] u64 size) {}
+
     /// Switch 2, from the GPU thread's front: where a GPU-written command list's words are.
     enum class GpuWrittenList {
         Unknown, ///< Neither: the caller drains, flushes the page and notes it synced
@@ -131,19 +140,27 @@ public:
         /// Draws write the page: ask again with `past_sync` once the split's back ran the work
         /// before the last host-level wait (GpuSplit::WaitForSync)
         NeedsSync,
+        /// Only with `pending_tick`: the copy is not done yet, `*pending_tick` is the host GPU
+        /// tick that completes it. Ask again once IsGpuTickDone(*pending_tick).
+        Pending,
     };
+    /// With `pending_tick`, a copy the GPU is still making returns Pending instead of waiting.
     virtual GpuWrittenList ReadGpuWrittenCommandList([[maybe_unused]] DAddr addr,
                                                      [[maybe_unused]] std::span<u8> out,
-                                                     [[maybe_unused]] bool past_sync) {
+                                                     [[maybe_unused]] bool past_sync,
+                                                     [[maybe_unused]] u64* pending_tick = nullptr) {
         return GpuWrittenList::Unknown;
+    }
+
+    /// Whether the host GPU passed `tick`, without waiting. Asks for deferred work to be
+    /// submitted when the tick is not submitted yet, so it completes.
+    virtual bool IsGpuTickDone([[maybe_unused]] u64 tick) {
+        return true;
     }
 
     /// Switch 2: the front flushed this command list page with the split drained.
     virtual void NoteGpuWrittenCommandListSynced([[maybe_unused]] DAddr page) {}
 
-    /// Switch 2, on the split's back with the front waiting: flushes the command list pages
-    /// `pages` (4 KiB, device addresses) to guest memory, with every page draws wrote since it was
-    /// last flushed, in one GPU round trip.
     virtual void FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) {
         for (const DAddr page : pages) {
             FlushRegion(page, 0x1000, VideoCommon::CacheType::BufferCache);
@@ -162,11 +179,11 @@ public:
         return false;
     }
 
-    /// Whether the query cache still lists a report in the range (pending host results, or
-    /// written and not unregistered yet). Takes only the query cache mutex: callable from the
-    /// split front. Conservative (true) where not implemented.
-    [[nodiscard]] virtual bool HasCachedReports([[maybe_unused]] DAddr addr,
-                                                [[maybe_unused]] u64 size) {
+    /// Any thread: whether the query cache holds reports that can still land in the range, as
+    /// FlushQueryResults writes them out or once their host results come in. Without a query
+    /// cache that can tell, assume so.
+    [[nodiscard]] virtual bool HoldsQueries([[maybe_unused]] DAddr addr,
+                                            [[maybe_unused]] u64 size) {
         return true;
     }
 
@@ -179,10 +196,12 @@ public:
                                     [[maybe_unused]] VideoCommon::CacheType which) {}
 
     virtual void InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) {
-        if (!Settings::values.skip_cpu_inner_invalidation.GetValue()) {
-            for (const auto& [cpu_addr, size] : sequences) {
-                InvalidateRegion(cpu_addr, size);
-            }
+        // The skip keeps the texture cache: software engine writes reach images only here.
+        const auto which = Settings::values.skip_cpu_inner_invalidation.GetValue()
+                               ? VideoCommon::CacheType::TextureCache
+                               : VideoCommon::CacheType::All;
+        for (const auto& [cpu_addr, size] : sequences) {
+            InvalidateRegion(cpu_addr, size, which);
         }
     }
 

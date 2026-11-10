@@ -14,11 +14,17 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
+if(YUZU_TESTS)
+    add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
+endif()
+
 add_executable(yuzu
     Info.plist
     about_dialog.cpp
     about_dialog.h
     aboutdialog.ui
+    compatibility_report.cpp
+    compatibility_report.h
     applets/qt_amiibo_settings.cpp
     applets/qt_amiibo_settings.h
     applets/qt_amiibo_settings.ui
@@ -74,6 +80,8 @@ add_executable(yuzu
     configuration/configure_general.ui
     configuration/configure_graphics.cpp
     configuration/configure_graphics.h
+    configuration/amd_fsr4_panel.cpp
+    configuration/amd_fsr4_panel.h
     configuration/nvidia_dlss_panel.cpp
     configuration/nvidia_dlss_panel.h
     configuration/configure_graphics.ui
@@ -106,6 +114,8 @@ add_executable(yuzu
     configuration/configure_mouse_panning.cpp
     configuration/configure_mouse_panning.h
     configuration/configure_mouse_panning.ui
+    configuration/configure_microphone.cpp
+    configuration/configure_microphone.h
     configuration/configure_motion_touch.cpp
     configuration/configure_motion_touch.h
     configuration/configure_motion_touch.ui
@@ -171,6 +181,7 @@ add_executable(yuzu
     loading_screen.ui
 
     main.cpp
+    nx2_switches.h
 
     multiplayer/chat_room.cpp
     multiplayer/chat_room.h
@@ -204,22 +215,6 @@ add_executable(yuzu
     util/clickable_label.h
     util/controller_navigation.cpp
     util/controller_navigation.h
-    fritchii/fritchii.qrc
-    fritchii/fritchii_ui.cpp
-    fritchii/fritchii_ui.h
-    fritchii/home.cpp
-    fritchii/home.h
-    fritchii/game_controls.cpp
-    fritchii/game_controls.h
-    fritchii/main_window_fritchii.cpp
-    fritchii/perf_overlay.cpp
-    fritchii/perf_overlay.h
-    fritchii/precompile_gate.cpp
-    fritchii/precompile_gate.h
-    fritchii/whats_new.cpp
-    fritchii/whats_new.h
-    util/export_log.cpp
-    util/export_log.h
     util/limitable_input_dialog.cpp
     util/limitable_input_dialog.h
     util/overlay_dialog.cpp
@@ -296,13 +291,6 @@ file(GLOB_RECURSE THEMES ${PROJECT_SOURCE_DIR}/dist/qt_themes/*)
 if (ENABLE_UPDATE_CHECKER)
     target_compile_definitions(yuzu PUBLIC ENABLE_UPDATE_CHECKER)
 endif()
-# fritchii/ includes ui_main.h, which AutoUic already generates for main_window.cpp.
-set_source_files_properties(fritchii/fritchii_ui.cpp fritchii/main_window_fritchii.cpp
-    PROPERTIES SKIP_AUTOUIC ON)
-
-# The updater unpacks the release zip (updater/update_dialog.cpp); Export Log writes one
-# (util/export_log.cpp).
-target_link_libraries(yuzu PRIVATE QuaZip::QuaZip)
 
 if (ENABLE_QT_TRANSLATION)
     set(YUZU_QT_LANGUAGES "${PROJECT_SOURCE_DIR}/dist/languages" CACHE PATH "Path to the translation bundle for the Qt frontend")
@@ -439,6 +427,9 @@ target_link_libraries(yuzu PRIVATE common core input_common frontend_common netw
 target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Charts Qt6::Concurrent Qt6::Network)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(yuzu PRIVATE ZLIB::ZLIB)
+if (WIN32)
+    target_link_libraries(yuzu PRIVATE QuaZip::QuaZip)
+endif()
 target_link_libraries(yuzu PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 if (ENABLE_OPENGL)
     target_link_libraries(yuzu PRIVATE glad)
@@ -476,6 +467,8 @@ if (WIN32 AND NOT YUZU_USE_BUNDLED_QT)
         find_program(WINDEPLOYQT_EXECUTABLE NAMES windeployqt6 windeployqt
                      HINTS "${QT_HOST_PATH}/bin" "${QT_TARGET_PATH}/bin")
     endif()
+    file(GENERATE OUTPUT "$<TARGET_FILE_DIR:yuzu>/qt.conf"
+         CONTENT "[Paths]\nPrefix=.\nPlugins=plugins\n")
     if (WINDEPLOYQT_EXECUTABLE)
         set(YUZU_EXE_DIR "$<TARGET_FILE_DIR:yuzu>")
         add_custom_command(TARGET yuzu POST_BUILD COMMAND ${WINDEPLOYQT_EXECUTABLE} "$<TARGET_FILE:yuzu>" --dir "${YUZU_EXE_DIR}" --libdir "${YUZU_EXE_DIR}" --plugindir "${YUZU_EXE_DIR}/plugins" --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler --no-translations --verbose 0)
@@ -503,5 +496,36 @@ endif()
 
 # Remember that the linker is incredibly stupid.
 target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
+
+# NX archive conversion and editing (nx_tools.cpp) runs nxformat in the process.
+if (TARGET nxformat::nxformat)
+    target_sources(yuzu PRIVATE nx_tools.h nx_tools.cpp)
+    target_link_libraries(yuzu PRIVATE nxformat::nxformat)
+    target_compile_definitions(yuzu PRIVATE LICHII_NX_TOOLS)
+    if (MSVC)
+        # Windows may refuse to load the unsigned DLL (Smart App Control, code integrity
+        # policies); delay-loaded, only the NX tools are lost, and NxTools::LoadNxformat says so.
+        target_link_options(yuzu PRIVATE /DELAYLOAD:nxformat.dll)
+        target_link_libraries(yuzu PRIVATE delayimp)
+    endif()
+endif()
+if (LICHII_NXFORMAT_RUNTIME)
+    add_custom_command(TARGET yuzu POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LICHII_NXFORMAT_RUNTIME}" "$<TARGET_FILE_DIR:yuzu>")
+    if (APPLE)
+        # The copy is beside the executable in Contents/MacOS; the build path recorded for the
+        # imported library doesn't exist on a user's Mac.
+        set_property(TARGET yuzu APPEND PROPERTY BUILD_RPATH "@executable_path")
+    elseif (UNIX)
+        # The release tar.gz ships the library next to the executable and an install puts it in
+        # a private library directory; neither has the build path recorded for the imported
+        # library.
+        include(GNUInstallDirs)
+        set_property(TARGET yuzu APPEND PROPERTY BUILD_RPATH "\$ORIGIN")
+        set_property(TARGET yuzu APPEND PROPERTY INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/lichii")
+        install(FILES "${LICHII_NXFORMAT_RUNTIME}" DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii")
+    endif()
+endif()
 
 create_target_directory_groups(yuzu)

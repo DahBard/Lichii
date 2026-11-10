@@ -4,7 +4,6 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <chrono>
 #include <cstddef>
 #include <limits>
 #include <map>
@@ -14,7 +13,6 @@
 #include "common/container/unordered_map.h"
 #include <utility>
 #include <vector>
-#include "video_core/nx2_debug_control.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "common/bit_util.h"
 #include "common/common_types.h"
@@ -177,7 +175,7 @@ public:
 
         scheduler.Record([query_pool = current_query_pool,
                                  query_index = current_bank_slot](vk::CommandBuffer cmdbuf) {
-            const bool use_precise = VideoCore::Nx2Debug::AccuratePart(2);
+            const bool use_precise = Settings::IsGPULevelHigh();
             cmdbuf.BeginQuery(query_pool, static_cast<u32>(query_index),
                               use_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
         });
@@ -218,24 +216,19 @@ public:
         PauseCounter();
         // A title that counts without resetting or reporting grows the query by a slot at every
         // submission and render pass, and the query keeps every bank it touches alive. Ocarina of
-        // Time's title screen and file select reached 16,384 slots over 64 banks (its gameplay
-        // windows span at most 36 slots). Past a bank, drop the count as a reset would.
-        // EDEN_NX2_EXP16=<slots> raises the limit (zortos293/Lichii#558/#570 for Ocarina's
-        // flickering water and windows; 16,384 hung AMD with the split GPU thread). Resets are
-        // logged every 5 s while they happen.
-        const int limit_setting = VideoCore::Nx2Debug::Experiment(16);
-        const size_t limit =
-            limit_setting > 0 ? static_cast<size_t>(limit_setting) : SamplesQueryBank::BANK_SIZE;
-        if (current_query && current_query->size_slots > limit) {
-            static u64 resets{};
-            static auto since = std::chrono::steady_clock::now();
-            ++resets;
-            if (const auto now = std::chrono::steady_clock::now();
-                now - since >= std::chrono::seconds{5}) {
-                LOG_INFO(Render_Vulkan, "Occlusion counter resets past {} slots: {} in {:.1f} s", limit,
-                         resets, std::chrono::duration<double>(now - since).count());
-                resets = 0;
-                since = now;
+        // Time's title screen and file select reached 16,384 slots over 64 banks, while gameplay
+        // windows in Hyrule Field, Kakariko Village, and the Shooting Gallery reach up to 346
+        // slots across two banks. Past 4 banks (1,024 slots), drop the count as a reset would.
+        static constexpr size_t MaxRunningQuerySlots = 4 * SamplesQueryBank::BANK_SIZE;
+        if (current_query && current_query->size_slots > MaxRunningQuerySlots) {
+            // It drops a real count. Logged on the 1st, 2nd, 4th, 8th... drop, so a window this
+            // long during gameplay doesn't go unnoticed and a title screen doesn't flood the log.
+            ++bank_bound_resets;
+            if ((bank_bound_resets & (bank_bound_resets - 1)) == 0) {
+                LOG_WARNING(Render_Vulkan,
+                            "Samples query ran {} slots with no reset or report, dropped its "
+                            "count (drop {})",
+                            current_query->size_slots, bank_bound_resets);
             }
             ResetCounter();
         }
@@ -675,6 +668,7 @@ private:
     bool accumulation_since_last_sync{};
     VideoCommon::HostQueryBase* current_query;
     bool has_started{};
+    u64 bank_bound_resets{}; ///< Counts CloseCounter dropped once a query outgrew the bank bound.
     std::mutex flush_guard;
     std::optional<QueriesPrefixScanPass> queries_prefix_scan_pass;
 };
@@ -1425,9 +1419,6 @@ struct QueryCacheRuntimeImpl {
     VkConditionalRenderingBeginInfoEXT hcr_setup;
     VkBuffer hcr_buffer;
     size_t hcr_offset;
-    /// The guest bytes hcr_setup reads when they are a guest buffer's, 0 when it reads the
-    /// resolve buffer. Each resume reads them again, in the submission it is recorded in.
-    DAddr hcr_guest_address{};
     bool hcr_is_set;
     bool is_hcr_running;
 
@@ -1458,7 +1449,6 @@ void QueryCacheRuntime::EndHostConditionalRendering() {
     impl->is_hcr_running = false;
     impl->hcr_buffer = VkBuffer{};
     impl->hcr_offset = 0;
-    impl->hcr_guest_address = 0;
 }
 
 void QueryCacheRuntime::PauseHostConditionalRendering() {
@@ -1477,11 +1467,6 @@ void QueryCacheRuntime::ResumeHostConditionalRendering() {
         return;
     }
     if (!impl->is_hcr_running) {
-        if (impl->hcr_guest_address != 0) {
-            // An upload of the predicate later in this submission must run after this read.
-            std::scoped_lock lk(impl->buffer_cache.mutex);
-            impl->buffer_cache.MarkUsed(impl->hcr_guest_address, 8);
-        }
         impl->scheduler.Record([hcr_setup = impl->hcr_setup](vk::CommandBuffer cmdbuf) {
             cmdbuf.BeginConditionalRenderingEXT(hcr_setup);
         });
@@ -1512,7 +1497,6 @@ void QueryCacheRuntime::HostConditionalRenderingCompareValueImpl(VideoCommon::Lo
     }
     impl->hcr_setup.buffer = impl->hcr_buffer;
     impl->hcr_setup.offset = impl->hcr_offset;
-    impl->hcr_guest_address = object.address;
     impl->hcr_setup.flags = is_equal ? VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT : 0;
     impl->hcr_is_set = true;
     impl->is_hcr_running = false;
@@ -1542,7 +1526,6 @@ void QueryCacheRuntime::HostConditionalRenderingCompareBCImpl(DAddr address, boo
     impl->conditional_resolve_pass->Resolve(*impl->hcr_resolve_buffer, to_resolve,
                                             to_resolve_offset, compare_to_zero);
     impl->hcr_setup.buffer = *impl->hcr_resolve_buffer;
-    impl->hcr_guest_address = 0;
     impl->hcr_setup.offset = 0;
     impl->hcr_setup.flags = is_equal ? 0 : VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT;
     impl->hcr_is_set = true;
@@ -1764,6 +1747,11 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
             impl->buffers_to_upload_to.emplace_back(buffer->Handle(), offset);
         }
     });
+    // The copies below are GPU writes the buffer cache doesn't record: reads taken before them
+    // must not keep the bytes they downloaded as the newest.
+    for (const auto& value : values) {
+        impl->buffer_cache.OutdateReadDownloads(value.address, value.size);
+    }
 
     VkBuffer src_buffer;
     [[maybe_unused]] StagingBufferRef ref;

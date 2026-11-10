@@ -20,10 +20,19 @@ namespace Common {
 
 class Event {
 public:
+#ifdef _WIN32
+    ~Event();
+#endif
+
     void Set() {
         std::scoped_lock lk{mutex};
         if (!is_set) {
             is_set = true;
+#ifdef _WIN32
+            if (sleepers != 0) {
+                WakeSleeper();
+            }
+#endif
             condvar.notify_one();
         }
     }
@@ -35,6 +44,10 @@ public:
     }
 
     bool WaitFor(const std::chrono::nanoseconds time);
+
+    /// Like WaitFor, but always blocks in the OS. On Windows, WaitFor keeps the thread running
+    /// in a hardware wait; this sleeps on a high-resolution waitable timer instead.
+    bool SleepFor(const std::chrono::nanoseconds time);
 
     template<class Clock, class Duration>
     bool WaitUntil(const std::chrono::time_point<Clock, Duration> time) {
@@ -57,9 +70,17 @@ public:
     }
 
 private:
+#ifdef _WIN32
+    void WakeSleeper();
+#endif
+
     alignas(64) std::atomic<bool> is_set{false};
     std::condition_variable condvar;
     std::mutex mutex;
+#ifdef _WIN32
+    void* sleep_wake{};
+    u32 sleepers{};
+#endif
 };
 
 class Barrier {
@@ -108,25 +129,17 @@ enum class ThreadPlacement : u32 {
 void SetCurrentThreadPriority(ThreadPriority new_priority);
 void SetCurrentThreadName(const char* name);
 void SetCurrentThreadToPerformanceCores();
-
-/// Windows: one physical performance core each for the split GPU thread's halves and the guest
-/// cores kept off them, so an SMT sibling never shares the GPU threads' core. See
-/// ThreadPinning::MakePlan for when it applies; EDEN_NX2_PIN_THREADS=0 turns it off, 1 forces it.
-enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
-/// `guest_core`: the guest core index for GuestCore. With EDEN_NX2_GUEST_PIN_EACH=1 each guest core
-/// gets one physical core of the guest set to itself (its SMT siblings) instead of the whole set.
-void PinCurrentThread(PinnedRole role, int guest_core = -1);
-/// Windows: the processor group 0 logical processors background work should use to stay off the
-/// cores pinned to the GPU threads (and their L3 cache where the CPU has several). 0 while nothing
-/// is pinned, and elsewhere.
-[[nodiscard]] u64 BackgroundWorkCpuMask();
-/// Windows: hard affinity to `mask` (group 0), or with 0 to every CPU the process may use.
-void SetCurrentThreadCpuMask(u64 mask);
-/// THREAD_PRIORITY_IDLE on Windows, ThreadPriority::Low elsewhere.
-void SetCurrentThreadIdlePriority();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
+
+enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
+
+/// The experimental pin_gpu_threads setting (Windows and Linux): the split GPU thread's front and
+/// back each get a physical performance core of their own and the guest cores keep off those two.
+/// Skipped, with one log line, on CPUs with too few cores, with EDEN_HYBRID_CORES=0 (Windows), and
+/// on other hosts.
+void PinCurrentThread(PinnedRole role);
 
 void RefreshThreadPolicies();
 void PollThreadPolicies();

@@ -181,6 +181,11 @@ struct WordManager {
             if (type == Type::GPU)
                 mask &= ~untracked_words[index];
             const u64 word = state_words[index] & mask;
+            if (word == 0 &&
+                (!clear || ((type != Type::CPU && type != Type::CachedCPU) ||
+                            (untracked_words[index] & mask) == 0))) {
+                return;
+            }
             if (clear) {
                 if (type == Type::CPU || type == Type::CachedCPU) {
                     CollectChangedRanges(true, index, untracked_words[index], mask, ranges);
@@ -231,24 +236,6 @@ struct WordManager {
             return (state_words[index] & mask) != 0 ? (result = true) : false;
         });
         return result;
-    }
-
-    /// Every page of the region CPU-modified, and none GPU-modified or Preflushable (the raw bits,
-    /// Untracked not masked out): its host contents are all stale (BufferCache::JoinOverlap).
-    [[nodiscard]] bool IsRegionWhollyCpuModified(u64 offset, u64 size) const noexcept {
-        const std::span<const u64> cpu_words = Span(Type::CPU);
-        const std::span<const u64> gpu_words = Span(Type::GPU);
-        const std::span<const u64> preflush_words = Span(Type::Preflushable);
-        bool whole = true;
-        IterateWords(offset, size, [&](size_t index, u64 mask) {
-            if ((cpu_words[index] & mask) != mask || (gpu_words[index] & mask) != 0 ||
-                (preflush_words[index] & mask) != 0) {
-                whole = false;
-                return true;
-            }
-            return false;
-        });
-        return whole;
     }
 
     /// @brief Returns a begin end pair with the inclusive modified region
@@ -311,7 +298,7 @@ struct WordManager {
         if (ranges.empty())
             return;
         std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-        if (Nx2Perf::On(Nx2Perf::Opt::SortedPageBatches) && !Nx2Perf::Verify()) {
+        if (!Nx2Perf::Verify()) {
             CoalesceInPlace(ranges);
             tracker->UpdatePagesCachedBatch(
                 std::span<const std::pair<VAddr, size_t>>(ranges.data(), ranges.size()), delta);
@@ -333,14 +320,12 @@ struct WordManager {
             }
         }
         coalesced.emplace_back(cur_addr, cur_size);
-        if (Nx2Perf::On(Nx2Perf::Opt::SortedPageBatches)) {
-            CoalesceInPlace(ranges);
-            static std::atomic<u32> logged{};
-            if (!std::ranges::equal(ranges, coalesced) &&
-                logged.fetch_add(1, std::memory_order_relaxed) < 64) {
-                LOG_ERROR(HW_GPU, "Nx2Perf texture-writes: tracker runs from {:#x} coalesced differently",
-                          coalesced.front().first);
-            }
+        CoalesceInPlace(ranges);
+        static std::atomic<u32> logged{};
+        if (!std::ranges::equal(ranges, coalesced) &&
+            logged.fetch_add(1, std::memory_order_relaxed) < 64) {
+            LOG_ERROR(HW_GPU, "Nx2Perf texture-writes: tracker runs from {:#x} coalesced differently",
+                      coalesced.front().first);
         }
         // Use batch API to reduce lock acquisitions and contention.
         tracker->UpdatePagesCachedBatch(coalesced, delta);

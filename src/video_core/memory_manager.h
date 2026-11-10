@@ -11,7 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <shared_mutex>
+#include <source_location>
 #include <vector>
 #include <boost/container/small_vector.hpp>
 
@@ -48,13 +48,6 @@ public:
     // Switch 2: GPU address of the read-only syncpoint shim (u32 per syncpoint); 0 = none.
     void SetNativeSyncpointShim(GPUVAddr address);
     static constexpr u32 NumShimSyncpoints = 192; // Tegra::Host1x::SyncpointManager
-    /// Whether [address, address + size) reads syncpoint values through the shim (they change
-    /// when the GPU thread signals a syncpoint, not through guest memory).
-    [[nodiscard]] bool OverlapsNativeSyncpointShim(GPUVAddr address, u64 size) const {
-        const GPUVAddr shim = native_syncpoint_shim.load(std::memory_order_acquire);
-        return shim != 0 && address < shim + NumShimSyncpoints * sizeof(u32) &&
-               address + size > shim;
-    }
 
     /// Switch 2 lays out block-linear surfaces with the console's GOB swizzle.
     void EnableNativeTiling() {
@@ -87,18 +80,6 @@ public:
     [[nodiscard]] u8* GetPointer(GPUVAddr addr);
     [[nodiscard]] const u8* GetPointer(GPUVAddr addr) const;
 
-    /// EDEN_NX2_HANDLE_PTR_CACHE=1 (default off): the texture handle words and the texture and
-    /// sampler descriptor entries every draw reads go through this thread's host pointers of the
-    /// 16 device pages (4 KiB) it read last, instead of a page table walk each. They are dropped
-    /// when this manager maps, remaps or unmaps anything, or the device memory does. The value
-    /// is still read from guest memory every time.
-    [[nodiscard]] static bool HandlePointerCacheEnabled();
-    /// Read<u32> through the cached page pointers when HandlePointerCacheEnabled.
-    [[nodiscard]] u32 ReadHandleWord(GPUVAddr addr) const;
-    /// GetPointer through the cached page pointers when HandlePointerCacheEnabled (callers read
-    /// within the page of `addr` only).
-    [[nodiscard]] const u8* GetPointerForDescriptor(GPUVAddr addr) const;
-
     template <typename T>
     [[nodiscard]] inline T* GetPointer(GPUVAddr addr) noexcept {
         const auto address = GpuToCpuAddress(addr);
@@ -118,7 +99,8 @@ public:
      * in the Host Memory counterpart. Note: This functions cause Host GPU Memory
      * Flushes and Invalidations, respectively to each operation.
      */
-    void ReadBlock(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size, VideoCommon::CacheType which = VideoCommon::CacheType::All) const;
+    void ReadBlock(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size, VideoCommon::CacheType which = VideoCommon::CacheType::All,
+                   std::source_location caller = std::source_location::current()) const;
     void WriteBlock(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size, VideoCommon::CacheType which = VideoCommon::CacheType::All);
     void CopyBlock(GPUVAddr gpu_dest_addr, GPUVAddr gpu_src_addr, std::size_t size, VideoCommon::CacheType which = VideoCommon::CacheType::All);
 
@@ -132,23 +114,14 @@ public:
      * WriteBlockUnsafe instead of WriteBlock since it shouldn't invalidate the texture
      * being flushed.
      */
-    void ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size) const;
+    void ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size,
+                         std::source_location caller = std::source_location::current()) const;
     void WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size);
-
-    /// ReadBlockUnsafe for a thread that is not the GPU thread (EDEN_NX2_ASYNC_TRANSLATE: the
-    /// translation workers' texture descriptor reads). Holds the page table lock shared, so Map,
-    /// MapSparse and Unmap can't change the tables under the copy. Gives up (false, nothing read)
-    /// when a writer keeps the lock for 2 ms: a writer can wait on the GPU thread (the caches'
-    /// unmap callbacks), so a worker never waits on one without a limit.
-    [[nodiscard]] bool ReadBlockGuarded(GPUVAddr gpu_src_addr, void* dest_buffer,
-                                        std::size_t size) const;
-    /// IsFullyMappedRange under the same lock, with the same limit (nullopt when it gave up).
-    [[nodiscard]] std::optional<bool> IsFullyMappedRangeGuarded(GPUVAddr gpu_addr,
-                                                                std::size_t size) const;
 
     /// Reads `count` consecutive words as Read<u32> would (Switch 2 syncpoint shim included),
     /// without a translation per word.
-    void ReadWordsUnsafe(GPUVAddr gpu_src_addr, u32* dest, std::size_t count) const;
+    void ReadWordsUnsafe(GPUVAddr gpu_src_addr, u32* dest, std::size_t count,
+                         std::source_location caller = std::source_location::current()) const;
     void WriteBlockCached(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size);
     /// WriteBlockCached of `count` consecutive words within one device page, in a single write.
     void WriteWordsCached(GPUVAddr gpu_dest_addr, const u32* words, std::size_t count);
@@ -176,6 +149,11 @@ public:
     boost::container::small_vector<std::pair<GPUVAddr, std::size_t>, 32> GetSubmappedRange(
         GPUVAddr gpu_addr, std::size_t size) const;
 
+    /// The device ranges [gpu_addr, gpu_addr + size) maps to (contiguous pages merged), up to the
+    /// end of the address space.
+    boost::container::small_vector<std::pair<DAddr, std::size_t>, 32> GetSubmappedDeviceRange(
+        GPUVAddr gpu_addr, std::size_t size) const;
+
     GPUVAddr Map(GPUVAddr gpu_addr, DAddr dev_addr, std::size_t size,
                  PTEKind kind = PTEKind::INVALID, bool is_big_pages = true);
     GPUVAddr MapSparse(GPUVAddr gpu_addr, std::size_t size, bool is_big_pages = true);
@@ -192,10 +170,16 @@ public:
 
     size_t MaxContinuousRange(GPUVAddr gpu_addr, size_t size) const;
 
-    /// Bumped after each page table change: lookups cached under one value stay valid until then.
     [[nodiscard]] u64 MapSerial() const {
         return map_serial.load(std::memory_order_acquire);
     }
+
+    /// Changes whenever this address space or the device memory behind it is mapped or unmapped:
+    /// a host pointer GetPointer returned is only good while it stays the same.
+    [[nodiscard]] u64 HostPointerSerial() const {
+        return MapSerial() + memory.TranslationGeneration();
+    }
+
     /// MaxContinuousRange by walking the page tables (the answer with Nx2Perf off).
     size_t MaxContinuousRangeUncached(GPUVAddr gpu_addr, size_t size) const;
 
@@ -241,7 +225,8 @@ private:
     void UpdateContinuousRuns(GPUVAddr gpu_addr, size_t size);
     const MappingSnapshot& CurrentSnapshot() const;
 
-    void ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size, VideoCommon::CacheType which, bool unsafe) const;
+    void ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size, VideoCommon::CacheType which, bool unsafe,
+                       std::source_location caller) const;
     void WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size, VideoCommon::CacheType which, bool unsafe);
 
     [[nodiscard]] std::size_t PageEntryIndex(GPUVAddr gpu_addr, bool is_big_page) const {
@@ -259,9 +244,6 @@ private:
     void GetSubmappedRangeImpl(
         GPUVAddr gpu_addr, std::size_t size,
         boost::container::small_vector<std::pair<std::conditional_t<is_gpu_address, GPUVAddr, DAddr>, std::size_t>, 32>& result) const;
-
-    /// Host pointer of `addr` through this thread's cached page pointers (HandlePointerCacheEnabled).
-    const u8* CachedPagePointer(GPUVAddr addr) const;
 
     std::atomic<GPUVAddr> native_syncpoint_shim{};
     Core::System& system;
@@ -308,12 +290,6 @@ private:
 
     bool native_tiling{};
     mutable std::mutex guard;
-    /// Taken exclusively by Map, MapSparse and Unmap around their page table updates while
-    /// translation workers read guest memory (VideoCommon::AsyncTranslateWorkers), shared by the
-    /// guarded reads. Untouched otherwise.
-    mutable std::shared_mutex page_table_lock;
-    /// Shared lock of page_table_lock, waiting 2 ms at most.
-    [[nodiscard]] bool TryLockPageTableShared() const;
     /// Bumped after each page table change; readers keep their MappingSnapshot until then.
     std::atomic<u64> map_serial{};
 

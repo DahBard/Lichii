@@ -180,8 +180,9 @@ void CpuManager::RunThread(std::stop_token token, std::size_t core) {
     Common::SetCurrentThreadName(name.c_str());
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
     Common::SetCurrentThreadToPerformanceCores();
-    Common::PinCurrentThread(Common::PinnedRole::GuestCore,
-                             is_multicore ? static_cast<int>(core) : -1);
+    if (Settings::values.pin_gpu_threads.GetValue()) {
+        Common::PinCurrentThread(Common::PinnedRole::GuestCore);
+    }
     auto& data = core_data[core];
     data.host_context = Common::Fiber::ThreadToFiber();
 

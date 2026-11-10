@@ -17,9 +17,7 @@
 #include <QVBoxLayout>
 
 #include "common/settings.h"
-#include "qt_common/config/uisettings.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
-#include "yuzu/fritchii/fritchii_ui.h"
 #include "yuzu/shader_warm_dialog.h"
 
 namespace ShaderWarm = VideoCommon::ShaderWarm;
@@ -29,23 +27,11 @@ bool ShaderWarmFilesExist(u64 title_id) {
         return false;
     }
     std::error_code ec;
-    return std::filesystem::exists(ShaderWarm::ComputeWarmPath(title_id), ec) ||
-           std::filesystem::exists(ShaderWarm::GraphicsWarmPath(title_id), ec);
+    return std::filesystem::exists(ShaderWarm::ComputeWarmPath(title_id), ec);
 }
 
 bool DeleteShaderWarmFiles(u64 title_id, std::string& error) {
     return ShaderWarm::DeleteWarmFiles(title_id, &error);
-}
-
-QString TakeShaderCacheTip() {
-    if (UISettings::values.shader_warm_cache_tip_shown.GetValue()) {
-        return {};
-    }
-    UISettings::values.shader_warm_cache_tip_shown.SetValue(true);
-    return ShaderWarmDialog::tr(
-        "Tip for NVIDIA GPUs: the compiled shaders are kept in the driver's shader cache. In the "
-        "NVIDIA Control Panel, Manage 3D settings, set Shader Cache Size to 10 GB or Unlimited; "
-        "a full cache throws them away and the warm-up has to run again.");
 }
 
 namespace {
@@ -62,25 +48,18 @@ QString StageText(const std::string& stage) {
         return ShaderWarmDialog::tr("Converting shaders");
     }
     if (stage == "Writing") {
-        return ShaderWarmDialog::tr("Writing warm-up files");
+        return ShaderWarmDialog::tr("Writing the precache file");
     }
     return QString::fromStdString(stage);
 }
 
-bool ShaderLibrariesOn() {
-    if (Settings::values.use_graphics_pipeline_library.GetValue()) {
-        return true;
-    }
-    const char* value = std::getenv("EDEN_NX2_GPL");
-    return value && *value && *value != '0';
-}
-
 } // namespace
 
+/// Builds the stage label, progress bar, result text and the Cancel/Close button.
 ShaderWarmDialog::ShaderWarmDialog(Core::System& system_, std::filesystem::path game_path_,
                                    u64 title_id_, const QString& game_name, QWidget* parent)
     : QDialog(parent), system{system_}, game_path{std::move(game_path_)}, title_id{title_id_} {
-    setWindowTitle(tr("Prepare shaders: %1").arg(game_name));
+    setWindowTitle(tr("Precache shaders: %1").arg(game_name));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(false);
     setMinimumWidth(420);
@@ -106,26 +85,13 @@ ShaderWarmDialog::ShaderWarmDialog(Core::System& system_, std::filesystem::path 
     buttons->addWidget(button);
 
     auto* layout = new QVBoxLayout(this);
-    if (FritchiiUi::Enabled()) {
-        // Players compared this window's program counts with the ~120,000 pipelines of the
-        // Preparing shaders screen and thought shaders were missing (2026-11-09).
-        auto* note = new QLabel(tr("<b>Optional quick warm-up.</b><br>The full preparation "
-                                   "(about 120,000 shaders for OoT) runs by itself on the "
-                                   "\"Preparing shaders\" screen when you start the game."),
-                                this);
-        note->setWordWrap(true);
-        QFont font = note->font();
-        font.setPointSizeF(font.pointSizeF() * 1.2);
-        note->setFont(font);
-        note->setContentsMargins(0, 0, 0, 8);
-        layout->addWidget(note);
-    }
     layout->addWidget(stage_label);
     layout->addWidget(progress_bar);
     layout->addWidget(result_label);
     layout->addLayout(buttons);
 }
 
+/// Stops and joins a running build.
 ShaderWarmDialog::~ShaderWarmDialog() {
     if (worker.joinable()) {
         worker.request_stop();
@@ -133,6 +99,8 @@ ShaderWarmDialog::~ShaderWarmDialog() {
     }
 }
 
+/// Starts the build on a worker thread. Progress (at most every 100 ms unless the stage changes)
+/// and the result, failures included, come back on the UI thread.
 void ShaderWarmDialog::Start() {
     if (running) {
         return;
@@ -177,6 +145,7 @@ void ShaderWarmDialog::Start() {
     });
 }
 
+/// Asks a running build to stop and disables the button until it has.
 void ShaderWarmDialog::RequestStop() {
     if (!running || stopping) {
         return;
@@ -187,6 +156,7 @@ void ShaderWarmDialog::RequestStop() {
     button->setEnabled(false);
 }
 
+/// Shows the stage and its progress; a busy bar when the total is unknown.
 void ShaderWarmDialog::OnProgress(const QString& stage, qulonglong done, qulonglong total) {
     if (stopping) {
         return;
@@ -201,6 +171,7 @@ void ShaderWarmDialog::OnProgress(const QString& stage, qulonglong done, qulongl
     }
 }
 
+/// Joins the worker and shows the result: program counts, stopped, or the error text.
 void ShaderWarmDialog::OnFinished(const ShaderWarm::Result& result, bool stopped) {
     running = false;
     if (worker.joinable()) {
@@ -211,35 +182,30 @@ void ShaderWarmDialog::OnFinished(const ShaderWarm::Result& result, bool stopped
 
     QString text;
     if (result.ok) {
-        stage_label->setText(tr("Shader warm-up is ready."));
-        text = tr("Compute programs: %L1\nVertex programs: %L2\nFragment programs: %L3")
-                   .arg(static_cast<qulonglong>(result.compute_programs))
-                   .arg(static_cast<qulonglong>(result.vertex_programs))
-                   .arg(static_cast<qulonglong>(result.fragment_programs));
+        stage_label->setText(tr("Shader precache is ready."));
+        if (result.compute_programs == 0) {
+            text = result.archives == 0
+                       ? tr("This game keeps its shaders in a format Lichii can't read, so none "
+                            "are prepared from the game files.")
+                       : tr("The game files have no compute shaders to prepare.");
+            text += QLatin1Char(' ') +
+                    tr("The shaders your earlier play sessions saved are still precached.");
+        } else {
+            text = tr("Compute programs: %L1")
+                       .arg(static_cast<qulonglong>(result.compute_programs));
+        }
         if (result.skipped > 0) {
             text += QLatin1Char('\n') +
                     tr("Skipped (could not be read or converted): %L1")
                         .arg(static_cast<qulonglong>(result.skipped));
         }
         text += QStringLiteral("\n\n") +
-                tr("Next, start the game: the shaders are compiled for your GPU while the game "
-                   "is paused, or right away with Emulation > Prepare Shaders Now (a title "
-                   "screen is a good place). It never slows the game down on its own, and it "
-                   "is done once per driver version.");
-        // Not in Fritchii: its Preparing shaders screen builds the graphics part, and shader
-        // libraries stay off on AMD's Windows driver on purpose (they crash there).
-        if (!ShaderLibrariesOn() && !FritchiiUi::Enabled()) {
-            text += QLatin1Char(' ') +
-                    tr("The graphics part also needs Shader libraries, in Configure, Graphics, "
-                       "Advanced.");
-        }
-        if (const QString tip = TakeShaderCacheTip(); !tip.isEmpty()) {
-            text += QStringLiteral("\n\n") + tip;
-        }
+                tr("It is built on the loading screen when Precache shaders before game start is "
+                   "on.");
     } else if (stopped) {
-        stage_label->setText(tr("Shader warm-up stopped."));
+        stage_label->setText(tr("Shader precache stopped."));
     } else {
-        stage_label->setText(tr("Shader warm-up could not be built."));
+        stage_label->setText(tr("Shader precache could not be built."));
         text = result.error.empty() ? tr("No details were given.")
                                     : QString::fromStdString(result.error);
     }
@@ -251,6 +217,7 @@ void ShaderWarmDialog::OnFinished(const ShaderWarm::Result& result, bool stopped
     emit BuildFinished(result.ok);
 }
 
+/// Closing while a build runs only asks it to stop.
 void ShaderWarmDialog::closeEvent(QCloseEvent* event) {
     if (running) {
         RequestStop();
@@ -260,6 +227,7 @@ void ShaderWarmDialog::closeEvent(QCloseEvent* event) {
     QDialog::closeEvent(event);
 }
 
+/// Escape or Cancel while a build runs only asks it to stop.
 void ShaderWarmDialog::reject() {
     if (running) {
         RequestStop();

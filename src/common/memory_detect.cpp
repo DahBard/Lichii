@@ -8,7 +8,6 @@
 #include <psapi.h>
 // clang-format on
 #else
-#include <sys/resource.h>
 #include <sys/types.h>
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
@@ -17,6 +16,14 @@
 #else
 #include <unistd.h>
 #endif
+#endif
+
+#ifdef __linux__
+#include <algorithm>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+#include <string_view>
 #endif
 
 #include "common/memory_detect.h"
@@ -71,42 +78,36 @@ const MemoryInfo& GetMemInfo() {
     return mem_info;
 }
 
-u64 GetProcessPageFaults() {
-#ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS counters{};
-    counters.cb = sizeof(counters);
-    if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) {
-        return 0;
-    }
-    return counters.PageFaultCount;
-#else
-    rusage usage{};
-    if (getrusage(RUSAGE_SELF, &usage) != 0) {
-        return 0;
-    }
-    return static_cast<u64>(usage.ru_minflt) + static_cast<u64>(usage.ru_majflt);
-#endif
-}
-
 ProcessMemoryUsage GetProcessMemoryUsage() {
     ProcessMemoryUsage usage{};
 #ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS_EX counters{};
+    PROCESS_MEMORY_COUNTERS_EX2 counters{};
     counters.cb = sizeof(counters);
-    if (K32GetProcessMemoryInfo(GetCurrentProcess(),
-                                reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                                sizeof(counters))) {
+    if (GetProcessMemoryInfo(GetCurrentProcess(),
+                             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                             sizeof(counters))) {
+        usage.commit = counters.PrivateUsage;
         usage.working_set = counters.WorkingSetSize;
-        usage.peak_working_set = counters.PeakWorkingSetSize;
-        usage.private_bytes = counters.PrivateUsage;
-        usage.peak_private_bytes = counters.PeakPagefileUsage;
+        usage.private_working_set = counters.PrivateWorkingSetSize;
     }
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status)) {
-        usage.system_commit = status.ullTotalPageFile - status.ullAvailPageFile;
-        usage.system_commit_limit = status.ullTotalPageFile;
-        usage.available_physical = status.ullAvailPhys;
+    PERFORMANCE_INFORMATION performance{};
+    performance.cb = sizeof(performance);
+    if (GetPerformanceInfo(&performance, sizeof(performance))) {
+        usage.system_commit = u64{performance.CommitTotal} * performance.PageSize;
+        usage.system_commit_limit = u64{performance.CommitLimit} * performance.PageSize;
+    }
+#elif defined(__linux__)
+    std::ifstream status{"/proc/self/status"};
+    for (std::string line; std::getline(status, line);) {
+        const auto field = [&line](std::string_view key) -> u64 {
+            if (!line.starts_with(key)) {
+                return 0;
+            }
+            return std::strtoull(line.c_str() + key.size(), nullptr, 10) << 10;
+        };
+        usage.commit = (std::max)(usage.commit, field("VmData:"));
+        usage.working_set = (std::max)(usage.working_set, field("VmRSS:"));
+        usage.private_working_set = (std::max)(usage.private_working_set, field("RssAnon:"));
     }
 #endif
     return usage;

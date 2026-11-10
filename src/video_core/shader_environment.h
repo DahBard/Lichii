@@ -8,12 +8,12 @@
 
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <iosfwd>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
-#include <string>
 #include <type_traits>
 #include "common/container/unordered_map.h"
 #include <vector>
@@ -24,27 +24,18 @@
 #include "shader_recompiler/environment.h"
 #include "shader_recompiler/frontend/ampere/instruction.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/native_lowering.h"
 
 namespace Tegra {
 class Memorymanager;
 }
 
-namespace VideoCommon {
+namespace VideoCommon::ShaderCacheV2 {
+class Cache;
+struct ProgramRecord;
+} // namespace VideoCommon::ShaderCacheV2
 
-/// A native (Switch 2) program after capture and lowering to Maxwell code. The shader cache keeps
-/// it so the environments built for the program's pipelines don't capture and lower it again.
-struct LoweredNativeCode {
-    u64 native_program_key{};
-    /// Shader header, lowered instructions with Maxwell scheduling words, then the native
-    /// address map (what the environment's `code` used to be filled with).
-    std::vector<u64> code;
-    std::vector<Shader::Ampere::Instruction> trap_prefix;
-    /// Bytes of the native program that were read, header included.
-    size_t source_size{};
-    /// Constant buffer holding the texture handles if the program requires one, otherwise ~0U
-    /// (the engine's register value is used).
-    u32 texture_bound = ~0U;
-};
+namespace VideoCommon {
 
 class GenericEnvironment : public Shader::Environment {
 public:
@@ -99,51 +90,52 @@ public:
         return lowered_native;
     }
 
+    /// The v2 cache record of the native program this environment lowered, once
+    [[nodiscard]] std::shared_ptr<const ShaderCacheV2::ProgramRecord> TakeProgramRecord() noexcept {
+        return std::move(program_record);
+    }
+
+    /// False for a program with instructions outside what is cached, or with more values of a
+    /// kind than a cache record holds
     [[nodiscard]] bool CanBeSerialized() const noexcept;
+
+    /// The texture descriptor pool was flushed on the GPU thread before this environment's
+    /// translation moved to another thread, which may not flush: descriptors are read as they
+    /// are in memory. Nothing can make the pool dirty again while the GPU thread waits for it.
+    void SetTexturePoolFlushed() noexcept {
+        texture_pool_flushed = true;
+    }
 
     [[nodiscard]] u64 CalculateHash() const;
 
     void Dump(u64 pipeline_hash, u64 shader_hash) override;
 
-    void Serialize(std::ofstream& file) const;
+    /// Writes the environment, with the host's Shader::HostTranslateInfo::EnvironmentReadProperties
+    void Serialize(std::ostream& file, u32 read_properties) const;
 
     bool HasHLEMacroState() const override {
         return has_hle_engine_state;
     }
     bool HasNativeInstructions() const override;
 
-    /// Whether a guarded guest memory read gave up (a page table writer kept its lock): the
-    /// translation saw zeros there, so its result must not be used.
-    [[nodiscard]] bool GuardedReadFailed() const noexcept {
-        return guarded_read_failed;
-    }
-
-    /// The first of the recorded reads (constant buffer values, texture types and formats,
-    /// storage pointer classes, replacements, the viewport transform state) whose answer differs
-    /// from `other`'s, described; empty when they all match.
-    [[nodiscard]] std::string FirstReadDifference(const GenericEnvironment& other) const;
-
 protected:
-    /// ReadBlockGuarded of the memory manager; zeros and GuardedReadFailed when it gave up.
-    void ReadGuestGuarded(GPUVAddr address, void* data, size_t size);
-    /// IsFullyMappedRangeGuarded; false and GuardedReadFailed when it gave up.
-    bool IsMappedGuarded(GPUVAddr address, size_t size);
-
     std::optional<u64> TryFindSize();
     virtual std::optional<u32> ReadTrapGuardConstant(u32, u32) { return std::nullopt; }
 
     /// Adopts an already lowered native program, or captures and lowers it when there is none.
+    /// With a v2 cache, a captured program it holds a record of isn't lowered again.
     void InitializeNativeCode(std::shared_ptr<const LoweredNativeCode> lowered,
-                              u32 source_header_size = 128, bool geometry_stage = false);
+                              u32 source_header_size = 128, bool geometry_stage = false,
+                              ShaderCacheV2::Cache* cache_v2 = nullptr);
     std::shared_ptr<const LoweredNativeCode> LowerNativeCode(u32 source_header_size,
-                                                          bool geometry_stage);
+                                                          bool geometry_stage,
+                                                          ShaderCacheV2::Cache* cache_v2);
     size_t native_source_size{};
     std::shared_ptr<const LoweredNativeCode> lowered_native;
+    std::shared_ptr<const ShaderCacheV2::ProgramRecord> program_record;
 
-    /// `live`: read with ReadBlock even when the reads are guarded (the checks against the live
-    /// state, on the GPU thread).
     Tegra::Texture::TICEntry ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
-                                             bool via_header_index, u32 raw, bool live = false);
+                                             bool via_header_index, u32 raw);
 
     Tegra::MemoryManager* gpu_memory{};
     GPUVAddr program_base{};
@@ -171,10 +163,7 @@ protected:
 
     bool has_unbound_instructions = false;
     bool has_hle_engine_state = false;
-    /// Guest memory is read through the guarded reads (a snapshot environment, which may be
-    /// translated off the GPU thread).
-    bool guarded_reads = false;
-    bool guarded_read_failed = false;
+    bool texture_pool_flushed = false;
 };
 
 class GraphicsEnvironment final : public GenericEnvironment {
@@ -184,7 +173,8 @@ public:
                                  Tegra::MemoryManager& gpu_memory_,
                                  Tegra::Engines::Maxwell3D::Regs::ShaderType program,
                                  GPUVAddr program_base_, u32 start_address_,
-                                 std::shared_ptr<const LoweredNativeCode> lowered_native_ = {});
+                                 std::shared_ptr<const LoweredNativeCode> lowered_native_ = {},
+                                 ShaderCacheV2::Cache* cache_v2 = nullptr);
 
     ~GraphicsEnvironment() override = default;
 
@@ -200,64 +190,9 @@ public:
 
     std::optional<Shader::ReplaceConstant> GetReplaceConstBuffer(u32 bank, u32 offset) override;
 
-    /// EDEN_NX2_ASYNC_TRANSLATE: copies what the translation reads from the engine and from
-    /// constant buffers (the stage's constant buffer table and the bytes of each enabled buffer,
-    /// the texture pool registers, the viewport transform state, the HLE replace entries), so the
-    /// program can be translated later, on another thread, with the answers it would get now.
-    /// From then on the environment never reads the engine, and reads guest memory only for
-    /// texture descriptors, storage pointer checks and unbound instructions, through the guarded
-    /// reads. GPU thread, right after construction. Returns the bytes copied.
-    size_t TakeSnapshot();
-
-    /// Frees the copied constant buffer bytes once translated (the recorded reads and the
-    /// texture pool registers stay).
-    void ReleaseSnapshotBytes();
-
-    [[nodiscard]] bool HasSnapshot() const noexcept {
-        return snapshot != nullptr;
-    }
-
-    struct LiveCheck {
-        size_t reads{};     ///< Recorded reads answered again
-        size_t differing{}; ///< Of them, answered differently now
-        std::string first;  ///< The first that differs, described
-    };
-    /// GPU thread, right after translating from the snapshot: every recorded read answered again
-    /// from the engine and guest memory as they are now (EDEN_NX2_ASYNC_TRANSLATE=3).
-    [[nodiscard]] LiveCheck CheckAgainstLive();
-
-    /// GPU thread, before a pipeline translated from the snapshot is used: the texture
-    /// descriptors it read (types and formats), read again from the snapshot's pool with
-    /// ReadBlock, still give what it recorded. False means the pool changed meanwhile (or a
-    /// descriptor needed the cache flush the worker can't do).
-    [[nodiscard]] bool TextureReadsStillMatch();
-
 private:
-    /// What TakeSnapshot copies.
-    struct Snapshot {
-        std::array<Tegra::Engines::ConstBufferInfo,
-                   Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers>
-            const_buffers{};
-        /// Bytes of each enabled buffer as Read<u32> sees them, one word past its size.
-        std::array<std::vector<u32>, Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers> words;
-        ::Common::unordered_map<u64, Shader::ReplaceConstant> replace_entries;
-        GPUVAddr tic_address{};
-        u32 tic_limit{};
-        bool via_header_index{};
-        u32 viewport_transform_state{};
-    };
-
-    /// The engine's answers as they are now, without recording them.
-    [[nodiscard]] u32 LiveCbufValue(u32 cbuf_index, u32 cbuf_offset) const;
-    [[nodiscard]] bool LiveStoragePointer(u64 key) const;
-    [[nodiscard]] std::optional<Shader::ReplaceConstant> LiveReplaceConstBuffer(u32 bank,
-                                                                                u32 offset) const;
-    [[nodiscard]] Tegra::Texture::TICEntry LiveTextureInfo(u32 handle);
-
     Tegra::Engines::Maxwell3D* maxwell3d{};
     size_t stage_index{};
-    /// Shared: the environments are copied (they declare a destructor, so they have no moves).
-    std::shared_ptr<Snapshot> snapshot;
 };
 
 class ComputeEnvironment final : public GenericEnvironment {
@@ -266,7 +201,8 @@ public:
     explicit ComputeEnvironment(Tegra::Engines::KeplerCompute& kepler_compute_,
                                 Tegra::MemoryManager& gpu_memory_, GPUVAddr program_base_,
                                 u32 start_address_,
-                                std::shared_ptr<const LoweredNativeCode> lowered_native_ = {});
+                                std::shared_ptr<const LoweredNativeCode> lowered_native_ = {},
+                                ShaderCacheV2::Cache* cache_v2 = nullptr);
 
     ~ComputeEnvironment() override = default;
 
@@ -293,9 +229,9 @@ private:
 std::optional<u32> ReadNativeGuardConstant(Tegra::Engines::KeplerCompute& compute,
                                          Tegra::MemoryManager& memory, u32 bank, u32 offset);
 
-/// Answers for reads a FileEnvironment has no record of (EDEN_NX2_COMPUTE_WARM: programs from the
-/// game files, never run, converted only to fill the driver's cache). Without it a missing read
-/// is an error.
+/// Answers for reads a FileEnvironment has no record of (shader precache: programs from the game
+/// files, never run, converted only to fill the driver's cache). Without it a missing read is an
+/// error.
 struct GuessMissing {
     u32 cbuf_bank0{0x10000000};  ///< Constant buffer 0 (driver constants, descriptor handles)
     u32 cbuf_other{0};           ///< Other constant buffers (game constants)
@@ -322,13 +258,10 @@ public:
     FileEnvironment& operator=(const FileEnvironment&) = delete;
     FileEnvironment(const FileEnvironment&) = delete;
 
-    void Deserialize(std::istream& file);
+    /// Reads an environment that must end before `end`, the end of the file
+    void Deserialize(std::istream& file, std::streampos end);
 
-    /// Whether the record at the file's read position (what Deserialize reads) can fit in the
-    /// `bytes_left` bytes before the end of the file: its code size and table counts are peeked
-    /// and the read position is left where it was. A corrupt record's counts would otherwise
-    /// make Deserialize allocate gigabytes.
-    [[nodiscard]] static bool RecordFits(std::istream& file, u64 bytes_left);
+    [[nodiscard]] size_t MemorySize() const;
 
     [[nodiscard]] u64 ReadInstruction(u32 address) override;
 
@@ -373,26 +306,15 @@ public:
 
     void Dump(u64 pipeline_hash, u64 shader_hash) override;
 
-    /// Whether translating this recorded environment gives what translating `live`, the same
-    /// program as the game draws it now, would (zortos293/Lichii#896; the same code is assumed:
-    /// the pipeline keys match). Translation is decided by the answers to its questions, so each
-    /// recorded question is asked of `live`: a constant buffer value must be the same, unless it
-    /// was only used as a texture handle (then the texture it names now must have the same type
-    /// and the same pixel format traits as the recorded one) or as a storage buffer pointer word
-    /// (then its classification must be the same); texture questions, storage pointer
-    /// classifications and the other recorded answers must be the same. Asking them also leaves
-    /// `live` holding every answer a translation of it would have recorded (what the disk cache
-    /// stores). Sets `why` to the first answer that differs. `format_traits` limits the pixel
-    /// format traits compared to those the program's translation used (see the FormatTrait bits).
-    [[nodiscard]] bool AnswersHoldFor(Shader::Environment& live, const char** why = nullptr,
-                                      u32 format_traits = ~0U);
-
-    /// Pixel format traits translation uses: integer formats (sampled textures).
-    static constexpr u32 FormatTraitInteger = 1;
-    /// R16_FLOAT and the byte-addressed 32-bit color formats (byte-addressed image stores).
-    static constexpr u32 FormatTraitByteAddressed = 2 | 4;
-    /// Snorm formats (buffer texel fetches on hosts without snorm render buffers).
-    static constexpr u32 FormatTraitSnorm = 8;
+    /// Whether the translator asked for a constant buffer value, texture or pointer classification
+    /// the record lacks, while the record was made where translation reads the same values (with
+    /// these `read_properties`, see Shader::HostTranslateInfo::EnvironmentReadProperties) or by a
+    /// build that didn't record where: then it was made before the translator read the value. A
+    /// record made where they differ can lack it and hold all that translation reads there.
+    [[nodiscard]] bool LacksRecordedValue(u32 read_properties) const noexcept {
+        return lacks_recorded_value &&
+               (!recorded_read_properties || *recorded_read_properties == read_properties);
+    }
 
 private:
     std::vector<u64> code;
@@ -410,20 +332,113 @@ private:
     u32 initial_offset{};
     u32 viewport_transform_state = 1;
     const GuessMissing* guess{};
+    /// The EnvironmentReadProperties of the host that made the record, when its build wrote them
+    std::optional<u32> recorded_read_properties;
+    bool lacks_recorded_value{};
 };
 
+/// Where a pipeline is in a cache file, from its environment count to the end of its key, and a
+/// hash of those bytes: a rewrite removes it only while the file still holds them.
+struct PipelineRecord {
+    u64 begin;
+    u64 end;
+    u64 hash;
+    /// For a record removed as a copy, where the earlier record with the same bytes begins (else 0)
+    u64 copy_of{};
+
+    bool operator==(const PipelineRecord&) const = default;
+};
+
+/// Appends a record with the host's Shader::HostTranslateInfo::EnvironmentReadProperties, holding
+/// the cache's lock (see PipelineCacheLockPath).
 void SerializePipeline(std::span<const char> key, std::span<const GenericEnvironment* const> envs,
-                       const std::filesystem::path& filename, u32 cache_version);
+                       const std::filesystem::path& filename, u32 cache_version,
+                       u32 read_properties);
 
 template <typename Key, typename Envs>
-    requires std::is_trivially_copyable_v<Key>
-        && std::has_unique_object_representations_v<Key>
-void SerializePipeline(const Key& key, const Envs& envs, const std::filesystem::path& filename, u32 cache_version) {
-    SerializePipeline(std::span(reinterpret_cast<const char*>(&key), sizeof(key)), std::span(envs.data(), envs.size()), filename, cache_version);
+    requires std::is_trivially_copyable_v<Key> && std::has_unique_object_representations_v<Key>
+void SerializePipeline(const Key& key, const Envs& envs, const std::filesystem::path& filename,
+                       u32 cache_version, u32 read_properties) {
+    SerializePipeline(std::span(reinterpret_cast<const char*>(&key), sizeof(key)),
+                      std::span(envs.data(), envs.size()), filename, cache_version,
+                      read_properties);
 }
 
+/// Reads the pipelines of a cache file. The callbacks read the key that ends each record first, so
+/// that a record cut short throws before it is built. A damaged record is dropped with the records
+/// after it, and the file is cut back to the complete records before it; running out of memory
+/// only stops the load. The load holds the cache's lock throughout (waiting for it as
+/// PipelineCacheLockWait says), so that a record another process is appending is not taken for a
+/// damaged one.
 void LoadPipelines(std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
     Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics);
+
+/// The record a LoadPipelines callback has read: from `begin`, where its environment count is, to
+/// where `file` is now, after its key.
+[[nodiscard]] PipelineRecord ReadPipelineRecord(std::istream& file, u64 begin);
+
+/// The bytes SerializePipeline appends for a record, for a shader cache v2 record. Empty when an
+/// environment can't be serialized (see GenericEnvironment::CanBeSerialized).
+[[nodiscard]] std::vector<u8> SerializePipelinePayload(
+    std::span<const char> key, std::span<const GenericEnvironment* const> envs,
+    u32 read_properties);
+
+/// Reads one record held in memory (SerializePipelinePayload) as LoadPipelines reads one in a
+/// file: the callback reads the key. Throws std::ios_base::failure when the record is damaged or
+/// has bytes after its key.
+void ReadPipelinePayload(
+    std::span<const u8> payload,
+    Common::UniqueFunction<void, std::istream&, FileEnvironment>& load_compute,
+    Common::UniqueFunction<void, std::istream&, std::vector<FileEnvironment>>& load_graphics);
+
+/// New code for the native program of an environment in a cache record (ReplacePipelineCode)
+struct NativeCodeReplacement {
+    std::span<const u64> code;
+    u32 texture_bound; ///< The environment's texture bound buffer with this code
+};
+
+/// Answers, for the shader hash (NativeShaderHash) of a native environment's code and its texture
+/// bound buffer, the code to replace it with, or nothing to keep it
+using NativeCodeReplacer =
+    std::function<std::optional<NativeCodeReplacement>(u64 shader_hash, u32 texture_bound)>;
+
+struct ReplacedPipelineCode {
+    std::vector<u8> payload;
+    /// For each environment, the shader hash of its code before and after (equal when kept)
+    std::vector<std::pair<u64, u64>> shader_hashes;
+};
+
+/// A record (SerializePipelinePayload) with the code of its native environments replaced as
+/// `replace` answers, and every other byte kept, the key included. Throws std::ios_base::failure
+/// when the record is damaged, as ReadPipelinePayload does.
+[[nodiscard]] ReplacedPipelineCode ReplacePipelineCode(std::span<const u8> payload,
+                                                       const NativeCodeReplacer& replace);
+
+/// Reads the records of a cache file in order, up to the first damaged one, without its lock and
+/// without ever changing or removing the file. False when it isn't a cache of this version.
+bool ReadPipelinesUnchanged(
+    const std::filesystem::path& filename, u32 cache_version,
+    Common::UniqueFunction<void, std::istream&, FileEnvironment> load_compute,
+    Common::UniqueFunction<void, std::istream&, std::vector<FileEnvironment>> load_graphics);
+
+/// Throws std::ios_base::failure, as for a damaged record, unless a graphics record's key has as
+/// many nonzero shader hashes as the record has environments: one is built from each.
+void CheckGraphicsRecord(std::span<const u64> unique_hashes, size_t num_envs);
+
+/// Throws std::ios_base::failure, as for a damaged record, unless a compute record's key has the
+/// shared memory and workgroup sizes of its environment: both are read from the same launch.
+void CheckComputeRecord(const FileEnvironment& env, u32 shared_memory_size,
+                        const std::array<u32, 3>& workgroup_size);
+
+/// Rewrites a cache file without these records (complete records LoadPipelines read from it when
+/// it was `loaded_size` bytes long), keeping every other byte, records appended since included. The
+/// new file is written beside the cache and renamed over it, so the cache is never left partly
+/// written. All of it happens under the cache's lock, and only while the file still holds every
+/// record as the load read it (and a copy's original); else, or when another process holds the
+/// lock, disk space is short, it is stopped, or the last rewrite of this file failed and it hasn't
+/// changed since, it returns false and leaves the file as it was.
+bool RemovePipelines(std::stop_token stop, const std::filesystem::path& filename, u32 cache_version,
+                     u64 loaded_size, std::vector<PipelineRecord> records);
 
 } // namespace VideoCommon

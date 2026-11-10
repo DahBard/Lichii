@@ -1,9 +1,9 @@
 name: lichii-tuned
 
 # Windows and CachyOS (Linux) builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H)
-# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch (Fritchii v5.5's tree since
-# round 21) plus lichii-tuned/lichii-tuned.patch (branch tuned5). Every push to the `tuned` branch that touches the patch or this
-# workflow builds the Windows variants. The CachyOS ones build only when the owner asks for a
+# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch (upstream Lichii's tree, build
+# 132 since round 22) plus lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the
+# `tuned` branch that touches the patch or this workflow builds the Windows variants. The CachyOS ones build only when the owner asks for a
 # Linux build: run the workflow by hand with `only: cachyos` (or `all`).
 on:
   push:
@@ -43,16 +43,17 @@ jobs:
           # Same plus ThinLTO across the whole program.
           - variant: pgo-lto
             lto: "ON"
-          # The same source built like Fritchii's MSVC download (MSVC, no PGO, baseline x86-64).
-          # On from round 21: the owner compares it with the pgo builds on the Fritchii base.
-          - variant: msvc
-            lto: "OFF"
-            msvc: true
-          # Instrumented build that records an Ocarina profile while you play (slower). Off from
-          # round 21; profiles uploaded to lichii-tuned/pgo tune the next builds.
-          # - variant: pgo-train
+          # The same source built with MSVC (no PGO, baseline x86-64), to tell compiler
+          # differences from source changes. Off until a glitch shows up only in the pgo builds;
+          # run lichii-tuned/check_patch_warnings.py before turning it on.
+          # - variant: msvc
           #   lto: "OFF"
-          #   train: true
+          #   msvc: true
+          # Instrumented build that records an Ocarina profile while you play (slower).
+          # Profiles uploaded to lichii-tuned/pgo tune the next builds.
+          - variant: pgo-train
+            lto: "OFF"
+            train: true
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
@@ -319,25 +320,6 @@ jobs:
           }
           New-Item -ItemType Directory -Force build/release/bin/recipes | Out-Null
           Copy-Item lichii-tuned/recipes/*.nx2recipe build/release/bin/recipes/
-
-      # AMD FSR 4 for Ocarina: the AMD FSR SDK's signed Vulkan loader and upscaler, which may be
-      # redistributed in binary form with the SDK's license. Pinned to SDK v2.4.0 by hash.
-      - name: AMD FSR 4 libraries
-        shell: bash
-        run: |
-          set -euo pipefail
-          base=https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/7539ae8b6568ad29ed78a753404351daf3b5cca7/Kits/FidelityFX
-          cd build/release/bin
-          fetch() {
-            curl -fsSL --retry 4 --retry-delay 2 -o "$2" "$base/$1"
-            echo "$3  $2" | sha256sum -c -
-          }
-          fetch signedbin/amd_fidelityfx_loader_vk.dll amd_fidelityfx_loader_vk.dll \
-            38a56a01fb3565c0757d9f5c1e4e69de4b65e5f2e5769b323b200dc1f142bab9
-          fetch signedbin/amd_fidelityfx_upscaler_vk.dll amd_fidelityfx_upscaler_vk.dll \
-            4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7
-          fetch docs/license.md amd_fidelityfx_license.md \
-            32357259b965d6a8001e9e508ba60eda6034027c5923a7d226ffbaff813c2bfb
 
       - name: Upload
         uses: actions/upload-artifact@v7

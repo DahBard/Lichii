@@ -18,20 +18,15 @@ struct MemoryInfo {
  */
 [[nodiscard]] const MemoryInfo& GetMemInfo();
 
-/// Page faults of this process so far, soft and hard (0 where unknown).
-[[nodiscard]] u64 GetProcessPageFaults();
-
-/// This process's memory and the system's commit, for the memory log line (zeros where unknown;
-/// only Windows fills them in).
+/// This process's memory in bytes. Zero where the host does not report a value.
 struct ProcessMemoryUsage {
-    u64 working_set{};
-    u64 peak_working_set{};
-    u64 private_bytes{}; ///< Private commit (mapped sections like the guest memory are not in it)
-    u64 peak_private_bytes{};
-    u64 system_commit{}; ///< Commit charge of the whole system
-    u64 system_commit_limit{};
-    u64 available_physical{};
+    u64 commit{};              ///< Private commit (Windows PrivateUsage, Linux VmData).
+    u64 working_set{};         ///< Resident memory.
+    u64 private_working_set{}; ///< Resident memory not shared with other mappings.
+    u64 system_commit{};       ///< Commit charge of the whole system (Windows).
+    u64 system_commit_limit{}; ///< Commit limit of the whole system (Windows).
 };
+
 [[nodiscard]] ProcessMemoryUsage GetProcessMemoryUsage();
 
 } // namespace Common

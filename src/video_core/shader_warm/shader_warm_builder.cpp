@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -11,7 +12,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -29,7 +29,6 @@
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/loader/loader.h"
-#include "video_core/pipeline_cache_files.h"
 #include "video_core/shader_warm/shader_archives.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #include "video_core/shader_warm/warm_records.h"
@@ -45,14 +44,11 @@ constexpr std::string_view StageConverting = "Converting";
 constexpr std::string_view StageWriting = "Writing";
 /// Conversions in flight (each holds a copy of its program).
 constexpr size_t MaxPendingJobs = 2048;
+constexpr u32 PrecachedPipelinesMagic = 0x31504750; // "PGP1"
 
 fs::path TitleDir(u64 title_id) {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
            fmt::format("{:016x}", title_id);
-}
-
-bool EndsWith(std::string_view text, std::string_view suffix) {
-    return text.size() >= suffix.size() && text.substr(text.size() - suffix.size()) == suffix;
 }
 
 struct ArchiveFile {
@@ -60,6 +56,7 @@ struct ArchiveFile {
     FileSys::VirtualFile file;
 };
 
+/// Appends every file under `dir` to `out`, recursively, with its '/' separated path.
 void ListFiles(const FileSys::VirtualDir& dir, const std::string& prefix,
                std::vector<ArchiveFile>& out) {
     for (const auto& file : dir->GetFiles()) {
@@ -79,6 +76,8 @@ struct GameFiles {
     std::vector<FileSys::VirtualDir> romfs;
 };
 
+/// Opens the game file and collects its RomFS trees into `game`. Returns the error text when the
+/// file cannot be opened or has no RomFS.
 std::optional<std::string> OpenGame(Core::System& system, const fs::path& game_path,
                                     GameFiles& game) {
     FileSys::VirtualFilesystem filesystem = system.GetFilesystem();
@@ -138,50 +137,33 @@ struct PairHasher {
         return static_cast<size_t>(h.a[0] ^ (h.b[0] * 0x9E3779B97F4A7C15ULL));
     }
 };
-struct U128Hasher {
-    size_t operator()(const u128& h) const noexcept {
-        return static_cast<size_t>(h[0]);
-    }
-};
 
 u128 Hash128(std::span<const u8> bytes) {
     return Common::CityHash128(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
-/// One unique vertex or fragment program (make_graphics_warm.py: first manifest program per
-/// code hash, with the origins of that program's code + control identity).
-struct GraphicsProgram {
-    u32 stage{};
-    u128 control{};
-    std::vector<u32> archives;
-    bool built{};
-    u64 hash{};
-};
-
 struct Job {
     size_t seq{};
-    bool graphics{};
-    u32 stage{};
-    size_t graphics_index{};
     std::vector<u8> program;
     ComputeControl control{};
 };
 
 struct JobResult {
     bool ok{};
-    std::vector<u8> bytes; ///< Compute: full entry. Graphics: env record.
+    std::vector<u8> bytes; ///< The full compute entry
     ComputeKey compute_key{};
-    u64 hash{};
 };
 
 class Converter {
 public:
+    /// Starts `threads` workers that convert pushed jobs until `stop` is requested.
     Converter(size_t threads, std::stop_token stop_) : stop{std::move(stop_)} {
         for (size_t i = 0; i < threads; ++i) {
             workers.emplace_back([this] { Work(); });
         }
     }
 
+    /// Lets the workers finish the queued jobs, then joins them.
     ~Converter() {
         {
             std::scoped_lock lock{mutex};
@@ -226,6 +208,8 @@ public:
     }
 
 private:
+    /// Worker loop: takes jobs in order, converts each one (skipped once stopping) and files the
+    /// result under its sequence number. Returns once closing with no job left.
     void Work() {
         Common::SetCurrentThreadName("ShaderWarmBuild");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
@@ -252,23 +236,20 @@ private:
         }
     }
 
+    /// Lowers one program and makes its compute entry. The result is not ok when lowering or
+    /// conversion failed.
     static JobResult Convert(const Job& job) {
         JobResult result;
         try {
             LoweredCode lowered;
-            if (const auto error = LowerProgram(job.program, job.graphics, lowered)) {
-                LOG_DEBUG(Render_Vulkan, "Shader warm-up: program not converted: {}", *error);
+            if (const auto error = LowerProgram(job.program, lowered)) {
+                LOG_DEBUG(Render_Vulkan, "Shader precache: program not converted: {}", *error);
                 return result;
             }
-            if (job.graphics) {
-                result.hash = StageHash(lowered.code);
-                result.bytes = GraphicsEnv(job.stage, lowered, job.program);
-            } else {
-                result.bytes = ComputeEntry(lowered, job.control, result.compute_key);
-            }
+            result.bytes = ComputeEntry(lowered, job.control, result.compute_key);
             result.ok = true;
         } catch (const std::exception& e) {
-            LOG_DEBUG(Render_Vulkan, "Shader warm-up: conversion failed: {}", e.what());
+            LOG_DEBUG(Render_Vulkan, "Shader precache: conversion failed: {}", e.what());
         }
         return result;
     }
@@ -295,25 +276,29 @@ void WriteHeader(std::ofstream& out) {
     Write(out, WarmCacheVersion);
 }
 
+std::atomic<bool> warm_before_start{false};
+std::atomic<bool> skip_warm{false};
+
+/// Records `entries` for the finished precache file at `warm_file` (see WarmCountPath).
+void WriteWarmCount(const fs::path& warm_file, u64 entries) {
+    std::error_code ec;
+    const auto size = fs::file_size(warm_file, ec);
+    if (ec) {
+        return;
+    }
+    std::ofstream out(WarmCountPath(warm_file), std::ios::trunc);
+    out << entries << ' ' << size << '\n';
+}
+
 } // Anonymous namespace
 
 fs::path ComputeWarmPath(u64 title_id) {
     return TitleDir(title_id) / "warm-compute.bin";
 }
 
-fs::path GraphicsWarmPath(u64 title_id) {
-    return TitleDir(title_id) / "warm-graphics.bin";
-}
-
 fs::path WarmMarkerPath(const fs::path& warm_file) {
     fs::path marker = warm_file;
     marker.replace_extension(".done");
-    return marker;
-}
-
-fs::path WarmRunningPath(const fs::path& warm_file) {
-    fs::path marker = warm_file;
-    marker += ".running";
     return marker;
 }
 
@@ -335,33 +320,119 @@ u64 ReadWarmCount(const fs::path& warm_file) {
     return !ec && actual == size ? entries : 0;
 }
 
-namespace {
-/// Records `entries` for the finished warm file at `warm_file` (see WarmCountPath).
-void WriteWarmCount(const fs::path& warm_file, u64 entries) {
+std::optional<WarmStamp> CurrentWarmStamp(const fs::path& warm_file, u64 entries, u32 driver,
+                                          u32 device_id, u32 cache_version) {
     std::error_code ec;
     const auto size = fs::file_size(warm_file, ec);
     if (ec) {
-        return;
+        return std::nullopt;
     }
-    std::ofstream out(WarmCountPath(warm_file), std::ios::trunc);
-    out << entries << ' ' << size << '\n';
+    const auto time = fs::last_write_time(warm_file, ec);
+    if (ec) {
+        return std::nullopt;
+    }
+    return WarmStamp{size,      static_cast<s64>(time.time_since_epoch().count()),
+                     entries,   driver,
+                     device_id, cache_version};
 }
-} // Anonymous namespace
+
+std::optional<WarmStamp> ReadWarmMarker(const fs::path& warm_file) {
+    std::ifstream in(WarmMarkerPath(warm_file));
+    WarmStamp stamp;
+    if (!(in >> stamp.size >> stamp.write_time >> stamp.entries >> stamp.driver >>
+          stamp.device_id >> stamp.cache_version)) {
+        return std::nullopt;
+    }
+    return stamp;
+}
+
+bool WriteWarmMarker(const fs::path& warm_file, const WarmStamp& stamp) {
+    std::ofstream out(WarmMarkerPath(warm_file), std::ios::trunc);
+    out << stamp.size << ' ' << stamp.write_time << ' ' << stamp.entries << ' ' << stamp.driver
+        << ' ' << stamp.device_id << ' ' << stamp.cache_version << '\n';
+    out.close();
+    return static_cast<bool>(out);
+}
+
+bool WarmPending(u64 title_id) {
+    const auto file = ComputeWarmPath(title_id);
+    std::error_code ec;
+    return !fs::exists(file, ec) || !fs::exists(WarmMarkerPath(file), ec);
+}
+
+void RequestWarmBeforeStart(bool before_start) {
+    skip_warm.store(false, std::memory_order_relaxed);
+    warm_before_start.store(before_start, std::memory_order_relaxed);
+}
+
+bool TakeWarmBeforeStart() {
+    return warm_before_start.exchange(false, std::memory_order_relaxed);
+}
+
+void RequestSkipWarm() {
+    skip_warm.store(true, std::memory_order_relaxed);
+}
+
+bool TakeSkipWarm() {
+    return skip_warm.exchange(false, std::memory_order_relaxed);
+}
+
+fs::path PrecachedPipelinesPath(u64 title_id) {
+    return TitleDir(title_id) / "precache-graphics.bin";
+}
+
+std::unordered_set<u64> ReadPrecachedPipelines(const fs::path& file, const DriverStamp& stamp) {
+    std::unordered_set<u64> hashes;
+    std::ifstream in(file, std::ios::binary);
+    u32 magic{};
+    DriverStamp saved;
+    u64 count{};
+    if (!in.read(reinterpret_cast<char*>(&magic), sizeof(magic)) ||
+        magic != PrecachedPipelinesMagic ||
+        !in.read(reinterpret_cast<char*>(&saved.driver), sizeof(saved.driver)) ||
+        !in.read(reinterpret_cast<char*>(&saved.device_id), sizeof(saved.device_id)) ||
+        !in.read(reinterpret_cast<char*>(&saved.cache_version), sizeof(saved.cache_version)) ||
+        !in.read(reinterpret_cast<char*>(&count), sizeof(count)) || saved != stamp) {
+        return hashes;
+    }
+    for (u64 i = 0; i < count; ++i) {
+        u64 hash{};
+        if (!in.read(reinterpret_cast<char*>(&hash), sizeof(hash))) {
+            break;
+        }
+        hashes.insert(hash);
+    }
+    return hashes;
+}
+
+bool WritePrecachedPipelines(const fs::path& file, const DriverStamp& stamp,
+                             const std::unordered_set<u64>& hashes) {
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    Write(out, PrecachedPipelinesMagic);
+    Write(out, stamp.driver);
+    Write(out, stamp.device_id);
+    Write(out, stamp.cache_version);
+    Write(out, static_cast<u64>(hashes.size()));
+    for (const u64 hash : hashes) {
+        Write(out, hash);
+    }
+    out.close();
+    return static_cast<bool>(out);
+}
 
 bool DeleteWarmFiles(u64 title_id, std::string* error) {
+    const auto warm = ComputeWarmPath(title_id);
+    fs::path tmp = warm;
+    tmp += ".tmp";
     bool ok = true;
-    for (const auto& warm : {ComputeWarmPath(title_id), GraphicsWarmPath(title_id)}) {
-        fs::path tmp = warm;
-        tmp += ".tmp";
-        for (const auto& path :
-             {warm, WarmMarkerPath(warm), WarmRunningPath(warm), WarmCountPath(warm), tmp}) {
-            std::error_code ec;
-            fs::remove(path, ec);
-            if (ec) {
-                ok = false;
-                if (error != nullptr) {
-                    *error = ec.message();
-                }
+    for (const auto& path :
+         {warm, WarmMarkerPath(warm), WarmCountPath(warm), tmp, PrecachedPipelinesPath(title_id)}) {
+        std::error_code ec;
+        fs::remove(path, ec);
+        if (ec) {
+            ok = false;
+            if (error != nullptr) {
+                *error = ec.message();
             }
         }
     }
@@ -392,68 +463,27 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
     std::error_code ec;
     fs::create_directories(output_dir, ec);
     const fs::path compute_path = output_dir / "warm-compute.bin";
-    const fs::path graphics_path = output_dir / "warm-graphics.bin";
     fs::path compute_tmp = compute_path;
     compute_tmp += ".tmp";
-    fs::path graphics_tmp = graphics_path;
-    graphics_tmp += ".tmp";
     std::ofstream compute_out;
-    std::ofstream graphics_out;
     const auto fail = [&](std::string error) {
         compute_out.close();
-        graphics_out.close();
         std::error_code ignored;
         fs::remove(compute_tmp, ignored);
-        fs::remove(graphics_tmp, ignored);
         result.ok = false;
         result.error = std::move(error);
-        LOG_WARNING(Render_Vulkan, "Shader warm-up build for {:016x} failed: {}", title_id,
+        LOG_WARNING(Render_Vulkan, "Shader precache build for {:016x} failed: {}", title_id,
                     result.error);
         return result;
     };
-
-    // Draw state guesses.
-    std::vector<fs::path> caches;
-    if (options.runtime_caches) {
-        caches = *options.runtime_caches;
-    } else {
-        // The play history the guesses come from: this fork's cache (vulkan-frizti), else the
-        // shared name of this version, else the newest cache of a version with the same record
-        // layout (zortos293/Lichii builds).
-        std::vector<fs::path> candidates{
-            VideoCommon::VersionedPipelineCachePath(TitleDir(title_id), "vulkan-frizti",
-                                                    VideoCommon::VulkanPipelineCacheVersion),
-            VideoCommon::VersionedPipelineCachePath(TitleDir(title_id), "vulkan",
-                                                    VideoCommon::VulkanPipelineCacheVersion)};
-        for (const u32 version : CompatibleRuntimeCacheVersions) {
-            candidates.push_back(
-                VideoCommon::VersionedPipelineCachePath(TitleDir(title_id), "vulkan", version));
-        }
-        for (const auto& candidate : candidates) {
-            if (fs::exists(candidate, ec)) {
-                caches.push_back(candidate);
-                break;
-            }
-        }
-    }
-    const RuntimeStats stats = ReadRuntimeStats(caches);
-    const bool use_stats = stats.occurrences != 0;
-    const GraphicsKey vertex_template = stats.templates[0] ? *stats.templates[0]
-                                                           : DefaultTemplate(true);
-    const GraphicsKey fragment_template = stats.templates[1] ? *stats.templates[1]
-                                                             : DefaultTemplate(false);
-    LOG_INFO(Render_Vulkan,
-             "Shader warm-up build for {:016x}: {} runtime stage records from {} cache(s){}",
-             title_id, stats.occurrences, caches.size(),
-             use_stats ? "" : ", built-in draw state defaults");
 
     GameFiles game;
     if (const auto error = OpenGame(system, game_path, game)) {
         return fail(*error);
     }
 
-    // Archive list, in the offline pipeline's order: every *.bfsha.zs and *.sarc.zs of each
-    // package, then each package's Effect/*.vsetb.byml.zs, sorted by path inside a package.
+    // Archive list, in the offline pipeline's order: every shader archive of each package, then
+    // each package's effects, sorted by path inside a package (see ClassifyGameFile).
     std::vector<ArchiveFile> archives;
     std::vector<ArchiveFile> effects;
     ZstdDictionaries dictionaries;
@@ -465,14 +495,18 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
                   [](const ArchiveFile& a, const ArchiveFile& b) { return a.path < b.path; });
         std::vector<ArchiveFile> package_effects;
         for (auto& file : files) {
-            if (EndsWith(file.path, ".bfsha.zs") || EndsWith(file.path, ".sarc.zs")) {
+            switch (ClassifyGameFile(file.path)) {
+            case GameFileKind::ShaderArchive:
                 archives.push_back(file);
-            } else if (file.path.starts_with("Effect/") &&
-                       file.path.find('/', 7) == std::string::npos &&
-                       EndsWith(file.path, ".vsetb.byml.zs")) {
+                break;
+            case GameFileKind::Effect:
                 package_effects.push_back(file);
-            } else if (file.path == "Pack/ZsDic.pack.zs") {
+                break;
+            case GameFileKind::ZstdDictionaries:
                 dictionary_pack = file.file; // the newest package wins
+                break;
+            case GameFileKind::Other:
+                break;
             }
         }
         effects.insert(effects.end(), package_effects.begin(), package_effects.end());
@@ -482,40 +516,23 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         try {
             dictionaries.Load(dictionary_pack->ReadAllBytes());
         } catch (const ArchiveError& e) {
-            LOG_WARNING(Render_Vulkan, "Shader warm-up: zstd dictionary pack: {}", e.what());
+            LOG_WARNING(Render_Vulkan, "Shader precache: zstd dictionary pack: {}", e.what());
         }
     }
-    if (archives.empty()) {
-        return fail("No shader archives found in the game files");
-    }
-    LOG_INFO(Render_Vulkan, "Shader warm-up build: {} archives, {} zstd dictionaries",
+    // Without archives the file is written empty: the precache then has only the pipeline cache
+    // of earlier sessions to build.
+    result.archives = archives.size();
+    LOG_INFO(Render_Vulkan, "Shader precache build: {} archives, {} zstd dictionaries",
              archives.size(), dictionaries.Count());
 
     compute_out.open(compute_tmp, std::ios::binary | std::ios::trunc);
-    graphics_out.open(graphics_tmp, std::ios::binary | std::ios::trunc);
-    if (!compute_out || !graphics_out) {
+    if (!compute_out) {
         return fail("Cannot write to " + Common::FS::PathToUTF8String(output_dir));
     }
     WriteHeader(compute_out);
-    WriteHeader(graphics_out);
 
-    // Bookkeeping in program order (the order the manifest lists programs).
     std::unordered_set<PairHash, PairHasher> compute_identities;
-    std::unordered_map<u128, size_t, U128Hasher> graphics_index; // code -> program
-    std::vector<GraphicsProgram> graphics;
     std::unordered_set<std::string> compute_keys;
-    std::unordered_set<u64> fragment_hashes;
-    std::unordered_set<u64> vertex_hashes;
-    struct WrittenVertex {
-        size_t program;
-        u64 key_offset;
-    };
-    std::vector<WrittenVertex> written_vertices;
-    struct HeldVertex {
-        size_t program;
-        std::vector<u8> env;
-    };
-    std::vector<HeldVertex> held_vertices;
     size_t archive_errors = 0;
     size_t member_errors = 0;
     size_t seq = 0;
@@ -527,56 +544,23 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
     auto converter = std::make_unique<Converter>(threads, stop);
 
     // Consumes finished conversions in submission order (first program wins on equal keys).
-    std::vector<std::pair<bool, size_t>> job_kinds; // graphics?, graphics program index
     size_t consumed = 0;
     const auto consume = [&](JobResult&& r) {
-        const auto [is_graphics, index] = job_kinds[consumed++];
+        ++consumed;
         if (!r.ok) {
             ++result.skipped;
             return;
         }
-        if (!is_graphics) {
-            const std::string key(reinterpret_cast<const char*>(r.compute_key.data()),
-                                  r.compute_key.size());
-            if (compute_keys.insert(key).second) {
-                compute_out.write(reinterpret_cast<const char*>(r.bytes.data()),
-                                  static_cast<std::streamsize>(r.bytes.size()));
-                ++result.compute_programs;
-            }
-            return;
+        const std::string key(reinterpret_cast<const char*>(r.compute_key.data()),
+                              r.compute_key.size());
+        if (compute_keys.insert(key).second) {
+            compute_out.write(reinterpret_cast<const char*>(r.bytes.data()),
+                              static_cast<std::streamsize>(r.bytes.size()));
+            ++result.compute_programs;
         }
-        GraphicsProgram& program = graphics[index];
-        program.built = true;
-        program.hash = r.hash;
-        if (program.stage == 4) {
-            if (!fragment_hashes.insert(r.hash).second) {
-                return; // same key as an earlier entry
-            }
-            const auto key = GraphicsEntryKey(4, fragment_template, r.hash, 0);
-            Write(graphics_out, u32{1});
-            graphics_out.write(reinterpret_cast<const char*>(r.bytes.data()),
-                               static_cast<std::streamsize>(r.bytes.size()));
-            graphics_out.write(reinterpret_cast<const char*>(key.data()),
-                               static_cast<std::streamsize>(key.size()));
-            ++result.fragment_programs;
-            return;
-        }
-        if (!vertex_hashes.insert(r.hash).second) {
-            // Same stage hash: same key only if the attribute guess matches, known at the end.
-            held_vertices.push_back({index, std::move(r.bytes)});
-            return;
-        }
-        const auto key = GraphicsEntryKey(0, vertex_template, r.hash, 0);
-        Write(graphics_out, u32{1});
-        graphics_out.write(reinterpret_cast<const char*>(r.bytes.data()),
-                           static_cast<std::streamsize>(r.bytes.size()));
-        const auto key_offset = static_cast<u64>(graphics_out.tellp());
-        graphics_out.write(reinterpret_cast<const char*>(key.data()),
-                           static_cast<std::streamsize>(key.size()));
-        written_vertices.push_back({index, key_offset});
     };
-    const auto drain = [&](bool wait_all) {
-        while (auto r = converter->Next(wait_all)) {
+    const auto drain = [&] {
+        while (auto r = converter->Next(false)) {
             consume(std::move(*r));
         }
     };
@@ -591,44 +575,23 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         const auto data = archive.file->ReadAllBytes();
         const auto name = archive.path.substr(archive.path.rfind('/') + 1);
         const auto on_record = [&](const ShaderRecord& record) {
-            const bool is_graphics =
-                record.stage == ProgramStage::Vertex || record.stage == ProgramStage::Fragment;
-            if (record.stage != ProgramStage::Compute && !is_graphics) {
+            if (record.stage != ProgramStage::Compute) {
                 return;
             }
-            const u128 code = Hash128(record.code);
-            const u128 control = Hash128(record.control);
-            Job job;
-            if (is_graphics) {
-                const auto [it, inserted] = graphics_index.try_emplace(code, graphics.size());
-                if (!inserted) {
-                    GraphicsProgram& program = graphics[it->second];
-                    if (program.control == control) {
-                        program.archives.push_back(static_cast<u32>(archive_index));
-                    }
-                    return;
-                }
-                graphics.push_back({record.stage == ProgramStage::Vertex ? 0U : 4U, control,
-                                    {static_cast<u32>(archive_index)}});
-                job.graphics = true;
-                job.stage = graphics.back().stage;
-                job.graphics_index = it->second;
-            } else {
-                if (!compute_identities.insert(PairHash{code, control}).second) {
-                    return;
-                }
-                const auto values = ReadComputeControl(record.control);
-                if (!values || !values->workgroup[0] || !values->workgroup[1] ||
-                    !values->workgroup[2]) {
-                    ++result.skipped;
-                    return;
-                }
-                job.control = *values;
-                job.stage = 5;
+            if (!compute_identities.insert(PairHash{Hash128(record.code), Hash128(record.control)})
+                     .second) {
+                return;
             }
+            const auto values = ReadComputeControl(record.control);
+            if (!values || !values->workgroup[0] || !values->workgroup[1] ||
+                !values->workgroup[2]) {
+                ++result.skipped;
+                return;
+            }
+            Job job;
+            job.control = *values;
             job.seq = seq++;
             job.program.assign(record.code.begin(), record.code.end());
-            job_kinds.emplace_back(job.graphics, job.graphics_index);
             converter->Push(std::move(job));
             while (converter->Pending() > MaxPendingJobs && !stop.stop_requested()) {
                 if (auto r = converter->Next(true)) {
@@ -638,15 +601,15 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         };
         const auto on_member_error = [&](const std::string& error) {
             ++member_errors;
-            LOG_DEBUG(Render_Vulkan, "Shader warm-up: {}: {}", archive.path, error);
+            LOG_DEBUG(Render_Vulkan, "Shader precache: {}: {}", archive.path, error);
         };
         try {
             WalkArchive(data, name, &dictionaries, on_record, on_member_error);
         } catch (const ArchiveError& e) {
             ++archive_errors;
-            LOG_WARNING(Render_Vulkan, "Shader warm-up: {}: {}", archive.path, e.what());
+            LOG_WARNING(Render_Vulkan, "Shader precache: {}: {}", archive.path, e.what());
         }
-        drain(false);
+        drain();
     }
     report(StageExtracting, archives.size(), archives.size());
 
@@ -663,149 +626,27 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
     }
     report(StageConverting, total_jobs, total_jobs);
     converter.reset();
-    for (auto& archive : archives) {
-        archive.file = nullptr;
-    }
-    effects.clear();
-    dictionary_pack = nullptr;
-    game.romfs.clear();
-    game.loader.reset();
-    game.nup.reset();
 
-    // Vertex attribute types (make_graphics_warm.py attr_types): per slot, the most common
-    // nonzero value among the runtime pipelines of the OTHER vertex shaders of the same
-    // archive(s); slots without data are 1 (float). Without runtime data: built-in default.
-    std::unordered_map<std::string, u32> archive_ids;
-    for (size_t i = 0; i < archives.size(); ++i) {
-        archive_ids.try_emplace(archives[i].path, static_cast<u32>(archive_ids.size()));
-    }
-    const auto archive_id = [&](u32 index) { return archive_ids.at(archives[index].path); };
-    // Archive identity: the path inside the RomFS (the same file in both packages is one).
-    std::unordered_map<u32, std::set<u64>> by_archive;
-    for (const auto& program : graphics) {
-        if (program.stage == 0 && program.built &&
-            stats.vertex_attributes.contains(program.hash)) {
-            for (const u32 a : program.archives) {
-                by_archive[archive_id(a)].insert(program.hash);
-            }
-        }
-    }
-    const auto attribute_types = [&](const GraphicsProgram& program) -> u64 {
-        if (!use_stats) {
-            return DefaultAttributeTypes;
-        }
-        std::set<u64> others;
-        for (const u32 a : program.archives) {
-            if (const auto it = by_archive.find(archive_id(a)); it != by_archive.end()) {
-                others.insert(it->second.begin(), it->second.end());
-            }
-        }
-        others.erase(program.hash);
-        std::array<std::array<size_t, 4>, 32> counts{};
-        std::array<std::array<size_t, 4>, 32> first{};
-        size_t order = 0;
-        for (const u64 hash : others) {
-            for (const u64 value : stats.vertex_attributes.at(hash)) {
-                for (size_t i = 0; i < 32; ++i) {
-                    const auto x = static_cast<size_t>((value >> (2 * i)) & 3);
-                    if (x != 0) {
-                        if (counts[i][x]++ == 0) {
-                            first[i][x] = order++;
-                        }
-                    }
-                }
-            }
-        }
-        u64 types = 0;
-        for (size_t i = 0; i < 32; ++i) {
-            u64 best = 1;
-            size_t best_count = 0;
-            size_t best_first = 0;
-            for (size_t x = 1; x < 4; ++x) {
-                if (counts[i][x] > best_count ||
-                    (counts[i][x] == best_count && counts[i][x] != 0 && first[i][x] < best_first)) {
-                    best = x;
-                    best_count = counts[i][x];
-                    best_first = first[i][x];
-                }
-            }
-            types |= best << (2 * i);
-        }
-        return types;
-    };
-
-    report(StageWriting, 0, written_vertices.size() + held_vertices.size());
-    std::set<std::pair<u64, u64>> vertex_keys; // (stage hash, attribute types)
-    std::vector<std::pair<u64, u64>> patches;  // key offset, attribute types
-    for (const auto& written : written_vertices) {
-        const auto& program = graphics[written.program];
-        const u64 types = attribute_types(program);
-        vertex_keys.emplace(program.hash, types);
-        patches.emplace_back(written.key_offset + AttributeTypesOffset, types);
-    }
-    for (auto& held : held_vertices) {
-        const auto& program = graphics[held.program];
-        const u64 types = attribute_types(program);
-        if (!vertex_keys.emplace(program.hash, types).second) {
-            continue;
-        }
-        const auto key = GraphicsEntryKey(0, vertex_template, program.hash, types);
-        Write(graphics_out, u32{1});
-        graphics_out.write(reinterpret_cast<const char*>(held.env.data()),
-                           static_cast<std::streamsize>(held.env.size()));
-        graphics_out.write(reinterpret_cast<const char*>(key.data()),
-                           static_cast<std::streamsize>(key.size()));
-        held.env = {};
-    }
-    result.vertex_programs = vertex_keys.size();
+    report(StageWriting, 0, 1);
     compute_out.close();
-    graphics_out.close();
-    if (!compute_out || !graphics_out) {
-        return fail("Writing the warm-up files failed");
+    if (!compute_out) {
+        return fail("Writing the precache file failed");
     }
-    {
-        std::fstream patch(graphics_tmp, std::ios::binary | std::ios::in | std::ios::out);
-        if (!patch) {
-            return fail("Cannot reopen " + Common::FS::PathToUTF8String(graphics_tmp));
-        }
-        size_t done = 0;
-        for (const auto& [offset, types] : patches) {
-            patch.seekp(static_cast<std::streamoff>(offset));
-            patch.write(reinterpret_cast<const char*>(&types), sizeof(types));
-            if (++done % 4096 == 0) {
-                report(StageWriting, done, patches.size());
-            }
-        }
-        if (!patch) {
-            return fail("Writing the warm-up files failed");
-        }
-    }
-    // New files: the markers and counts of the old ones no longer apply. Each is removed right
-    // before its file is replaced, so a failed replacement leaves the other file's marker intact.
+    // A new file: the marker and count of the old one no longer apply.
     std::error_code ignored;
     fs::remove(WarmMarkerPath(compute_path), ignored);
-    fs::remove(WarmRunningPath(compute_path), ignored);
     fs::remove(WarmCountPath(compute_path), ignored);
     fs::rename(compute_tmp, compute_path, ec);
     if (ec) {
         return fail("Cannot replace " + Common::FS::PathToUTF8String(compute_path));
     }
-    fs::remove(WarmMarkerPath(graphics_path), ignored);
-    fs::remove(WarmRunningPath(graphics_path), ignored);
-    fs::remove(WarmCountPath(graphics_path), ignored);
-    fs::rename(graphics_tmp, graphics_path, ec);
-    if (ec) {
-        return fail("Cannot replace " + Common::FS::PathToUTF8String(graphics_path));
-    }
     WriteWarmCount(compute_path, result.compute_programs);
-    WriteWarmCount(graphics_path, result.vertex_programs + result.fragment_programs);
-    report(StageWriting, patches.size(), patches.size());
+    report(StageWriting, 1, 1);
     result.ok = true;
     LOG_INFO(Render_Vulkan,
-             "Shader warm-up build for {:016x}: {} compute, {} vertex, {} fragment entries, {} "
-             "programs skipped, {} archive and {} member errors, {:.1f} s",
-             title_id, result.compute_programs, result.vertex_programs, result.fragment_programs,
-             result.skipped, archive_errors, member_errors,
+             "Shader precache build for {:016x}: {} compute entries, {} programs skipped, {} "
+             "archive and {} member errors, {:.1f} s",
+             title_id, result.compute_programs, result.skipped, archive_errors, member_errors,
              std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
     return result;
 }

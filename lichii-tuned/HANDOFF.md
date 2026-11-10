@@ -35,15 +35,14 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Since round 21 (2026-11-09): branch `tuned` = Fritchii v5.5's tree (`fritchii-v5.5`,
-  `4012e5271`, Frizti/Lichii `oot-gather-fix`; its upstream base is nx2 `27226d256` of
-  2026-11-05) + `.github/workflows/lichii-tuned.yml` + this folder, recorded as a merge so the
-  branch's history stays (no force push). Our changes are branch `tuned5`; the patch is
-  `git diff --binary fritchii-v5.5 tuned5`, backed up in `tuned5.bundle` (fetch
-  `refs/tags/fritchii-v5.5` from https://github.com/Frizti/Lichii first). The variants are
-  `msvc` (as Fritchii ships), `pgo` and `pgo-lto`; `pgo-train` is off. The bullets below
-  describe the tuned4 era (upstream nx2 base) where they differ.
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `cbb512ee7` (merged in round 19, `281477eac`
+- Since round 22 (2026-11-10): branch `tuned` = upstream Lichii build 132 (`d2eaae4f3`) + the
+  workflow + this folder again, recorded as a merge so round 21's Fritchii tree (branch `tuned5`)
+  stays in the history. The patch is `git diff --binary d2eaae4f3 tuned4` (282 files, 2.0 MB),
+  backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone
+  that has zortos293/Lichii nx2 up to `d2eaae4f3`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
+  `msvc` is off again. The FSR 4 DLL step is gone: upstream's FSR 4 (#1062) downloads AMD's
+  runtime on request into the user folder's `fidelityfx` folder and checks it.
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `d2eaae4f3` (build 132, round 22; `cbb512ee7` merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
@@ -83,12 +82,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (350 commits over upstream nx2
-  `cbb512ee7`, which round 19 merged into it; pushing it doesn't trigger builds).
+- Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
+  `0e30416f4`, round 22; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `cbb512ee7`, as `tuned` does). The patch is `git diff --binary cbb512ee7 tuned4` (324 files,
-  2.28 MB); check it
+  `d2eaae4f3`, as `tuned` does). The patch is `git diff --binary d2eaae4f3 tuned4` (282 files,
+  2.0 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.

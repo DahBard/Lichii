@@ -47,7 +47,6 @@
 #include "common/settings_common.h"
 #include "qt_common/config/shared_translation.h"
 #include "qt_common/qt_compat.h"
-#include "yuzu/fritchii/fritchii_ui.h"
 
 namespace ConfigurationShared {
 
@@ -792,7 +791,7 @@ Widget* Builder::BuildWidget(Settings::BasicSetting* setting,
                              std::vector<std::function<void(bool)>>& apply_funcs,
                              RequestType request, bool managed, float multiplier,
                              Settings::BasicSetting* other_setting, const QString& suffix) const {
-    if (IsAndroidOnly(*setting) || FritchiiUi::HidesSetting(setting->GetLabel())) {
+    if (IsAndroidOnly(*setting)) {
         return nullptr;
     }
 

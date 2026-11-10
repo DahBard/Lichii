@@ -23,7 +23,6 @@
 #include "video_core/game_dlss_status.h"
 #include "video_core/macro.h"
 #include "video_core/native_qmd.h"
-#include "video_core/split_write_tracker.h"
 #include "video_core/textures/texture.h"
 
 namespace Core {
@@ -32,9 +31,6 @@ class System;
 
 namespace VideoCommon {
 class GpuSplit;
-}
-namespace VideoCommon::QmdPrediction {
-struct Record;
 }
 
 namespace Tegra {
@@ -46,13 +42,6 @@ class RasterizerInterface;
 }
 
 namespace Tegra::Engines {
-
-/// EXP13=2-4: bytes another engine's front knows (a 3D inline upload) land at GPU [address,
-/// address + size) of `memory` when the back runs the work that ends at ring `position`, written
-/// with write-stamp tag `tag`: the QMD copy's inline QMD overlays and upload shadow blocks that
-/// still hold those bytes take them, as compute inline uploads patch them.
-void Nx2PatchQmdCopy(VideoCommon::GpuSplit& split, const MemoryManager& memory, GPUVAddr address,
-                     const u8* data, u64 size, u64 position, u64 tag);
 
 /// Draws left to trace after an upscale fallback (debug aid).
 extern std::atomic<u32> g_nx2_trace_draws_after_upscale;
@@ -77,8 +66,6 @@ public:
     /// Binds a rasterizer to this engine.
     void BindRasterizer(VideoCore::RasterizerInterface* rasterizer);
 
-    /// Whether a write to `method` can write memory (a dispatch, upload or report): with the
-    /// native class, every method besides those that only store their value; macros always.
     [[nodiscard]] bool MayWriteMemory(u32 method) const {
         if (method >= native_plain_methods.size()) {
             return true;
@@ -285,42 +272,12 @@ public:
 private:
     struct FrontState;
     FrontState& Front(VideoCommon::GpuSplit& split);
+    void ReleaseFront();
     void FrontApply(FrontState& state, u32 method, u32 argument);
+    void FrontNoteReport(VideoCommon::GpuSplit& split, const FrontState& state, u32 control);
     MacroEngine& FrontMacroEngine(FrontState& state);
     std::span<u32> FrontMacroPositions(FrontState& state);
     void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
-    /// Tells the split a semaphore release just sent writes a known payload.
-    void FrontNoteRelease(VideoCommon::GpuSplit& split, const FrontState& state, u32 control) const;
-    bool FrontPlainWrite(VideoCommon::GpuSplit& split, FrontState& state, u32 method,
-                         u32 argument);
-    void FrontVerify(VideoCommon::GpuSplit& split, FrontState& state);
-    /// What a method sent from the front may write on the back (GpuSplit::Effect).
-    VideoCommon::SplitWriteTracker::Effect FrontEffect(u32 method) const;
-    /// After sending it: the memory it writes, for the front's reads.
-    void FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
-    /// After sending it: what it may write as compute work, for the front's macro memory reads
-    /// (GpuSplit::NoteWriterRange, NoteUnboundedWriter, NoteDispatchWriter).
-    void FrontNoteWriter(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 argument);
-    /// EXP13: predicts the releases of the QMD a launch just sent signals (nx2_qmd_prediction.h).
-    void FrontPredictQmd(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
-                         u32 argument) const;
-    /// EXP13=2: feeds the front's QMD scheduler copy the signal just sent (0xaf, 0xb0, 0x107).
-    void FrontMirrorQmd(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
-                        u32 argument) const;
-    /// EXP13=2: runs the copy's scheduler for a signal of the QMD at `qmd_address`.
-    void FrontQmdSignal(VideoCommon::GpuSplit& split, GPUVAddr qmd_address, u32 argument) const;
-    /// EXP13=2: the QMD at `address` as the back will read it; `unknown` when the copy can't
-    /// tell (it resyncs then).
-    bool FrontReadQmd(VideoCommon::GpuSplit& split, u64 address,
-                      NativeQmdScheduler::Descriptor& descriptor, bool& unknown,
-                      VideoCommon::QmdPrediction::Record& info) const;
-    /// An exec_upload with `exec` was sent: the range its data writes.
-    void FrontNoteUpload(FrontState& state, u32 exec);
-    /// EXP13=2: data_upload words just sent: the inline QMD overlays they fall in take them.
-    void FrontPatchOverlays(VideoCommon::GpuSplit& split, FrontState& state, const u32* words,
-                            u32 count, u64 position) const;
-    /// EXP13=2: the data_upload words batched since (FrontState::upload_batch) to the copy.
-    void FrontFlushUploads(VideoCommon::GpuSplit& split, FrontState& state) const;
     std::unique_ptr<FrontState> front;
     bool front_macros{}; ///< The front owns the macro code and bindings (the back skips them)
 
@@ -408,7 +365,6 @@ private:
     void ProcessLaunch();
 
     void ConsumeSinkImpl(Core::System& system) override;
-    void ApplyPairs(Core::System& system, const u64* pairs, u32 count) override;
 
     /// Retrieves information about a specific TIC entry from the TIC buffer.
     Texture::TICEntry GetTICEntry(u32 tic_index) const;
