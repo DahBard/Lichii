@@ -1159,6 +1159,8 @@ Own changes:
   (for r47) logs 'Frame generation pacing: game frames every X ms; a generated frame went out Y ms
   after the frame before it, its game frame Z ms after it' every 10 s. Even 2x spacing gives
   Y = Z = X/2. It also logs with LICHII_FG_PACING=0.
+- Run #47 (tuned4 `c3fe6e601`): all three variants built (success, ~7 minutes; artifacts
+  `lichii-tuned-r47-*`). r47 is r46 plus the pacing log.
 - CheezyEmu's AMD frame generation (owner asked why not use it): on an RX 9070 XT it is AMD's FSR
   4 frame generation (ML, FP8; FSR 3.1 elsewhere) through AMD's runtime
   (`amd_fidelityfx_framegeneration_vk.dll` beside the loader). AMD's swapchain does the pacing,
