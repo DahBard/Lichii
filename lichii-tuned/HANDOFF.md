@@ -1161,6 +1161,10 @@ Own changes:
   Y = Z = X/2. It also logs with LICHII_FG_PACING=0.
 - Run #47 (tuned4 `c3fe6e601`): all three variants built (success, ~7 minutes; artifacts
   `lichii-tuned-r47-*`). r47 is r46 plus the pacing log.
+- r47 pacing check (owner's log): the generated frames sit halfway. Per 10 s: interval 16.6 ms,
+  gaps 8.7/8.5; 21.5 -> 10.9/11.0; 18.8 -> 9.6/9.7; 17.4 -> 8.7/9.0 ms. Each gap is a median
+  0.51 of the interval. A load window (20 game + 13 generated fps) gave 15.4/15.3 ms around stalls.
+  At 271 s the swapchain went to 3574x1974 (a window again).
 - CheezyEmu's AMD frame generation (owner asked why not use it): on an RX 9070 XT it is AMD's FSR
   4 frame generation (ML, FP8; FSR 3.1 elsewhere) through AMD's runtime
   (`amd_fidelityfx_framegeneration_vk.dll` beside the loader). AMD's swapchain does the pacing,
