@@ -1086,6 +1086,18 @@ Own changes:
 - Run #44 (tuned4 `5f428467d`): all three variants built (success, ~8 minutes; artifacts
   `lichii-tuned-r44-*`). r44 is the build to prepare shaders with: it prepares once, resumes if
   interrupted, and later builds keep it until PreparationVersion is raised.
+- r43 test (owner, 2026-11-10): 'the smoothest the game has felt by far ... significantly
+  smoother than r35', and graphically the worst, as expected with every anti-aliasing off. Owner's
+  settings: anti_aliasing None, scaling filter NearestNeighbor, OoT AA NoSharpening, FSR off; v4's
+  async shaders and presentation on.
+  - The preparation finished for the first time on the tuned fork: 'Precompiled pipelines: 120085
+    of 120124 prepared ... 39 failed', 'Shader precache: finished, 123953 built, 47 failed, 0 not
+    reached, 2690.9 s'. The 8 builds in flight when r42 was closed are skipped as poisoned.
+  - Play (2949-3049 s, 10-s windows): 33.1-52.7 fps, p50 17.5-28.2 ms; 600-present windows
+    19.1-27.1 ms. Some windows had 13-14 runtime pipeline builds (async shaders on). The worst
+    windows were 34.0 fps (p99 104 ms) and 39.4 fps. Title and menus were capped at 60 Hz.
+  - r44 prepares once more (new stamp format and name), with AMD's driver cache warm from this
+    run.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
