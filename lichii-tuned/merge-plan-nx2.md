@@ -145,6 +145,13 @@ Cross-area rules from the critique:
 2. **Import mode: "Keep Old Data" (Copy).** The tuned build shares `%APPDATA%\lichii` with the
    official Lichii builds. Fritchii and build 132 keep `%APPDATA%\eden`.
 3. **Upstream report of the copy-time bug:** not decided. Ask before any outward action.
+4. **Defaults (owner: "Make your recommended settings the default"):** follow-up (f) on the merge
+   branch.
+   - Code defaults in settings.h: precache_shaders Always, use_reactive_flushing false
+     everywhere, native_async_draws Bounded, vram_usage_mode Aggressive. pin_gpu_threads is
+     already false.
+   - The `applied < 3` seed in config.cpp becomes precache Always.
+   - TunedDefaultsVersion stays 4, because the owner's profile already holds these values.
 
 ## Owner's first test after the merge
 
