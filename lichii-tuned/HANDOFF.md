@@ -1066,6 +1066,23 @@ Own changes:
 - Run #43 (tuned4 `5ce380aae`): all three variants built (success, ~6 minutes with warm caches;
   artifacts `lichii-tuned-r43-*`). r43 is r42 plus the precache fix: the build to test the
   preparation with.
+- Round 22, step 2 (part) and step 3 (part), for r44:
+  - Ocarina FSR without camera jitter or texture LOD bias unless LICHII_FSR_JITTER=1 (tuned4
+    `6888a931b`). Upstream's #1061 jitter offsets the scene draws whenever FSR upscales, with no
+    switch. CheezyEmu's Ocarina FSR hands FSR a {0, 0} jitter and uses no bias. FSR 3.1/4 can be
+    turned on again without the border shimmer.
+  - The preparation persists (tuned4 `5f428467d`):
+    - The stamp holds Nx2Precompile::PreparationVersion ('tuned 1') instead of the build
+      version. Raise it when a translator or key change makes AMD's driver cache miss.
+    - Our own file names (`precompiled_prepared.tuned-v54.txt`).
+    - Progress is saved every 30 s and on a skip or quit (`precompiled_progress.tuned-v54.txt`),
+      and the next launch resumes there.
+  - CheezyEmu's small AMD fixes: the blend-state rebuild (858c11554) and #300's HMMA deferral are
+    in tuned4 already (round 10's Sharkiix port; `bace6509e`). robustBufferAccess2 (c08bd7432)
+    doesn't apply: the owner's driver has no VK_EXT_robustness2 (r42 log).
+  - Still to port from CheezyEmu: AMD frame generation (vk_amd_frame_gen, present and swapchain
+    hooks, HUD mask shaders), the FSR 4 black-output fallback to FSR 3.1 (3260bc547, e44b16bed;
+    upstream fixed the float8 cause with CheezerWheezer's finding), and the FSR presets.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
