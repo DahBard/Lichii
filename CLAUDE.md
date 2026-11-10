@@ -6,7 +6,8 @@
 
 This fork's `tuned` branch builds a tuned Windows Lichii for the owner's laptop (Core Ultra 7 255H +
 RX 9070 XT over OCuLink, testing Ocarina of Time). Since round 21 (2026-11-09, the owner's decision
-after Fritchii v5.5 ran Ocarina at 60 fps on the laptop) the base is Fritchii v5.5: `tuned`'s tree
+after Fritchii v5.5 felt smoother on the laptop; its "60 fps" was the title-screen video, and in
+gameplay it ran ~32 fps against our r28's 34-42, see HANDOFF) the base is Fritchii v5.5: `tuned`'s tree
 is Fritchii's, and our changes live on branch `tuned5`, brought over from the old fork (branch
 `tuned4`) in small groups, each A/B-able against plain Fritchii. The workflow can also build a CachyOS (Linux)
 package (round 16), but since round 17 the owner wants a Linux build only when they ask for one:

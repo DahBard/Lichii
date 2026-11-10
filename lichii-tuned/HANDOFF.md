@@ -122,10 +122,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 ## What the tuned build contains (tuned5, from round 21; tuned4 below)
 
 Round 21 (2026-11-09): the Fritchii base.
-- The owner ran Fritchii v5.5 on the laptop: a steady 60 fps (Test results, 2026-11-09), against
-  our ~30. Decision: restart the tuned fork on Fritchii and bring our changes over in small
-  groups, each A/B-able against plain Fritchii. The old fork stays on `tuned4` (`e9226a635`,
-  r36, built but not tested).
+- The owner ran Fritchii v5.5 on the laptop and found it smoother. I first read its log as
+  60 fps against our ~30; that was its title-screen video. In gameplay it ran ~32 fps against
+  r28's 34-42 (Test results, 2026-11-09, CORRECTION). Decision, made on the misread: restart the
+  tuned fork on Fritchii and bring our changes over in small groups, each A/B-able against
+  plain Fritchii. The old fork stays on `tuned4` (`e9226a635`, r36, built but not tested). With
+  the correction the owner decides again whether to keep this base.
 - First build (run #37): plain Fritchii v5.5 plus `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` (the
   owner's standing choice, `6fa98f063`), in three variants: `msvc` (as Fritchii ships), `pgo`
   and `pgo-lto` (our MinGW clang + PGO + `-march=x86-64-v3 -mtune=arrowlake`). It answers
@@ -925,11 +927,40 @@ Own changes:
   - Not tested: the owner decided (2026-11-09) to restart the tuned fork on Fritchii instead
     (below).
 - Owner, 2026-11-09, after running Fritchii v5.5 on the laptop: it "felt smoother than any of
-  our runs so far". Its log presents at a steady 60 fps ('nx2:vi2 last 600 presents: frame
-  16693 us', worst frame ~20 ms per 10 s, no in-game pipeline builds). Our r27/r28 ran ~33 ms
-  frames. Its preparation took 562 s for 120,093 pipelines, ~30% of them from AMD's driver
-  cache; assembling the recipe from the game files took another 714 s. Decision: start a new
-  branch from fritchii-v5.5 and bring our changes over in A/B-able groups:
+  our runs so far". I read its log as a steady 60 fps against our ~30, and on that the owner
+  decided to restart on Fritchii.
+  - CORRECTION (2026-11-10): the 60 fps lines ('nx2:vi2 last 600 presents: frame 16693 us',
+    1346-1446 s) are the title screen's 99 s video (nx2:vdecsvc frame 1 at 1345 s, frame 5947
+    at 1451 s). r28's title screen ran the same (17,263 us, R28 log line 1527).
+  - In gameplay (1572-1680 s, ~107 s) Fritchii ran 30.0-30.9 ms frames (~32 fps), with 46-331 ms
+    worst frames per 10 s, 0-6 frames over 100 ms per 600 presents, and 172 pipelines built in
+    game with 5,751 ms of held draws.
+  - r28 in gameplay ran 23.5-29.6 ms frames (34-42 fps; 'Frame times' 37 fps), with ~65 ms
+    median worst frames. The scenes differ after the first seconds, and r28 ran FSR 4 and
+    perf-trace.
+  - So the restart brings no frame rate. What is real is the preparation: Fritchii's took
+    562 s for 120,093 pipelines (~30% from AMD's driver cache, so not a cold start); assembling
+    the recipe took another 714 s. r35 had run 2,624 s when it crashed near the end.
+  - What may explain "smoother" (inferred, untested):
+    - Presentation: Fritchii re-applies VSync Mailbox at every launch, and the owner had
+      Exclusive fullscreen. Our builds default to FIFO and Borderless, and log neither the
+      present mode they got nor the fullscreen mode.
+    - Image: FSR 4's camera jitter shimmer. Fritchii uses FXAA and ScaleForce.
+    - Settings drift: our builds share Fritchii's qt-config.ini. Fritchii saves a value equal
+      to its own default as 'default', and our build then loads ours. r35 ran with async shaders
+      off, async presentation off and CPU video decoding.
+    - Time step: Fritchii's Dark patch averages ~8 frames (50 ms cap); ours uses each frame's
+      own time (100 ms cap). LICHII_DYNFPS_SMOOTHING=8 with LICHII_DYNFPS_MIN_FPS=20
+      reproduces Dark's.
+  - Preparation speed causes (tuned4):
+    - The task/mesh build slot is 1 on this laptop: EDEN_NX2_HEAVY_BUILD_SLOTS=0 lifts it.
+      Fritchii has no limit.
+    - #781's 3,874 compute programs run ahead of the recipe.
+    - Our records cost ~2.3x Fritchii's for a reason not yet measured. Candidates are
+      translation, forced 32-wide subgroups, and opening the recipe file per record.
+  - The full comparison is in the session's workflow output (compare-fritchii-gameplay).
+  The plan as decided: start a new branch from fritchii-v5.5 and bring our changes over in
+  A/B-able groups:
   - Radeon: FSR 4, with camera jitter off by default.
   - Laptop CPU: core placement and spin/wait tweaks.
   - Diagnostics, including the crash writer.
