@@ -1153,6 +1153,19 @@ Own changes:
     interval / (generations + 1). LICHII_FG_PACING=0 restores upstream's back-to-back presents.
 - Run #46 (tuned4 `c1f7068cf`): all three variants built (success, ~6 minutes; artifacts
   `lichii-tuned-r46-*`). r46 is r45 plus the frame generation pacing.
+- r46 test (owner): 'slightly smoother than before ... No ghosting and input feels normal'. The
+  log shows one generated frame per game frame (46-59 + 46-59 per second, fullscreen 3840x2160
+  until a window resize at ~155 s). It can't show where the frames went out. tuned4 `c3fe6e601`
+  (for r47) logs 'Frame generation pacing: game frames every X ms; a generated frame went out Y ms
+  after the frame before it, its game frame Z ms after it' every 10 s. Even 2x spacing gives
+  Y = Z = X/2. It also logs with LICHII_FG_PACING=0.
+- CheezyEmu's AMD frame generation (owner asked why not use it): on an RX 9070 XT it is AMD's FSR
+  4 frame generation (ML, FP8; FSR 3.1 elsewhere) through AMD's runtime
+  (`amd_fidelityfx_framegeneration_vk.dll` beside the loader). AMD's swapchain does the pacing,
+  and HUD masks keep the HUD clean. The cost is a ~1,000-line module plus a swapchain replacement
+  (acquire and present through AMD's runtime). It is built on CheezyEmu's own FSR 4 runtime,
+  upscaler and Ocarina motion code, while ours are upstream's (#1060-#1062), so it needs adapting
+  rather than copying. Upstream's runtime download lacks the frame generation DLL.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
