@@ -1053,6 +1053,16 @@ Own changes:
 - Run #42 (tuned4 `604dbd24f` = r36 + build 132 + the fix): all three variants built (success,
   ~40 minutes; artifacts `lichii-tuned-r42-pgo-lto` and `-pgo` 62 MB, `-pgo-train` 68 MB, smaller
   than r40's because AMD's FSR DLLs are no longer bundled). r42 is the round 22 merge build to test.
+- r42 test (owner, 2026-11-10): the precache took much longer than before and Lichii used 23 GB
+  of RAM, over twice the usual. The log reads 'Shader precache: 0 cached graphics pipelines, 3876
+  of 3996 compute programs and 120124 precompiled pipelines to build on 15 threads' (137.7 s).
+  Two causes in the merge:
+  - The ~124k jobs went to upstream's shader job scheduler all at once. Its memory budget counts
+    only running stages, so translated pipelines waiting for a driver worker piled up.
+  - Its driver pool has hardware_concurrency/2 threads (8), and the driver builds bound the
+    precache.
+  Fixed in tuned4 `5ce380aae`: at most 4 jobs per worker in flight, and the CPU workers run the
+  builds themselves, as before the merge.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
