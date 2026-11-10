@@ -151,6 +151,129 @@ index c4093d547..81add3c6d 100644
  endif()
  
  # Shader warm-up builder: game archives use zstd (also with dictionaries) and zlib.
+diff --git a/src/video_core/engines/kepler_compute.cpp b/src/video_core/engines/kepler_compute.cpp
+index 2a5c151f9..53790cffb 100644
+--- a/src/video_core/engines/kepler_compute.cpp
++++ b/src/video_core/engines/kepler_compute.cpp
+@@ -1627,8 +1627,8 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
+     if (!BypassEnabled(program_id)) {
+         return false;
+     }
+-    auto* const state = rasterizer->OotNetworkBypass();
+-    if (!state) {
++    auto* const bypass = rasterizer->OotNetworkBypass();
++    if (!bypass) {
+         return false;
+     }
+     // The tonemap pass draws before the network every frame; until it has been seen (menus, the
+@@ -1636,14 +1636,14 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
+     // pass is being replaced, so a failed replacement brings the whole network back next frame.
+     Maxwell3D::Regs::RenderTargetConfig tonemapped;
+     {
+-        std::scoped_lock lock{state->mutex};
+-        tonemapped = state->tonemapped;
++        std::scoped_lock lock{bypass->mutex};
++        tonemapped = bypass->tonemapped;
+     }
+     if (tonemapped.Address() == 0) {
+         return false;
+     }
+     if (native_key == PrepassProgramKey || native_key == NetworkProgramKey) {
+-        return state->output_replaced.load(std::memory_order_relaxed);
++        return bypass->output_replaced.load(std::memory_order_relaxed);
+     }
+     if (native_key != OutputProgramKey) {
+         return false;
+@@ -1655,7 +1655,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
+         tonemapped.format != Tegra::RenderTargetFormat::B10G11R11_FLOAT ||
+         tonemapped.tile_mode.is_pitch_linear || tonemapped.width != output->Width() ||
+         tonemapped.height != output->Height()) {
+-        state->output_replaced.store(false, std::memory_order_relaxed);
++        bypass->output_replaced.store(false, std::memory_order_relaxed);
+         static bool warned = false;
+         if (!std::exchange(warned, true)) {
+             LOG_WARNING(HW_GPU,
+@@ -1700,7 +1700,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
+         .src_y1 = height,
+     };
+     const bool copied = rasterizer->AccelerateSurfaceCopy(source, destination, config);
+-    state->output_replaced.store(copied, std::memory_order_relaxed);
++    bypass->output_replaced.store(copied, std::memory_order_relaxed);
+     static bool logged = false;
+     if (!std::exchange(logged, true)) {
+         LOG_INFO(HW_GPU,
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index 0967f2ab1..de70c8237 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -2264,12 +2264,12 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+                             return dispatches.unbounded[static_cast<size_t>(reason)];
+                         };
+                         u64 dispatch_drains = 0;
+-                        for (const u64 count : dispatch_checks) {
+-                            dispatch_drains += count;
++                        for (const u64 tally : dispatch_checks) {
++                            dispatch_drains += tally;
+                         }
+                         u64 dispatches_unbounded = 0;
+-                        for (const u64 count : dispatches.unbounded) {
+-                            dispatches_unbounded += count;
++                        for (const u64 tally : dispatches.unbounded) {
++                            dispatches_unbounded += tally;
+                         }
+                         using Release = VideoCommon::GpuSplit::ReleaseNote;
+                         const auto& releases = split.ReleaseNotes();
+@@ -2712,22 +2712,22 @@ void Maxwell3D::RunDrawBatch(Core::System& system, const u64* writes, u32 count,
+     if (repeats <= 1) {
+         return;
+     }
+-    auto& state = draw_manager.draw_state;
++    auto& draw_state = draw_manager.draw_state;
+     if ((VideoCore::Nx2Debug::Experiment(22) & 8) == 0) [[likely]] {
+         // The repeats write what the registers and shadow RAM hold, raise flags that are raised,
+         // set draw_indexed again and draw nothing (IsBatchMiddle): each counts an instance in
+         // its draw.begin (DrawManager::DrawBegin, Subsequent).
+-        state.instance_count += repeats - 1;
++        draw_state.instance_count += repeats - 1;
+         return;
+     }
+     // EXP22 bit 8: the repeats as their single entries, against that.
+     constexpr u32 MaxWrites = FrontState::MaxBatchWrites;
+     const u32 checked = (std::min)(count, MaxWrites);
+-    const u32 expected = state.instance_count + (repeats - 1);
++    const u32 expected = draw_state.instance_count + (repeats - 1);
+     const DirtyState::Flags flags = dirty.flags;
+-    const auto mode = state.draw_mode;
+-    const bool indexed = state.draw_indexed;
+-    const auto topology = state.topology;
++    const auto mode = draw_state.draw_mode;
++    const bool indexed = draw_state.draw_indexed;
++    const auto topology = draw_state.topology;
+     std::array<u32, MaxWrites> group_regs{};
+     std::array<u32, MaxWrites> group_shadow{};
+     for (u32 i = 0; i < checked; ++i) {
+@@ -2738,9 +2738,9 @@ void Maxwell3D::RunDrawBatch(Core::System& system, const u64* writes, u32 count,
+     for (u32 repeat = 1; repeat < repeats; ++repeat) {
+         run_group();
+     }
+-    bool differs = state.instance_count != expected || dirty.flags != flags ||
+-                   state.draw_mode != mode || state.draw_indexed != indexed ||
+-                   state.topology != topology;
++    bool differs = draw_state.instance_count != expected || dirty.flags != flags ||
++                   draw_state.draw_mode != mode || draw_state.draw_indexed != indexed ||
++                   draw_state.topology != topology;
+     for (u32 i = 0; i < checked; ++i) {
+         const u32 method = static_cast<u32>(writes[i]) & 0xffff;
+         differs |= regs.reg_array[method] != group_regs[i] ||
+@@ -2750,7 +2750,7 @@ void Maxwell3D::RunDrawBatch(Core::System& system, const u64* writes, u32 count,
+     if (differs && g_exp22_checks.batch_differences++ < 32) {
+         LOG_ERROR(HW_GPU,
+                   "EXP22 check: draw batch of {} writes x {} differs: {} instances, expected {}",
+-                  count, repeats, state.instance_count, expected);
++                  count, repeats, draw_state.instance_count, expected);
+     }
+     ReportExp22Checks();
+ }
 diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
 index 61accdb68..416dda672 100644
 --- a/src/video_core/gpu_split.h

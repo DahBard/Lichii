@@ -128,10 +128,16 @@ Round 21 (2026-11-09): the Fritchii base.
   tuned fork on Fritchii and bring our changes over in small groups, each A/B-able against
   plain Fritchii. The old fork stays on `tuned4` (`e9226a635`, r36, built but not tested). With
   the correction the owner decides again whether to keep this base.
-- First build (run #37): plain Fritchii v5.5 plus `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` (the
-  owner's standing choice, `6fa98f063`), in three variants: `msvc` (as Fritchii ships), `pgo`
-  and `pgo-lto` (our MinGW clang + PGO + `-march=x86-64-v3 -mtune=arrowlake`). It answers
-  whether our toolchain helps or hurts on the laptop.
+- First build (run #37, built in #39 and #40 after build fixes): plain Fritchii v5.5 plus
+  `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` (the owner's standing choice, `6fa98f063`), in three
+  variants: `msvc` (as Fritchii ships), `pgo` and `pgo-lto` (our MinGW clang + PGO +
+  `-march=x86-64-v3 -mtune=arrowlake`). It answers whether our toolchain helps or hurts on the
+  laptop.
+- Build fixes on tuned5, none of which changes behaviour: tuned4's ThinLTO fallback for MSYS2
+  clang (`c817bd803`), dwmapi linked through CMake instead of `#pragma comment` (`95b3bd0e3`),
+  and Fritchii's locals renamed where they hid another name (`939e9bde3`, `ea2f48a62`,
+  `66500175c`; MSVC's /we4456-4459 and MinGW clang's -Werror=shadow). Fritchii's download
+  reports MSVC 1950 (VS 2026); windows-2022 has 19.44.
 - To bring over next, each with an A/B launcher, in an order set by the Fritchii comparison:
   - Radeon: FSR 4, with camera jitter off by default (the water shimmer).
   - Laptop CPU: hybrid core placement and the spin/wait tweaks.
@@ -969,6 +975,20 @@ Own changes:
   reported that r35 in game still showed the bright shimmer where water meets the screen edges,
   unchanged from r28. HANDOFF round 19 notes it was gone with ab-14 (no FSR 4 jitter), so
   round 19's mask change did not fix it.
+- Run #37 (round 21's first build, `0a62df141`) failed in all three variants: `pgo-lto` at
+  CMake's IPO check, `msvc` on a name that hid a global (C4459), `pgo` on one that hid a local
+  (-Werror=shadow). Builds now pass `-k 0` to ninja, so one run lists every error left.
+- Run #38 failed at 'Apply the tuning patch' in every variant: the runner's core.autocrlf made
+  the patch CRLF, and a hunk ending without a newline no longer matched.
+  `lichii-tuned/.gitattributes` keeps `*.patch` byte for byte.
+- Run #39 (tuned5 `ea2f48a62`, 11 files over Fritchii v5.5): `pgo` and `pgo-lto` built
+  (success; artifacts `lichii-tuned-r39-pgo`, `lichii-tuned-r39-pgo-lto`). `msvc` failed at
+  1773/1929 on four names in Fritchii's code that hid a member or parameter (C4457 and C4458 in
+  kepler_compute.cpp and maxwell_3d.cpp). Ninja stopped there: the Qt frontend waits for
+  video_core, so it was never compiled. Renamed in `66500175c`. A local syntax check of the 25
+  frontend files Fritchii changes (clang and GCC with Qt 6.4 headers, Linux and MinGW targets)
+  found nothing else MSVC would stop on.
+- Run #40 (tuned5 `66500175c`): the same three variants with `msvc` fixed.
 - The owner, 2026-11-08, playing r26 for fun: a downloaded ~90,000-pipeline Ocarina cache
   "worked the first time I loaded it", then r26 loaded only ~23,000. Likely cause: round 16
   keys graphics pipelines by the vertex attribute types their programs read (#408) and builds
