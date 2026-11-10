@@ -53,12 +53,13 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * "GPU Clocks" (Boost by default) again shortens how long the game thinks its GPU work takes
    (Lichii #664). Ocarina sizes its render resolution from that, so it can render sharper and
    ask more of the GPU; Normal keeps the old behaviour.
- * AMD FSR 4 upscales Ocarina to 4K by default (docked: the game's 2560x1440 to 3840x2160),
-   with AMD's FSR 4 libraries from the AMD FSR SDK 2.4 next to lichii.exe
-   (amd_fidelityfx_loader_vk.dll, amd_fidelityfx_upscaler_vk.dll; AMD's license is in
-   amd_fidelityfx_license.md). Where FSR 4 can't run (another GPU, missing libraries, an
-   error), FSR 3.1 takes over and the log says why ("AMD FSR 4:" lines). The setting is
-   "Use AMD FSR upscaling in Ocarina of Time" (Graphics); trace-fsr31.bat compares FSR 3.1.
+ * Ocarina's AMD FSR upscaling is upstream Lichii's since build 132 (this build's own FSR 4,
+   camera jitter and reactive-mask changes of rounds 15-19 are gone, with LICHII_FSR4,
+   LICHII_FSR_JITTER and LICHII_FSR_REACTIVE): "Use AMD FSR 3.1 upscaling in Ocarina of
+   Time" (Graphics, off by default) upscales docked to 4K, and with it on, upstream's camera
+   jitter and texture LOD bias come with it. "Use AMD FSR 4 in place of FSR 3.1" (off by
+   default) downloads AMD's FidelityFX runtime into the user folder's "fidelityfx" folder when
+   you turn it on, and falls back to FSR 3.1 without it.
  * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
    GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
  * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
@@ -104,8 +105,8 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Round 18: AMD FSR 4 (and its FSR 3.1 fallback) now gets a camera jitter: each frame the
    scene is drawn shifted by a different fraction of a pixel and FSR is told the shift, so it
    collects new detail over the frames instead of the same samples (sharper edges and fine
-   detail, less crawling). It runs only while FSR upscales Ocarina; ab-14 turns it off
-   (LICHII_FSR_JITTER=0). Upstream Lichii's newest commits are in too, among them cheaper
+   detail, less crawling). Removed in round 22 for upstream's FSR (it made the screen's
+   edges shimmer, most visibly with water). Upstream Lichii's newest commits are in too, among them cheaper
    per-draw work on the GPU back thread (texture lookups reused while a pipeline's textures
    stay the same). The run also has a "pgo-train" download again: 10-15 minutes of Ocarina
    with it records a profile that makes the next builds' own code faster on this CPU (see the
@@ -127,12 +128,6 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    waits only for the words GPU work wrote, and lets the GPU read compute parameters it wrote
    itself; uploads are batched into fewer commands. ab-18 brings back round 17's behaviour,
    verify-r18 checks the shortcuts against the slow way while you play.
- * Round 19: the shimmering textures where water meets the screen's edges with FSR's jitter
-   (round 18) are addressed. Pixels FSR is told to take from the current frame (glows,
-   particles and, as it turned out, water drawn after the fog) are taken half from the current
-   frame while jittering, so they keep some of their history (LICHII_FSR_REACTIVE, 0 to 1,
-   default 0.5; ab-19 brings round 18's full strength back), and that mask no longer spreads
-   along the screen's edges while the camera moves.
  * Round 20, from upstream Lichii's open pull requests: the GPU thread draws Ocarina's
    culled mesh draws from the counts the GPU wrote, without waiting for them (#980, about 2,000
    waits a second); one channel's semaphore release frees the channel waiting on it when the
@@ -149,7 +144,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    memory pages that only hold zeros are taken out of RAM (#961; Ocarina boots with ~7 GB of
    them), and the texture cache limits are logged only when they change (#951).
  * Round 20, from Fritchii v5.2: core timing waits on a high-resolution timer on Windows
-   (ab-21 brings the old wait back), every ASTC decode and unswizzle store is bounds-checked
+   (since round 22 upstream's own version, #1016), every ASTC decode and unswizzle store is bounds-checked
    (AMD corruption and device loss), staging buffers may go over the memory budget instead of
    aborting, guest writes wait for a GPU download landing under them instead of being
    overwritten, and the pipeline cache is more robust: background builds stop when the game
@@ -179,7 +174,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
      thread, so a new effect stalls the frame less; a draw whose pipeline is still building is
      skipped only into targets the game clears every frame, so menus and one-time effects still
-     wait; boot pipelines are read from the cache file one at a time (less memory).
+     wait.
    - Guest memory (ab-23): the emulated CPU's reads and writes of memory the GPU never wrote skip
      the caches' locks, and its writes reach the GPU before the next command list, semaphore or
      copy; the uniform bank check skips its once-a-frame compare; two #717 trims; cache
@@ -192,7 +187,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, and "Ocarina of Time anti-aliasing" = No sharpening (Graphics
-   settings; "Game" brings the game's network back). Round 15 adds Ocarina's FSR upscaling on.
+   settings; "Game" brings the game's network back).
 
 The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
 CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
@@ -224,8 +219,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-13-round16-texture-reads.bat  textures copied out of guest memory before they are untiled,
                               as in round 16 (EDEN_NX2_UNSWIZZLE_COPY=1), logged like
                               perf-trace.bat
- ab-14-no-fsr-jitter.bat      FSR 4 without round 18's camera jitter (LICHII_FSR_JITTER=0),
-                              logged like perf-trace.bat: compare edges and fine detail
  ab-15-round17-cpu.bat        round 18's CPU work from #717 all off (code generation, memory,
                               kernel, Ocarina patches), logged like perf-trace.bat
  ab-16-round17-jit.bat        only #717's code generation off, logged like perf-trace.bat
@@ -233,18 +226,12 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               backoff, wider core masks), logged like perf-trace.bat
  ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
                               macro reads, list waits and uploads), logged like perf-trace.bat
- ab-19-round18-reactive.bat   FSR's reactive mask at round 18's full strength on jittered
-                              frames (LICHII_FSR_REACTIVE=1), logged like perf-trace.bat
  ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
                               spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
                               power-limited laptop, compare the frame rate with the default
- ab-21-old-timer.bat          core timing waits as in round 19 instead of on Fritchii's
-                              high-resolution timer (EDEN_HIRES_CLOCK=0), logged like
-                              perf-trace.bat
  ab-22-round19-shaders.bat    round 19's shader handling: translation on the GPU thread, every
-                              draw waits for its pipeline, boot records held in memory
-                              (EDEN_NX2_ASYNC_TRANSLATE=0, EDEN_NX2_ASYNC_DISCARD=0,
-                              EDEN_NX2_PREBUILD_STREAM=0), logged like perf-trace.bat
+                              draw waits for its pipeline (EDEN_NX2_ASYNC_TRANSLATE=0,
+                              EDEN_NX2_ASYNC_DISCARD=0), logged like perf-trace.bat
  ab-23-round19-memory.bat     round 19's guest memory paths (EDEN_NX2_EXP35=0,
                               EDEN_NX2_EXP36=1, LICHII_BANK_CHECK=1, EDEN_NX2_EXP18=0,
                               EDEN_NX2_EXP29=0,
@@ -273,8 +260,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
                               reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
                               like perf-trace.bat
- trace-fsr31.bat              AMD FSR 3.1 instead of FSR 4 (LICHII_FSR4=0), logged like
-                              perf-trace.bat
  trace-no-fsr.bat             Ocarina's own upscale pass, no 4K output
                               (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
  trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
@@ -296,7 +281,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
 Each start replaces the log, so copy it after every run you want to compare.
 
 The CachyOS (Linux) download of the same run has a .sh twin of each launcher and its own
-README-cachyos.md (no FSR 4 there: AMD's libraries are Windows-only).
+README-cachyos.md (no FSR 4 there: AMD's runtime is Windows-only).
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
 

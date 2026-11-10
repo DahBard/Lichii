@@ -275,9 +275,11 @@ void GpuSplit::WaitForSpace(size_t words) {
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (write_position + words - consumed_cache <= RingWords) {
+            Nx2Profile::AddDrain(DrainSite::RingFull, start);
             return;
         }
         if (spins < 4096) {
@@ -328,18 +330,34 @@ void GpuSplit::Publish() {
 
 void GpuSplit::Drain(DrainSite site) {
     consumed_cache = consumed.load(std::memory_order_acquire);
-    if (consumed_cache == write_position) {
+    if (consumed_cache == write_position && BackQuiet()) {
         return;
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
+    // Everything consumed is not enough: the back submits deferred work (Scheduler::DeferFlush)
+    // from its idle hook afterwards, and the caller may use the scheduler once this returns.
+    bool hook_asked = false;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache == write_position) {
-            publish_every = PublishAfterWait;
-            Nx2Profile::AddDrain(site, start);
-            return;
+            if (BackQuiet()) {
+                publish_every = PublishAfterWait;
+                Nx2Profile::AddDrain(site, start);
+                return;
+            }
+            if (!hook_asked) {
+                RequestIdleHook();
+                hook_asked = true;
+            }
+            // Backoff sleeps only while entries are unconsumed: spin until the hook is done.
+            if (spins < 16384) {
+                Pause();
+            } else {
+                std::this_thread::yield();
+            }
+            continue;
         }
         Backoff(spins, write_position);
     }
@@ -770,6 +788,7 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
 
 void GpuSplit::BackLoop(std::stop_token stop_token) {
     const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuBack};
+    const StutterTrace::ThreadScope stutter_thread{StutterTrace::Thread::Back};
     Common::SetCurrentThreadName("GPUBack");
     on_back_thread = true;
     back_running.store(true, std::memory_order_release);
@@ -784,8 +803,12 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
 #endif
     u64 read_position = 0;
     while (!stop_token.stop_requested()) {
-        Nx2Profile::Report("GPU back thread");
-        MaybeTick();
+        Nx2Profile::Report("GPU back thread", true);
+        if (tick_requested.load(std::memory_order_relaxed)) [[unlikely]] {
+            // The tick uses the scheduler: a drain waits for the idle hook after it.
+            back_quiet.store(false, std::memory_order_seq_cst);
+            MaybeTick();
+        }
         u64 available = published.load(std::memory_order_acquire);
         if (available == read_position) {
             // The front publishes what it holds at its next commit (a few words) from now on.
@@ -809,9 +832,16 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                        hook_requested.load(std::memory_order_relaxed) ||
                        tick_requested.load(std::memory_order_relaxed);
             });
-            if (available == read_position && idle_hook != nullptr) {
+            if (available == read_position) {
                 hook_requested.store(false, std::memory_order_seq_cst);
-                idle_hook(idle_argument);
+                // The front may already see everything consumed: Drain() waits for back_quiet
+                // too, so the deferred submit can't overlap whatever the front does next.
+                if (!back_quiet.load(std::memory_order_relaxed)) {
+                    if (idle_hook != nullptr) {
+                        idle_hook(idle_argument);
+                    }
+                    back_quiet.store(true, std::memory_order_release);
+                }
                 available = published.load(std::memory_order_acquire);
             }
             if (available == read_position) {
@@ -832,6 +862,8 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             }
         }
         u64 last_store = read_position;
+        // Before any entry runs, so a front that sees these entries consumed also sees this.
+        back_quiet.store(false, std::memory_order_seq_cst);
         while (read_position != available) {
             const size_t index = read_position & RingMask;
             back_entry_start = read_position;

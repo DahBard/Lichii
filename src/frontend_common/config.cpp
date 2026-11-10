@@ -151,10 +151,12 @@ void Config::SetUpIni() {
         // lichii-tuned: the speed settings it recommends, applied once to an existing
         // configuration as well. Whatever is changed afterwards is kept.
         BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
-        constexpr s64 TunedDefaultsVersion = 3;
+        constexpr s64 TunedDefaultsVersion = 4;
         // Read without a default: with one, a key without a default flag reads as that default.
         const s64 applied = ReadIntegerSetting(std::string("lichii_tuned_defaults"));
-        if (applied < 1) {
+        // Version 4 (round 22) applies these again: round 21's Fritchii runs saved Fritchii's own
+        // defaults over them in the shared configuration.
+        if (applied < 4) {
             seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
             seed(Settings::values.use_asynchronous_shaders, ToString(true));
             seed(Settings::values.use_reactive_flushing, ToString(false));
@@ -162,10 +164,9 @@ void Config::SetUpIni() {
             seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
             seed(Settings::values.oot_anti_aliasing,
                  ToString(u32(Settings::OotAntiAliasing::NoSharpening)));
-        }
-        if (applied < 2) {
-            // Round 15: Ocarina's FSR upscaling (FSR 4, else FSR 3.1) on by default.
-            seed(Settings::values.ocarina_fsr, ToString(true));
+            // Ocarina's FSR off: our FSR 4 and its camera jitter are removed, and upstream's FSR is
+            // opt-in until its jitter is checked for the shimmer at the screen borders.
+            seed(Settings::values.ocarina_fsr, ToString(false));
         }
         if (applied < 3) {
             // Round 17: offer upstream #781's shader precache at launch, the compute half of the

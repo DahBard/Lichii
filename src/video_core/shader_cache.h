@@ -32,6 +32,10 @@ namespace Tegra::Control {
 struct ChannelState;
 }
 
+namespace VideoCommon::ShaderCacheV2 {
+class Cache;
+}
+
 namespace VideoCommon {
 
 class GenericEnvironment;
@@ -128,6 +132,9 @@ protected:
     /// ShaderInfo that an invalidation may have removed since.
     std::array<u64, NUM_PROGRAMS> vertex_attribute_masks{};
     bool last_shaders_valid = false;
+
+    /// The v2 cache that records the native programs lowered here, while one is open
+    ShaderCacheV2::Cache* shader_cache_v2{};
 
 private:
     friend struct ShaderCacheTestAccess;

@@ -3,10 +3,15 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstdlib>
+#include <mutex>
 #include <thread>
 
 #include "common/common_types.h"
+#include "video_core/nx2_async_readback.h"
 
 namespace VideoCore {
 
@@ -24,7 +29,28 @@ struct RasterizerDownloadArea {
     VAddr end_address;
     bool preemtive;
     DownloadAreaSource source{};
+    /// What guest memory lacks there is on its way for an earlier read: nothing to flush, only to
+    /// wait for (RasterizerInterface::FinishRead).
+    bool in_flight{};
 };
+
+/// Downloads for guest CPU reads that are submitted but not yet written to guest memory
+/// (RasterizerInterface::FlushRegionForRead). While there are any, a write to guest memory from
+/// the GPU's side first finishes those it overlaps (FinishRead), so none lands over it later.
+inline std::atomic<u32> g_read_downloads{};
+
+/// Tegra::Nx2MayBeGpuWritten on Switch 2 titles, true otherwise. Defined in gpu.cpp: nx2.h can't
+/// be included here, since the Qt frontend reaches this header and its `slots` macro breaks it.
+[[nodiscard]] bool MayHoldGpuWrites(DAddr addr, u64 size);
+
+/// Whether such a download may still land over [addr, addr + size): what a write to guest memory
+/// from the GPU's side asks before FinishRead, on any thread, without the buffer cache's lock.
+/// The downloads take only GPU-modified bytes, and Switch 2 titles mark their pages
+/// (Tegra::Nx2MayBeGpuWritten): writes to other pages skip the lock, which the GPU thread holds
+/// for nearly every command.
+[[nodiscard]] inline bool ReadDownloadsMayCover(DAddr addr, u64 size) {
+    return g_read_downloads.load(std::memory_order_acquire) != 0 && MayHoldGpuWrites(addr, size);
+}
 
 /// What DownloadLanding publishes.
 struct DownloadLandingState {
@@ -47,7 +73,6 @@ struct DownloadLandingState {
 /// Each side fences between its store (the landing, the collected write) and its load (the
 /// collected writes, the landing): either the download finds the write, or the write finds the
 /// landing. Downloads land under the buffer cache's lock, so one landing is published at a time.
-/// (zortos293/Lichii#805 4942eb8a39, by way of Fritchii 8f09b0fd9.)
 class DownloadLanding {
 public:
     explicit DownloadLanding(DAddr begin, DAddr end) noexcept {
@@ -67,7 +92,7 @@ public:
     static void Await(DAddr addr, u64 size) noexcept {
         std::atomic_thread_fence(std::memory_order_seq_cst);
         const u64 sequence = state.sequence.load(std::memory_order_acquire);
-        if ((sequence & 1) != 0) [[unlikely]] {
+        if ((sequence & 1) != 0) {
             Wait(sequence, addr, size);
         }
     }
@@ -95,6 +120,44 @@ private:
     }
 
     static inline DownloadLandingState state;
+};
+
+/// EDEN_NX2_READ_CHECK: the latest writes from the GPU's side that ReadDownloadsMayCover
+/// let through, to name the writer when the check finds newer bytes where an earlier read's
+/// download landed.
+class ReadCheckWrites {
+public:
+    [[nodiscard]] static bool Enabled() {
+        return AsyncReadback::ReadCheckEvery() != 0;
+    }
+
+    static void Note(DAddr addr, u64 size, const char* writer) {
+        std::scoped_lock lock{mutex};
+        ring[next++ % Size] = {addr, size, writer};
+    }
+
+    /// The newest noted write over [addr, addr + size).
+    [[nodiscard]] static const char* Find(DAddr addr, u64 size) {
+        std::scoped_lock lock{mutex};
+        for (u64 i = 0; i < (std::min)(next, Size); ++i) {
+            const Write& entry = ring[(next - 1 - i) % Size];
+            if (entry.addr < addr + size && addr < entry.addr + entry.size) {
+                return entry.writer;
+            }
+        }
+        return "a writer the check doesn't hear of";
+    }
+
+private:
+    struct Write {
+        DAddr addr;
+        u64 size;
+        const char* writer;
+    };
+    static constexpr u64 Size = 1024;
+    inline static std::mutex mutex;
+    inline static std::array<Write, Size> ring{};
+    inline static u64 next{};
 };
 
 } // namespace VideoCore

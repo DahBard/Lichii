@@ -237,6 +237,11 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkGetDeviceFaultInfoEXT);
     X(vkGetPipelineExecutablePropertiesKHR);
     X(vkWaitForPresentKHR);
+    X(vkGetPipelineKeyKHR);
+    X(vkCreatePipelineBinariesKHR);
+    X(vkDestroyPipelineBinaryKHR);
+    X(vkGetPipelineBinaryDataKHR);
+    X(vkReleaseCapturedPipelineDataKHR);
     X(vkGetPipelineExecutableStatisticsKHR);
     X(vkGetSemaphoreCounterValue);
     X(vkMapMemory);

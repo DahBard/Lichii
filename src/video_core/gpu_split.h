@@ -71,6 +71,7 @@ enum class DrainSite : u32 {
     BackRegister,   ///< A register a macro the back ran may have written (Maxwell3D)
     BackCode,       ///< The macro code changes under the macros the back has yet to run
     ListCopies,     ///< Lists on GPU-written pages: the dispatches and copies before the last sync
+    RingFull,       ///< The ring is full: the front waits for the back to make room
     Count,
 };
 
@@ -78,7 +79,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(DrainSite::Count)> 
     "other",           "fetch drain",   "acquire",    "semaphore flush", "fence release",
     "list writers",    "list sync",     "list flush", "macro dma read",  "macro dma writes",
     "macro dma flush", "gp sync fence", "map",        "front start",     "front verify",
-    "back register",   "back code",     "list copy writers",
+    "back register",   "back code",     "list copy writers", "ring full",
 };
 
 /// LICHII_TUNED4_ACQUIRES=1: the split's front decides Switch 2 semaphore acquires as tuned4 did
@@ -141,6 +142,15 @@ public:
     /// Whether the calling thread is the back.
     [[nodiscard]] static bool OnBackThread() {
         return on_back_thread;
+    }
+    /// Marks the calling thread as the GPU thread (the front, or the only one without the split).
+    static void MarkGpuThread() {
+        on_gpu_thread = true;
+    }
+    /// Whether the calling thread owns the Vulkan scheduler: the back while it runs, else the
+    /// GPU thread. Other threads (CPU cores, services) must not record or submit work.
+    [[nodiscard]] static bool OwnsScheduler() {
+        return Get().BackRunning() ? on_back_thread : on_gpu_thread;
     }
     /// Back thread: the entry it runs, as NoteFencedWrite takes it; elsewhere nothing.
     [[nodiscard]] std::optional<u64> BackEntry() const {
@@ -310,6 +320,15 @@ public:
     /// after a few, as after a drain, not after PublishEvery.
     void PublishSoon() {
         publish_every = PublishAfterWait;
+    }
+    /// The front has nothing to send while it polls suspended channels. A back that ran everything
+    /// runs its idle hook (the deferred submit) and sleeps now instead of spinning for more.
+    void SettleIdleBack() {
+        if (hook_requested.load(std::memory_order_relaxed) || BackQuiet() ||
+            consumed.load(std::memory_order_acquire) != write_position) {
+            return;
+        }
+        RequestIdleHook();
     }
     /// Keeps the entries the front sends unpublished while it notes what they write from guest
     /// memory as the back will find it running them (the QMD view: descriptors, and the words
@@ -814,8 +833,16 @@ private:
                (!write.fenced || fenced_landed.load(std::memory_order_acquire) > write.entry);
     }
 
+    /// Whether the back is done with the Vulkan scheduler until it gets more work: set after its
+    /// idle hook ran, cleared before it executes entries.
+    [[nodiscard]] bool BackQuiet() const {
+        return back_quiet.load(std::memory_order_acquire) ||
+               !back_running.load(std::memory_order_acquire);
+    }
+
     static GpuSplit instance;
     static inline thread_local bool on_back_thread{};
+    static inline thread_local bool on_gpu_thread{};
     void (*idle_hook)(void*){};
     void* idle_argument{};
     void (*tick_hook)(void*){};
@@ -823,6 +850,7 @@ private:
     alignas(64) std::atomic<bool> hook_requested{};
     std::atomic<bool> tick_requested{};
     std::atomic<bool> back_running{};
+    std::atomic<bool> back_quiet{true};
 
     // 128 bytes: x86 spatial prefetchers pull 64-byte lines in pairs. back_waiting and wake are
     // always touched together by both threads, so they share a block.

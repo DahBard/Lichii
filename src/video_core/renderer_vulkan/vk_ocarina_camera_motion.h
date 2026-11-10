@@ -20,6 +20,10 @@ class MemoryAllocator;
 class Scheduler;
 class StagingBufferPool;
 
+/// The temporal upscaler Ocarina uses this session: the settings, EDEN_NX2_DLSS_REPLACEMENT,
+/// DLSS availability, and native when FSR 3.1 is unsupported on the device.
+[[nodiscard]] VideoCommon::OcarinaUpscaleBackend ResolveOcarinaUpscaler(const Device& device);
+
 struct OcarinaActorMesh {
     std::vector<u8> vertices;
     std::vector<u16> indices;
@@ -52,11 +56,10 @@ public:
 
     /// Queue motion, temporal evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.
-    /// `jitter` is the camera jitter the frame's scene was drawn with (render pixels; FSR only).
     bool Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                 VkExtent2D output_extent, VkExtent2D target_extent, const std::array<f32, 16>& current,
                 const std::array<f32, 16>& previous, const OcarinaActorMesh& mesh,
-                VkImage depth_image, u64 frame, std::array<f32, 2> jitter);
+                VkImage depth_image, u64 frame, std::array<f32, 2> jitter = {});
 
 private:
     struct Impl;

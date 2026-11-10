@@ -98,7 +98,10 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
     rasterizer = renderer.ReadRasterizer();
     thread = std::jthread([&](std::stop_token stop_token) {
         const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuCommand};
+        const VideoCommon::StutterTrace::ThreadScope stutter_thread{
+            VideoCommon::StutterTrace::Thread::Front};
         Common::SetCurrentThreadName("GPU");
+        VideoCommon::GpuSplit::MarkGpuThread();
 #ifdef __linux__
         // The pending-channel polls below sleep 50 us; the default timer slack adds up to 50 more.
         prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
@@ -161,6 +164,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     Profile::Scope scope{Profile::Zone::PendingSleep};
                     const ThreadStats::Timer timer{thread_stats, ThreadStats::PendingEmpty};
                     const WaitStats::IdleScope idle{WaitStats::g_front_poll_ns};
+                    split.SettleIdleBack();
                     const auto waited = std::chrono::steady_clock::now() - last_progress;
                     if (waited < std::chrono::microseconds{500}) {
                         std::this_thread::yield();

@@ -422,6 +422,20 @@ public:
         return host_pointer_it->second + virtual_offset - it->lower();
     }
 
+    /// Backing offset the view page at virtual_offset maps, or nullopt when it is not mapped.
+    std::optional<size_t> BackingOffset(size_t virtual_offset) {
+        std::scoped_lock lock{placeholder_mutex};
+        const auto it = placeholders.find(virtual_offset);
+        if (it == placeholders.end()) {
+            return std::nullopt;
+        }
+        const auto host_pointer_it = placeholder_host_pointers.find(it->lower());
+        if (host_pointer_it == placeholder_host_pointers.end()) {
+            return std::nullopt;
+        }
+        return host_pointer_it->second + virtual_offset - it->lower();
+    }
+
     void EnableDirectMappedAddress() {
         // TODO
         UNREACHABLE();

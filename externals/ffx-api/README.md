@@ -1,14 +1,15 @@
-# AMD FSR API headers
+# AMD FidelityFX API headers
 
-`include/` holds the AMD FSR API headers that Lichii's FSR 4 path compiles against, from the
-[AMD FSR SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) v2.4.0 (commit
-`7539ae8`, MIT, see each file's header): `Kits/FidelityFX/api/include/ffx_api.h`,
-`ffx_api_types.h`, `vk/ffx_api_vk.h` and `Kits/FidelityFX/upscalers/include/ffx_upscale.h`.
+The FFX API headers from AMD's FidelityFX SDK 2.4.0, used by
+`src/video_core/renderer_vulkan/vk_fsr4_upscaler.cpp` to call AMD's FSR 4 runtime.
 
-Changes: `ffx_upscale.h` includes its neighbours by name, and `ffx_api.h` declares its entry
-points without `__declspec(dllexport)` outside Windows.
+- Source: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, tag `v2.4.0`
+  (commit `7539ae8b6568ad29ed78a753404351daf3b5cca7`).
+- Files, unmodified: `Kits/FidelityFX/api/include/ffx_api.h`, `ffx_api_types.h`,
+  `vk/ffx_api_vk.h` and `Kits/FidelityFX/upscalers/include/ffx_upscale.h`.
+- Licence: MIT (the SDK's `Kits/FidelityFX/docs/license.md` lists these files under its MIT
+  terms; the notice is in each header).
 
-Nothing of AMD's binaries is in this repository. The signed `amd_fidelityfx_loader_vk.dll` and
-`amd_fidelityfx_upscaler_vk.dll` are loaded at run time from the executable's folder; the
-lichii-tuned build copies them there from the SDK's `Kits/FidelityFX/signedbin/`, with the SDK's
-license (`Kits/FidelityFX/docs/license.md`, binary redistribution only).
+AMD's signed runtime DLLs are not part of this repository or of any Lichii package. Users
+download them from the same SDK commit in the Graphics settings; see
+`src/video_core/vulkan_common/ffx_files.h`.

@@ -40,9 +40,10 @@ The Legend of Zelda: Ocarina of Time (`0400486024DEC000`) has no DLSS of its own
 end-of-frame upscale pass can be replaced with FSR 3.1 on Linux or Windows, on any supported
 Vulkan GPU, or NVIDIA DLSS on Windows. The **Use AMD FSR 3.1 upscaling in Ocarina of Time**
 setting (`ocarina_fsr`) is off by default. NVIDIA DLSS takes precedence when its setting is
-enabled and the runtime is available; otherwise an enabled temporal selection uses FSR.
-`EDEN_NX2_DLSS_REPLACEMENT=fsr` explicitly enables FSR; `native` disables both replacements.
-`dlss` opts into temporal replacement, preferring DLSS only when its setting is enabled.
+enabled and the runtime is available; FSR runs only when its own setting is on, so without it
+the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
+`EDEN_NX2_DLSS_REPLACEMENT=fsr` explicitly enables FSR; `native` disables both replacements;
+`dlss` asks for DLSS as its setting does.
 
 - Max Resolution add-on off: the 3/4-scale pass (`e40f5efb5480e692`; `ef542df87cacfe9e` on the
   Linux RADV build, same contract) is replaced and FSR/DLSS
@@ -65,13 +66,42 @@ enabled and the runtime is available; otherwise an enabled temporal selection us
   Its shaders use `HDR_COLOR_INPUT=0` and `INVERTED_DEPTH=0`. Camera reconstruction alone
   converts the stored [0,1] depth to GL [-1,1] clip coordinates. Motion is previous minus
   current in render pixels, with screen-down Y, so FSR's scale is `(1,1)` before normalization.
-- Jitter is zero: the game has no subpixel sample sequence. Adding host jitter only to the
-  upscaler cannot recover detail and corrupts reprojection. Safe host jitter would require
-  changing the raster projection plus unjittered motion/depth handling (cf. #253), out of scope.
-  Consequently this is temporal stabilization/upscaling, not full jittered supersampling.
-- #644 (`82494c4820`, `74a2d20c90`, `4352c06bbf`) supplies the backend-neutral effects capture.
-  FSR uses its R16F current/history bias as both reactive and transparency/composition masks;
-  missing capture uses zero masks, not stale history. The DLSS preset changes were not imported.
+- Jitter (FSR only, on by default): the game has no subpixel sample sequence, so the host adds
+  one. While FSR replaced the previous frame's upscale, every draw that depth-tests against the
+  scene depth at the scene size has its viewport offset by a Halton (2,3) sub-pixel amount
+  (AMD's phase count, 8 x (output / render width)^2: 18 for 1440p -> 4K, 8 for native AA), and
+  FSR gets the same offset as the frame's jitter. Shadow maps, half-size passes, full-screen
+  passes and frames the game upscales itself are not offset. A full-screen pass with depth
+  writes on but the test off writes no depth (Vulkan disables writes with the test), so the
+  depth-write flag alone doesn't count. DLSS gets no jitter.
+- Motion with jitter: FSR is told the motion vectors carry no jitter (no jitter-cancellation
+  flag). Camera motion comes from the unjittered matrices, reconstructed at each depth sample's
+  unjittered position (the pixel centre minus the jitter). The replay of Link's skinned draw is
+  offset by the same jitter, so its scene-depth check compares the same samples the game drew,
+  and its motion is taken from the unjittered position. Without that offset the jitter made the
+  check fail on most of the fragments it otherwise accepts.
+- Texture LOD bias (FSR only): when the session's upscaler is FSR, mipmapped samplers get
+  AMD's recommended bias log2(render / output) - 1 = -1.58 in docked mode (none in handheld).
+  Samplers pick the biased or unbiased variant at each bind, so a console mode switch takes
+  effect in-session. Images the GPU wrote (render targets: bloom, blur, reflections, fog) keep
+  the game's own bias.
+- FSR 4 (Windows, AMD's driver, off by default): with "Use AMD FSR 4 in place of FSR 3.1" on,
+  the same inputs, jitter and RCAS setting go to AMD's FSR 4 through AMD's FidelityFX runtime
+  (FidelityFX SDK 2.4.0, FSR Upscaling 4.1.2). Nothing of AMD's ships with Lichii: the setting's
+  panel downloads `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` from
+  the SDK's GitHub repository at the release commit into the user folder's `fidelityfx` folder,
+  after showing AMD's licence. Each file must match its pinned size and SHA-256
+  (`vulkan_common/ffx_files.h`) and carry AMD's Authenticode signature, checked after the
+  download and again before loading. AMD's runtime picks the model (FP8 on RDNA 4, INT8 on RDNA 3
+  and RDNA 2); the setting is only shown for those GPUs. `VK_EXT_shader_float8` and the
+  `shaderFloat16` device feature are enabled for it only while the setting is on. FSR 3.1
+  stays created and takes over if the files are missing or don't check out, AMD's runtime offers
+  no FSR 4 for the GPU, the context can't be created or a dispatch fails. The log says which, and
+  shows `Ocarina FSR 4 evaluated` while it runs.
+- #644 (`82494c4820`, `74a2d20c90`, `4352c06bbf`) supplies the effects capture, used by FSR only
+  (DLSS gets no bias mask and runs as before). FSR uses its R16F current/history bias as both
+  reactive and transparency/composition masks; missing capture uses zero masks, not stale
+  history. The DLSS preset changes were not imported.
 - RCAS uses `fsr_sharpening_slider` with the existing inverted 0–200 mapping (stops × 100;
   stored 200 disables sharpening). HUD handling
   and the Max Resolution 1440p-to-4K presentation composition are shared with #606.

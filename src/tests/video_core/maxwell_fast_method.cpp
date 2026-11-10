@@ -55,6 +55,18 @@ struct GpuSplitTestAccess {
         split.back_thread = std::jthread([&split](std::stop_token stop) { split.BackLoop(stop); });
     }
 
+    /// The back's side as SettleIdleBack sees it, without a back thread.
+    static void SetBack(GpuSplit& split, bool running, bool quiet, u64 consumed) {
+        split.back_running.store(running);
+        split.back_quiet.store(quiet);
+        split.consumed.store(consumed);
+        split.hook_requested.store(false);
+    }
+
+    static bool HookRequested(const GpuSplit& split) {
+        return split.hook_requested.load();
+    }
+
     static u64 NearWrap() {
         return GpuSplit::RingWords - 1;
     }
@@ -814,6 +826,60 @@ TEST_CASE("Split consumption does not complete deferred downstream callbacks",
         deferred.clear();
     });
     REQUIRE(output == std::array<u32, 3>{1, 2, 3});
+}
+
+TEST_CASE("Split asks a back that ran everything for its idle hook while the front polls",
+          "[video_core][gpu_split_dependencies]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    Fixture f;
+    VideoCommon::GpuSplit split;
+    Access::Initialize(split, f.system);
+    SCOPE_EXIT {
+        Access::SetBack(split, false, true, 0);
+    };
+    const auto settled = [&split] {
+        split.SettleIdleBack();
+        return Access::HookRequested(split);
+    };
+    Access::SetBack(split, true, false, Access::End(split));
+    // Ran everything, hook not run yet: asked.
+    REQUIRE(settled());
+    // Already ran its hook.
+    Access::SetBack(split, true, true, Access::End(split));
+    REQUIRE_FALSE(settled());
+    // Still has work.
+    Access::SetBack(split, true, false, Access::End(split));
+    split.Defer([] {});
+    REQUIRE_FALSE(settled());
+    // Not running.
+    Access::SetBack(split, false, false, Access::End(split));
+    REQUIRE_FALSE(settled());
+}
+
+TEST_CASE("Split drain waits for the back's idle hook",
+          "[video_core][gpu_split_dependencies]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    Fixture f;
+    f.system.Initialize();
+    VideoCommon::GpuSplit split;
+    static std::atomic<u32> hooks;
+    hooks = 0;
+    // Slow, so a drain that returned before the hook finished sees the old count.
+    split.SetIdleHook(
+        [](void*) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            hooks.fetch_add(1);
+        },
+        nullptr);
+    Access::Start(split, f.system);
+    SCOPE_EXIT {
+        split.Stop();
+    };
+    for (u32 i = 1; i <= 3; ++i) {
+        split.Defer([] {});
+        split.Drain(VideoCommon::DrainSite::Acquire);
+        REQUIRE(hooks.load() >= i);
+    }
 }
 
 TEST_CASE("Split back runs a requested tick while it waits for work and between entries",

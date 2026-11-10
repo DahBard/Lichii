@@ -14,6 +14,7 @@
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_download_trace.h"
 #include "video_core/nx2_drain_check.h"
@@ -23,6 +24,7 @@
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_stutter_trace.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_null/renderer_null.h"
 #ifdef HAS_OPENGL
@@ -59,6 +61,7 @@ namespace VideoCore {
 void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system) {
     Settings::UpdateRescalingInfo();
     VideoCommon::Nx2Profile::ReadSwitch();
+    VideoCommon::StutterTrace::StartSession();
     Tegra::Nx2CmdPageDiag::ReadSwitch();
     VideoCommon::Nx2DownloadTrace::ReadSwitch();
     VideoCommon::Nx2DrainCheck::ReadSwitch();
@@ -69,6 +72,7 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     Tegra::Nx2ListIndirect::ReadSwitch();
     Tegra::Nx2ListIndirect::Stats::ReadSwitch();
     VideoCommon::ReadUniformStreamReuseSwitch();
+    VideoCore::AsyncReadback::ReadSwitch();
 
     const auto nvdec_value = Settings::values.nvdec_emulation.GetValue();
     const bool use_nvdec = nvdec_value != Settings::NvdecEmulation::Off;

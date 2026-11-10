@@ -1,11 +1,17 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// AMD FSR 4 through AMD's FidelityFX runtime (vulkan_common/ffx_runtime.h), which the user
+// downloads from AMD in the Graphics settings. Same inputs as the Ocarina FSR 3.1 path, which takes
+// over when FSR 4 is off, missing or fails.
+
 #pragma once
 
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "common/common_types.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -16,95 +22,77 @@ class Device;
 class MemoryAllocator;
 class Scheduler;
 
-/// AMD FSR 4, the machine-learning upscaler of AMD FSR SDK 2.4, through the AMD FSR API. Windows
-/// only: the API's loader (amd_fidelityfx_loader_vk.dll) and AMD's signed upscaler
-/// (amd_fidelityfx_upscaler_vk.dll) are loaded from the executable's folder, and the upscaler
-/// records its own passes into the scheduler's command buffer. LICHII_FSR4=0 keeps FSR 3.1;
-/// LICHII_FSR4_VERSION=<name> picks another upscaler version the API offers ("3.1.5", ...);
-/// LICHII_FSR4_DEBUG=0 turns off the API's checks of each dispatch.
+namespace FfxRuntime {
+struct Api;
+}
+
 class Fsr4Upscaler {
 public:
     struct Image {
-        VkImage image{};
-        VkFormat format{};
+        VkImage image;
+        VkFormat format;
+        VkImageSubresourceRange range;     ///< The used level and layer, with the view's aspect.
+        VkImageAspectFlags barrier_aspect; ///< Every aspect of the image's format.
     };
+
     struct Inputs {
-        Image color;          ///< Render size.
-        Image depth;          ///< D32 device depth, 0 at the near plane and 1 at the far one.
-        Image motion_vectors; ///< Render size, motion to the previous frame.
-        Image reactive;       ///< Optional render-size mask.
-        Image transparency;   ///< Optional render-size mask.
+        Image color;          ///< Tonemapped (LDR) colour at the render size.
+        Image depth;          ///< Standard (not reversed) device depth at the render size.
+        Image motion_vectors; ///< Motion to the previous frame, in render pixels.
+        std::optional<Image> reactive;
         VkExtent2D render_size;
         VkExtent2D upscale_size;
-        std::array<f32, 2> jitter;
-        /// Turns a motion vector into render pixels.
-        std::array<f32, 2> motion_vector_scale;
         f32 frame_time_ms;
         bool reset;
         bool sharpen;
-        f32 sharpness;
-        f32 camera_near;
-        f32 camera_far;
-        f32 vertical_fov; ///< Radians.
+        f32 sharpness; ///< 0-1
+        f32 vertical_fov;
+        f32 camera_near = 0.1f;
+        f32 camera_far = 25000.0f;
+        std::array<f32, 2> jitter{}; ///< Offset the scene was drawn with, in render pixels.
     };
 
-    /// Whether FSR 4 is tried before FSR 3.1: on Windows unless LICHII_FSR4=0.
-    [[nodiscard]] static bool Wanted();
+    /// Whether FSR 4 is turned on and the device runs on AMD's driver.
+    [[nodiscard]] static bool IsWanted(const Device& device);
 
-    /// Loads the API and creates an upscale context with its newest FSR 4. Null, with the reason
-    /// logged, when any step fails.
-    [[nodiscard]] static std::unique_ptr<Fsr4Upscaler> Create(const Device& device,
-                                                              Scheduler& scheduler,
-                                                              MemoryAllocator& allocator,
-                                                              VkExtent2D render_size,
-                                                              VkExtent2D upscale_size);
-
+    /// Throws vk::Exception when FSR 4 can't start on this device: AMD's files are missing or
+    /// don't check out, or AMD's runtime offers no FSR 4 for the GPU.
+    explicit Fsr4Upscaler(const Device& device, Scheduler& scheduler,
+                          MemoryAllocator& memory_allocator);
     ~Fsr4Upscaler();
 
-    Fsr4Upscaler(const Fsr4Upscaler&) = delete;
-    Fsr4Upscaler& operator=(const Fsr4Upscaler&) = delete;
-
-    /// Records one evaluation into the output image: RGBA16F at the upscale size, GENERAL layout,
-    /// ready to be sampled. False when new sizes needed a context that could not be made.
+    /// Records one evaluation into the output image (RGBA16F at the upscale size, GENERAL
+    /// layout). False when FSR 4 can't run (the caller then uses FSR 3.1 from now on).
     bool Upscale(const Inputs& inputs);
 
-    /// True once the API refused a dispatch or a new context; the caller moves to FSR 3.1.
     [[nodiscard]] bool Failed() const noexcept {
-        return failed.load(std::memory_order_relaxed);
+        return failed.load();
     }
-
+    [[nodiscard]] VkImage OutputImage() const noexcept {
+        return *output_image;
+    }
     [[nodiscard]] VkImageView OutputView() const noexcept {
         return *output_view;
     }
 
-    /// Nearest-neighbour clamp sampler (normalized coordinates), for reading the output.
-    [[nodiscard]] VkSampler PointSampler() const noexcept {
-        return *point_sampler;
-    }
-
-    /// The API's entry points, from its loader.
-    struct Api;
-
 private:
-    Fsr4Upscaler(const Device& device, Scheduler& scheduler, MemoryAllocator& allocator,
-                 const Api& api, u64 version_id);
-
     bool CreateContext(VkExtent2D render_size, VkExtent2D upscale_size);
     void DestroyContext();
+    void CreateOutput(VkExtent2D upscale_size);
+    void CreateExposure();
 
     const Device& device;
     Scheduler& scheduler;
-    MemoryAllocator& allocator;
-    const Api& api;
-    const u64 version_id;
-    void* context{};
-    VkExtent2D max_render_size{};
-    VkExtent2D upscale_size{};
-    vk::Image output;
+    MemoryAllocator& memory_allocator;
+    std::shared_ptr<const FfxRuntime::Api> api;
+    u64 provider_id{};
+    std::string provider_name;
+    void* context{}; ///< ffxContext
+    VkExtent2D render_extent{};
+    VkExtent2D upscale_extent{};
+    vk::Image output_image;
     vk::ImageView output_view;
-    vk::Image exposure;
-    vk::Sampler point_sampler;
-    bool images_initialized{};
+    vk::Image exposure_image; ///< 1x1 R32F holding 1 (the input is tonemapped, unit exposure)
     std::atomic<bool> failed{};
 };
 

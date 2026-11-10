@@ -6,7 +6,7 @@ layout(binding = 0) uniform sampler2D current_effects;
 layout(binding = 1) uniform sampler2D previous_effects;
 layout(binding = 2) uniform sampler2D motion;
 layout(binding = 3, r16f) uniform writeonly image2D bias;
-layout(push_constant) uniform Controls { uint has_previous; float scale; } controls;
+layout(push_constant) uniform Controls { uint has_previous; } controls;
 
 float Nearby(sampler2D effects, ivec2 center) {
     ivec2 last = textureSize(effects, 0) - 1;
@@ -29,14 +29,7 @@ void main() {
     float value = Nearby(current_effects, pixel);
     if (controls.has_previous != 0) {
         vec2 history = vec2(pixel) + 0.5 + texelFetch(motion, pixel, 0).rg;
-        // History from outside the frame has no marks: clamped to the edge, an edge pixel's
-        // marks spread along the border while the camera moved.
-        if (all(greaterThanEqual(history, vec2(0.0))) &&
-            all(lessThan(history, vec2(textureSize(previous_effects, 0))))) {
-            value = max(value, Nearby(previous_effects, ivec2(floor(history))));
-        }
+        value = max(value, Nearby(previous_effects, ivec2(floor(history))));
     }
-    // Under FSR's camera jitter a fully reactive pixel shows each frame's jittered samples on
-    // their own and shimmers (water near the screen's edges): the caller scales the mask down.
-    imageStore(bias, pixel, vec4(value * controls.scale));
+    imageStore(bias, pixel, vec4(value));
 }
