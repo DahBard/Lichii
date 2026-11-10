@@ -1,0 +1,4 @@
+# The patch must reach git apply byte for byte: a Windows checkout (core.autocrlf) would turn it
+# into CRLF, and a hunk on a last line without a newline then no longer matches.
+*.patch -text
+*.bundle binary

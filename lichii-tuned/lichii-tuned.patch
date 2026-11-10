@@ -137,6 +137,20 @@ index 0de2306cf..ac4cd429c 100644
  }
  
  std::string FormatChanges(std::span<const Change> changes) {
+diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
+index c4093d547..81add3c6d 100644
+--- a/src/video_core/CMakeLists.txt
++++ b/src/video_core/CMakeLists.txt
+@@ -489,7 +489,8 @@ endif()
+ 
+ target_link_libraries(video_core PUBLIC common core)
+ if(WIN32)
+-    target_link_libraries(video_core PRIVATE advapi32)
++    # dwmapi: the host frame pacer's refresh rate (vk_host_pacer.cpp).
++    target_link_libraries(video_core PRIVATE advapi32 dwmapi)
+ endif()
+ 
+ # Shader warm-up builder: game archives use zstd (also with dictionaries) and zlib.
 diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
 index 61accdb68..416dda672 100644
 --- a/src/video_core/gpu_split.h
@@ -157,3 +171,145 @@ index 61accdb68..416dda672 100644
          CountBatched(Batched::DrawBatches);
          CountBatched(Batched::DrawRepeats, repeats - 1);
          Commit(1 + size_t{count}, effect);
+diff --git a/src/video_core/nx2_qmd_prediction.cpp b/src/video_core/nx2_qmd_prediction.cpp
+index 51aaec295..bdecb52d7 100644
+--- a/src/video_core/nx2_qmd_prediction.cpp
++++ b/src/video_core/nx2_qmd_prediction.cpp
+@@ -1065,7 +1065,7 @@ struct State {
+             ScanAuditPositional(*key, stored);
+             return;
+         }
+-        u32 matched = 0;
++        u32 matching = 0;
+         u32 wrong = 0;
+         std::string first;
+         for (u64 i = 0; i < stored; ++i) {
+@@ -1074,7 +1074,7 @@ struct State {
+                 (decision.sequence != key->sequence && decision.position < key->position)) {
+                 continue;
+             }
+-            ++matched;
++            ++matching;
+             const bool bad = key->has_made ? !Meets(CompareOf(decision.operation), decision.value,
+                                                     key->made)
+                                            : true;
+@@ -1088,7 +1088,7 @@ struct State {
+         LOG_ERROR(HW_GPU,
+                   "QMD release prediction feed (EXP13=3) audit: {} acquires {} met on device "
+                   "{:#x} (of {} decisions on it since the record){}",
+-                  wrong, key->has_made ? "wrongly" : "possibly wrongly", key->device, matched,
++                  wrong, key->has_made ? "wrongly" : "possibly wrongly", key->device, matching,
+                   first);
+     }
+ 
+diff --git a/src/video_core/renderer_vulkan/vk_host_pacer.cpp b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
+index e0a7520bb..96e182275 100644
+--- a/src/video_core/renderer_vulkan/vk_host_pacer.cpp
++++ b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
+@@ -16,7 +16,6 @@
+ #include <windows.h>
+ #include <dwmapi.h>
+ #include "common/string_util.h"
+-#pragma comment(lib, "dwmapi.lib")
+ #endif
+ 
+ namespace Vulkan {
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index 40613f31d..1a61509b7 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -3960,13 +3960,13 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
+                     .read(reinterpret_cast<char*>(ids.data()), count * sizeof(u32));
+                 const bool compute = kind == 1;
+                 ComputePipelineCacheKey compute_key{};
+-                GraphicsPipelineCacheKey graphics_key{};
++                GraphicsPipelineCacheKey record_key{};
+                 if (compute) {
+                     in.read(reinterpret_cast<char*>(&compute_key), sizeof(compute_key));
+                 } else {
+-                    in.read(reinterpret_cast<char*>(&graphics_key), sizeof(graphics_key));
+-                    RecordedKeyForThisDevice(graphics_key);
+-                    const auto& key_state = graphics_key.state;
++                    in.read(reinterpret_cast<char*>(&record_key), sizeof(record_key));
++                    RecordedKeyForThisDevice(record_key);
++                    const auto& key_state = record_key.state;
+                     const bool other_device =
+                         (key_state.extended_dynamic_state != 0) !=
+                             dynamic_features.has_extended_dynamic_state ||
+@@ -4015,7 +4015,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
+                             }
+                         }
+                         skipped = true;
+-                    } else if (!keeping && disk_keys && disk_keys->contains(graphics_key.Hash())) {
++                    } else if (!keeping && disk_keys && disk_keys->contains(record_key.Hash())) {
+                         ++state.known;
+                         skipped = true;
+                     }
+@@ -4059,7 +4059,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
+                         TranslationRecord kept;
+                         kept.keep_infos = true;
+                         const auto pipeline{CreateGraphicsPipeline(
+-                            pools, graphics_key, MakeSpan(env_ptrs), nullptr, false, nullptr,
++                            pools, record_key, MakeSpan(env_ptrs), nullptr, false, nullptr,
+                             nullptr, false, keeping ? &kept : nullptr)};
+                         ok = pipeline && !pipeline->Failed();
+                         // A pipeline drawn through the task/mesh compute fallback is not kept:
+@@ -4069,7 +4069,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
+                         if (ok && keeping && kept.complete && !kept.mesh_emulated) {
+                             writer.Keep(index, 0,
+                                         kept.libraries ? PrecompiledKept::FlagLibraries : u8{0},
+-                                        graphics_key.Hash(), env_ids, kept.infos, kept.spirv);
++                                        record_key.Hash(), env_ids, kept.infos, kept.spirv);
+                         }
+                     }
+                 }
+@@ -4437,7 +4437,7 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
+         }
+         const u64 key_offset = offset + 4 + count * sizeof(u32);
+         ComputePipelineCacheKey compute_key{};
+-        GraphicsPipelineCacheKey graphics_key{};
++        GraphicsPipelineCacheKey record_key{};
+         if (compute) {
+             if (!index.ReadPrecompiled(key_offset,
+                                        std::span(reinterpret_cast<u8*>(&compute_key),
+@@ -4449,12 +4449,12 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
+             }
+         } else {
+             if (!index.ReadPrecompiled(key_offset,
+-                                       std::span(reinterpret_cast<u8*>(&graphics_key),
+-                                                 sizeof(graphics_key)))) {
++                                       std::span(reinterpret_cast<u8*>(&record_key),
++                                                 sizeof(record_key)))) {
+                 return "its precompiled record (unreadable)";
+             }
+-            RecordedKeyForThisDevice(graphics_key);
+-            if (graphics_key.Hash() != record.key_hash) {
++            RecordedKeyForThisDevice(record_key);
++            if (record_key.Hash() != record.key_hash) {
+                 return "the key (as this device and EDEN_NX2_CANONICAL_KEYS key it)";
+             }
+         }
+@@ -4495,7 +4495,7 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
+                 translated.translate_only = true;
+                 translated.keep_infos = true;
+                 [[maybe_unused]] const auto none =
+-                    CreateGraphicsPipeline(pools, graphics_key, MakeSpan(env_ptrs), nullptr, false,
++                    CreateGraphicsPipeline(pools, record_key, MakeSpan(env_ptrs), nullptr, false,
+                                            nullptr, nullptr, false, &translated);
+                 if (!translated.complete) {
+                     return "the pipeline (its translation failed)";
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+index f3ce69bea..3711ed89a 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -2062,8 +2062,8 @@ void RasterizerVulkan::DispatchCompute() {
+             }
+         }
+         if (const auto indirect = kepler_compute->GetIndirectComputeAddress()) {
+-            if (const auto device = gpu_memory->GpuToCpuAddress(*indirect)) {
+-                split.RecordDispatchWrite(*device, 12);
++            if (const auto device_addr = gpu_memory->GpuToCpuAddress(*indirect)) {
++                split.RecordDispatchWrite(*device_addr, 12);
+             }
+         }
+         split.ConfirmDispatch();
