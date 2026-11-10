@@ -1336,7 +1336,11 @@ Own changes:
 0. Round 22's queue (owner, 2026-11-10), in order:
    - Test the CheezyEmu FSR 4 and frame generation port (done in tuned4 `aae4566f5`, run #48).
    - Merge upstream Lichii. On 2026-11-10 21:43 +0100 nx2 was at `17baed716`, 31 commits after
-     build 132.
+     build 132. Planned in `lichii-tuned/merge-plan-nx2.md` (per-hunk detail in
+     `merge-plan-nx2.json`): 18 conflicted files, 29 hunks. Blocker: #1253's data-folder import
+     copies without file times, which would re-prepare all ~120k pipelines; Copy() must keep them
+     (same push as the merge). Owner decisions: the recommended-settings table edits, Copy vs
+     Link import.
    - Analyze the newest Fritchii builds (tags up to fritchii-v5.7; we last read v5.5) for
      anything worth taking.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
