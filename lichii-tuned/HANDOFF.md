@@ -37,11 +37,11 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 - Since round 22 (2026-11-10): branch `tuned` = upstream Lichii build 132 (`d2eaae4f3`) + the
   workflow + this folder again, recorded as a merge so round 21's Fritchii tree (branch `tuned5`)
-  stays in the history. The patch is `git diff --binary d2eaae4f3 tuned4` (282 files, 2.0 MB),
+  stays in the history. The patch is `git diff --binary d2eaae4f3 tuned4` (342 files, 2.6 MB),
   backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone
   that has zortos293/Lichii nx2 up to `d2eaae4f3`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
-  `msvc` is off again. The FSR 4 DLL step is gone: upstream's FSR 4 (#1062) downloads AMD's
-  runtime on request into the user folder's `fidelityfx` folder and checks it.
+  `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
+  generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
 - Branch `tuned` of DahBard/Lichii = upstream nx2 `d2eaae4f3` (build 132, round 22; `cbb512ee7` merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
@@ -83,11 +83,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
-  `0e30416f4`, round 22; pushing it doesn't trigger builds).
+  `0e30416f4`, round 22, and CheezyEmu's FSR port up to `aae4566f5`; pushing it doesn't trigger
+  builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `d2eaae4f3`, as `tuned` does). The patch is `git diff --binary d2eaae4f3 tuned4` (282 files,
-  2.0 MB); check it
+  `d2eaae4f3`, as `tuned` does). The patch is `git diff --binary d2eaae4f3 tuned4` (342 files,
+  2.6 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -1183,6 +1184,32 @@ Own changes:
   - The workflow's 'AMD FidelityFX libraries' step is back. It puts SDK v2.4.0's signed loader
     (38a56a01...), upscaler (4a7e895a...) and frame generation DLL (d002dabf...) next to
     lichii.exe. The same files CheezyEmu commits.
+- CheezyEmu port done (tuned4 `aae4566f5`, fast-forwarded from `r22-cheezy-fsr`): `e08fadcbb`
+  (SDK 2.4 headers with frame generation, in `externals/FidelityFX-SDK-2.4`), `a205b1f07` (the
+  port), `1b41dda80` (README), `499960272` (review fixes), `aae4566f5` (a blank line).
+  - CheezyEmu compiles its Ocarina code only in MSVC builds (`EGLANTINE_STREAMLINE`). Here it is
+    compiled in every build; only the NVIDIA DLSS backend stays gated.
+  - Settings: `amd_fsr4` (default now on) turns on Ocarina's AMD FSR: FSR 4 on the RX 9070 XT,
+    AMD's FSR 3.1 elsewhere. New: `oot_fsr_preset` (Native), `oot_docked_output` (4K),
+    `amd_frame_gen_version` (Auto), FrameGenType::AmdFsr (opt-in, needs a restart).
+    `ocarina_fsr` is gone. TunedDefaultsVersion stays 4.
+  - Needs Resolution 1X. The status bar shows 'FSR 4.x.x' while FSR runs, else 'FSR (reason)'.
+  - AMD frame generation counts as 0 built-in generations, so our pacing (LICHII_FG_PACING) stays
+    idle with it. The swapchain format choice and forced FIFO apply to the built-in types only.
+  - Left out: CheezyEmu's experiment switches (hudless present, HUD rects/diff, FG lag, FSR 4
+    HDR, Link depth, rigid-object motion), FSR 4 for other games' DLSS replacement, and its
+    unrelated commits (Polaris/GCN, robustBufferAccess2, query flush timeouts and others).
+  - Three reviews (fidelity, integration, build) found 14 issues; 12 were fixed in full and 1
+    in part. Replacing AMD's swapchain now waits for the last recorded prepare pass. The
+    device-wide idles take the submit lock because AMD submits from its own threads. The status
+    bar no longer races the GPU thread. Kept as in CheezyEmu: its lock across AMD's present.
+  - Checks: every changed C++ file compiles for Linux (clang, gcc) and MinGW clang with no new
+    warnings; the Qt files pass fe_check; the shaders compile with glslangValidator. Not run in
+    an emulator.
+  - Watch in the owner's logs: 'the last prepare pass (tick N) wasn't submitted in time' (a
+    fullscreen toggle or alt-tab with AMD frame generation), 'AMD frame generation:' lines, and
+    the frame rate against r44 (FSR 4 on: 44-57 fps). Per-draw actor tracking now runs for every
+    indexed draw in Ocarina while FSR is on.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
@@ -1301,7 +1328,7 @@ Own changes:
 ## Next steps
 
 0. Round 22's queue (owner, 2026-11-10), in order:
-   - Finish and test the CheezyEmu FSR 4 and frame generation port (branch `r22-cheezy-fsr`).
+   - Test the CheezyEmu FSR 4 and frame generation port (done in tuned4 `aae4566f5`, run #48).
    - Merge upstream Lichii. On 2026-11-10 21:43 +0100 nx2 was at `17baed716`, 31 commits after
      build 132.
    - Analyze the newest Fritchii builds (tags up to fritchii-v5.7; we last read v5.5) for
