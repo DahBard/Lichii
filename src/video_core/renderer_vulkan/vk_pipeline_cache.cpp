@@ -2161,7 +2161,28 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
         // cache keeps it. A build a driver crash ended an earlier precache on is left out, and
         // each driver stage holds a journal slot while it runs.
         const VideoCommon::ShaderJobBatch batch = shader_jobs->CreateBatch();
+        // At most this many jobs are submitted and not done. The scheduler's budget counts only
+        // running stages, so translated pipelines waiting for a driver worker would pile up:
+        // with the ~120k precompiled records, tens of GB.
+        const size_t window = std::max<size_t>(4 * num_threads, 32);
+        // Each CPU worker also runs its job's driver build, as before the merge: the driver
+        // pool has half the threads, and the builds bound the precache (r42 took about twice
+        // as long). Not where parallel builds are broken.
+        const bool build_on_cpu_workers = !device.HasBrokenParallelShaderCompiling();
         for (size_t index = 0; index < jobs.size(); ++index) {
+            while (index - done.load() >= window) {
+                if (stop_loading.stop_requested() || ShaderWarm::TakeSkipWarm()) {
+                    skipped = true;
+                    break;
+                }
+                if (callback) {
+                    callback(VideoCore::LoadCallbackStage::Warm, done, jobs.size());
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            }
+            if (skipped) {
+                break;
+            }
             const u64 id = jobs[index].graphics_hash != 0 ? jobs[index].graphics_hash
                                                           : jobs[index].compute_hash;
             if (journal.Poisoned(id)) {
@@ -2172,10 +2193,11 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
             shader_jobs->Submit(
                 {
                     .priority = VideoCommon::ShaderJobPriority::Background,
-                    .cpu_bytes = jobs[index].cpu_bytes,
+                    .cpu_bytes = jobs[index].cpu_bytes +
+                                 (build_on_cpu_workers ? DriverCompileBytes : 0),
                     .driver_bytes = DriverCompileBytes,
-                    .cpu = [&built, &done, &journal, &journal_slots, index, id,
-                            translate = std::move(jobs[index].translate)](
+                    .cpu = [&built, &done, &journal, &journal_slots, build_on_cpu_workers, index,
+                            id, translate = std::move(jobs[index].translate)](
                                VideoCommon::ShaderJobContext& context) mutable
                     -> VideoCommon::ShaderDriverStage {
                         Common::UniqueFunction<bool> build;
@@ -2191,14 +2213,14 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                             done.fetch_add(1);
                             return {};
                         }
-                        return [&built, &done, &journal, &journal_slots, index, id,
-                                build = std::move(build)]() mutable {
+                        auto driver_stage = [&built, &done, &journal, &journal_slots, index, id,
+                                             pipeline_build = std::move(build)]() mutable {
                             const size_t slot = journal_slots.Take();
                             if (slot != JournalSlots::None) {
                                 journal.Begin(slot, id);
                             }
                             try {
-                                built[index] = build();
+                                built[index] = pipeline_build();
                             } catch (const std::exception& e) {
                                 LOG_DEBUG(Render_Vulkan, "Shader precache: {}", e.what());
                             }
@@ -2208,11 +2230,20 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
                             }
                             done.fetch_add(1);
                         };
+                        if (build_on_cpu_workers) {
+                            driver_stage();
+                            return {};
+                        }
+                        return VideoCommon::ShaderDriverStage{std::move(driver_stage)};
                     },
                 },
                 &batch);
         }
-        while (!batch.Idle()) {
+        if (skipped) {
+            // The builds not started are dropped; the running ones end first.
+            shader_jobs->Cancel(batch);
+        }
+        while (!skipped && !batch.Idle()) {
             if (stop_loading.stop_requested() || ShaderWarm::TakeSkipWarm()) {
                 // The builds not started are dropped; the running ones end first.
                 shader_jobs->Cancel(batch);
