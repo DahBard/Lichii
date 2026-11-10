@@ -44,6 +44,10 @@ struct Frame {
     bool storage_capable{};
     u64 render_tick{};                               ///< Scheduler tick that renders the frame
     std::chrono::steady_clock::time_point queued_at; ///< When it reached the present queue
+    /// Frame generation: frames generated for this frame's game frame (0: none), and which of
+    /// them this is (1..generated_count; 0 for the game frame, presented after them).
+    u32 generated_count{};
+    u32 generated_index{};
 };
 
 class PresentManager {
@@ -84,6 +88,9 @@ private:
     /// Host frame pacer (vk_host_pacer.h): collects when earlier frames were shown and holds
     /// `frame` until its target. Returns whether it was held.
     bool PaceFrame(Frame* frame, std::stop_token token);
+    /// Spaces a game frame's generated frames and the game frame itself evenly over the game
+    /// frame interval, instead of presenting them back to back (present thread only).
+    void PaceGeneratedFrame(const Frame* frame, std::stop_token token);
 
     /// Waits for each present id until it is shown (VK_KHR_present_wait).
     void PresentWaitThread(std::stop_token token);
@@ -141,6 +148,9 @@ private:
     bool present_wait_enabled{};
     HostPacer pacer;
     u64 last_present_id{};
+    std::chrono::steady_clock::time_point last_game_frame_queued{};
+    std::chrono::nanoseconds game_frame_interval{};
+    std::chrono::steady_clock::time_point next_generated_present{};
     std::mutex present_wait_mutex; ///< Held while waiting on a swapchain; recreation takes it
     std::mutex wait_queue_mutex;
     std::condition_variable_any wait_queue_cv;

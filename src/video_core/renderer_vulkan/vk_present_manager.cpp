@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <thread>
 
 #include "common/logging.h"
@@ -378,6 +379,13 @@ void PresentManager::PresentThread(std::stop_token token) {
                 held = PaceFrame(next, token);
                 lock.lock();
             }
+            {
+                // Held at the queue's front like PaceFrame's frames, with no lock taken.
+                const Frame* const next = present_queue.front();
+                lock.unlock();
+                PaceGeneratedFrame(next, token);
+                lock.lock();
+            }
             // Take the frame and notify anyone waiting
             Frame* frame = present_queue.front();
             present_queue.pop_front();
@@ -407,6 +415,53 @@ void PresentManager::PresentThread(std::stop_token token) {
             free_cv.notify_one();
         }
     }
+}
+
+void PresentManager::PaceGeneratedFrame(const Frame* frame, std::stop_token token) {
+    using Clock = std::chrono::steady_clock;
+    // LICHII_FG_PACING=0: generated frames go out back to back with their game frame, as
+    // upstream does. That suits a fixed refresh at a multiple of the game's rate, where the
+    // vblanks space them. With variable refresh (or another rate) the generated frame shows for
+    // one refresh and the game frame right after it, so motion looks as it did without them.
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_FG_PACING");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (frame->generated_index == 0) {
+        // The game frame interval, from when game frames reached the queue.
+        if (last_game_frame_queued != Clock::time_point{}) {
+            const auto measured = frame->queued_at - last_game_frame_queued;
+            if (measured > std::chrono::nanoseconds{0} && measured < std::chrono::milliseconds{250}) {
+                game_frame_interval = game_frame_interval == std::chrono::nanoseconds{0}
+                                          ? measured
+                                          : game_frame_interval + (measured - game_frame_interval) / 4;
+            }
+        }
+        last_game_frame_queued = frame->queued_at;
+    }
+    if (!enabled || frame->generated_count == 0 ||
+        game_frame_interval == std::chrono::nanoseconds{0}) {
+        next_generated_present = {};
+        return;
+    }
+    const auto spacing = game_frame_interval / (frame->generated_count + 1);
+    // The first generated frame starts its game frame's sequence; each later frame waits a
+    // spacing after the one before, never longer than a spacing from now.
+    if (frame->generated_index != 1) {
+        const auto until = std::min(next_generated_present, Clock::now() + spacing);
+        while (!token.stop_requested()) {
+            const auto left = until - Clock::now();
+            if (left <= Clock::duration::zero()) {
+                break;
+            }
+            if (left > std::chrono::milliseconds{2}) {
+                std::this_thread::sleep_for(left - std::chrono::milliseconds{1});
+            } else {
+                std::this_thread::yield();
+            }
+        }
+    }
+    next_generated_present = Clock::now() + spacing;
 }
 
 bool PresentManager::PaceFrame(Frame* frame, std::stop_token token) {

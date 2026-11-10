@@ -260,8 +260,12 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                       GuestExtent(framebuffers));
 
     const size_t generated_frames = frame_gen.GeneratedFrameCount();
+    frame->generated_count = static_cast<u32>(generated_frames);
+    frame->generated_index = 0;
     for (size_t generation = 0; generation < generated_frames; ++generation) {
         Frame* generated = present_manager.GetRenderFrame();
+        generated->generated_count = static_cast<u32>(generated_frames);
+        generated->generated_index = static_cast<u32>(generation + 1);
         blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
         frame_gen.GenerateInto(device, generated, generation);
         generated->render_tick = scheduler.Flush(*generated->render_ready);
