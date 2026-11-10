@@ -1295,6 +1295,14 @@ Own changes:
     2. Restart once: the import launch doesn't read nx2_switches.txt.
     3. Expect one slow boot, because AMD's driver cache starts cold per exe (accepted). The log
        should say 'was prepared for this driver already', not a 120k preparation.
+- Run #49 (tuned `e1ae59949` = nx2 `17baed716` + tuned4 `36948bc36`): all three variants built
+  (success, ~33 minutes; artifacts `lichii-tuned-r49-*`, AMD DLLs included). r49 is r48 plus the
+  upstream merge and the tuned defaults. To test:
+  - the import (Eden -> Keep Old Data, then restart once);
+  - the 'prepared already' line in `%APPDATA%\lichii\log\eden_log.txt`;
+  - FSR 4 and AMD frame generation;
+  - the ocarina crackle fix;
+  - the 'N FPS + M generated' display.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
