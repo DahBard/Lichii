@@ -213,6 +213,9 @@ try
 
 RendererVulkan::~RendererVulkan() {
     scheduler.RegisterOnSubmit([] {});
+    // AMD's swapchain presents and submits to the graphics queue from its own threads.
+    AmdFrameGen::WaitForPresents();
+    std::scoped_lock lock{scheduler.submit_mutex};
     void(device.GetLogical().WaitIdle());
 }
 

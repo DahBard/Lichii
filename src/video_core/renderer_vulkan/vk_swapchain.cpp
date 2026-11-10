@@ -155,9 +155,10 @@ Swapchain::Swapchain(
 Swapchain::~Swapchain() {
     if (frame_gen_swapchain) {
         AmdFrameGen::WaitForPresents();
-        Destroy();
-        AmdFrameGen::Shutdown();
+        Destroy(true);
     }
+    // Also after AMD's swapchain failed to start: its runtime was loaded all the same.
+    AmdFrameGen::Shutdown();
 }
 
 void Swapchain::Create(
@@ -461,13 +462,14 @@ void Swapchain::CreateSemaphores() {
                           [this] { return device.GetLogical().CreateSemaphore(); });
 }
 
-void Swapchain::Destroy() {
+void Swapchain::Destroy(bool shutting_down) {
     frame_index = 0;
     present_semaphores.clear();
     render_semaphores.clear();
     swapchain.reset();
     if (frame_gen_swapchain) {
-        AmdFrameGen::DestroySwapchain(device, frame_gen_swapchain);
+        AmdFrameGen::DestroySwapchain(device, shutting_down ? nullptr : &scheduler,
+                                      frame_gen_swapchain);
         frame_gen_swapchain = VK_NULL_HANDLE;
     }
 }

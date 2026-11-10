@@ -67,6 +67,14 @@ namespace {
 
 using Api = FfxRuntime::Api;
 
+/// AMD's swapchain was created and is in use (lock free: the rasterizer asks per frame).
+std::atomic<bool> swapchain_active{false};
+/// A generation context takes prepare passes (read on the recording thread without the lock).
+std::atomic<bool> prepare_ready{false};
+/// The scheduler tick of the last prepare pass recorded, so a swapchain replacement can wait
+/// for the command buffer that holds it.
+std::atomic<u64> last_prepare_tick{0};
+
 VkDeviceContext DeviceContext(const Device& device) {
     return VkDeviceContext{
         .vkDevice = *device.GetLogical(),
@@ -102,6 +110,7 @@ struct State {
     u64 configured_frame_id{};
     bool generating{};
     bool prepare_failed{};
+    bool suspended{}; ///< The swapchain is being replaced: recorded prepare passes do nothing
     std::string version;
     // AMD submits to the graphics queue from its own threads; it goes through the emulator's lock.
     VkQueue game_queue{};
@@ -113,6 +122,12 @@ struct State {
 State& GetState() {
     static State state;
     return state;
+}
+
+/// Called with state.mutex held whenever the generation context or its failure flags change.
+void PublishPrepareReady(const State& state) {
+    prepare_ready.store(state.frame_gen_context && !state.prepare_failed && !state.suspended,
+                        std::memory_order_release);
 }
 
 std::atomic<u64> prepared_frame{0};
@@ -154,6 +169,7 @@ void RetireFrameGenContext(State& state) {
     state.retired.push_back({state.frame_gen_context, state.present_count});
     state.frame_gen_context = nullptr;
     state.generating = false;
+    PublishPrepareReady(state);
 }
 
 /// FSR 3.1 frame generation: chosen in the settings, or (Auto) on a GPU without FP8 shader math.
@@ -245,6 +261,7 @@ bool CreateFrameGenContext(State& state, const Device& device, VkExtent2D displa
     state.version = provider.versionName ? provider.versionName : "unknown";
     LOG_INFO(Render_Vulkan, "AMD frame generation: FSR frame generation {} ready at {}x{} on {}",
              state.version, display.width, display.height, device.GetModelName());
+    PublishPrepareReady(state);
     return true;
 }
 
@@ -579,9 +596,11 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
     state.display = create_info.imageExtent;
     state.format = create_info.imageFormat;
     state.context_retries = 0;
+    state.suspended = false;
     if (!CreateFrameGenContext(state, device, create_info.imageExtent, create_info.imageFormat)) {
         LOG_WARNING(Render_Vulkan, "AMD frame generation: presenting without generation");
     }
+    swapchain_active.store(true, std::memory_order_release);
     return swapchain;
 }
 
@@ -596,14 +615,39 @@ void WaitForPresents() {
     state.api->dispatch(&state.swapchain_context, &wait.header);
 }
 
-void DestroySwapchain(const Device& device, VkSwapchainKHR swapchain) {
+void DestroySwapchain(const Device& device, Scheduler* scheduler, VkSwapchainKHR swapchain) {
     WaitForPresents();
     State& state = GetState();
+    swapchain_active.store(false, std::memory_order_release);
+    {
+        std::scoped_lock lock{state.mutex};
+        state.suspended = true;
+        PublishPrepareReady(state);
+    }
+    // The idled device covers submitted work only: a prepare pass the worker already recorded
+    // into a command buffer the recording thread hasn't submitted yet would run against the
+    // destroyed context. Wait for it (the recording thread submits before it waits for a free
+    // frame, see PresentManager::GetRenderFrame), without the lock the worker takes.
+    const u64 tick = last_prepare_tick.load(std::memory_order_acquire);
+    if (scheduler && tick != 0 && !scheduler->IsFree(tick)) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{500};
+        bool submitted = scheduler->IsSubmitted(tick);
+        while (!submitted && std::chrono::steady_clock::now() < deadline) {
+            submitted = scheduler->WaitForSubmission(tick);
+        }
+        if (submitted) {
+            scheduler->Wait(tick, 0.0, false);
+        } else {
+            LOG_WARNING(Render_Vulkan, "AMD frame generation: the last prepare pass (tick {}) "
+                                       "wasn't submitted in time; replacing the swapchain anyway",
+                        tick);
+        }
+    }
     std::scoped_lock lock{state.mutex};
     // AMD destroys the generation context before its swapchain. Retired, it was destroyed 16
     // presents later, on the next swapchain, after its own was gone: going fullscreen (a new
-    // swapchain) lost the device seconds later. The caller has idled the device, so nothing
-    // recorded against it is still running.
+    // swapchain) lost the device seconds later. The caller has idled the device and the last
+    // prepare pass is done, so nothing recorded against it is still running.
     RetireFrameGenContext(state);
     DestroyRetired(state, true);
     if (state.swapchain_context) {
@@ -634,6 +678,11 @@ void ResetFrames(State& state) {
 void Shutdown() {
     State& state = GetState();
     std::scoped_lock lock{state.mutex};
+    swapchain_active.store(false, std::memory_order_release);
+    // The next game counts its own generated frames (the status bar starts from 0 at boot), and
+    // its scheduler counts ticks from the start.
+    generated_frames.store(0, std::memory_order_relaxed);
+    last_prepare_tick.store(0, std::memory_order_release);
     if (!state.api) {
         return;
     }
@@ -648,6 +697,11 @@ void Shutdown() {
     state.used_by_earlier_game = FfxRuntime::FrameGenerationLoaded();
     state.device = VK_NULL_HANDLE;
     state.swapchain = VK_NULL_HANDLE;
+    state.game_queue = VK_NULL_HANDLE;
+    state.queue_submit = nullptr;
+    state.submit_mutex = nullptr;
+    state.suspended = false;
+    PublishPrepareReady(state);
 }
 
 std::vector<VkImage> GetImages(const Device& device, VkSwapchainKHR swapchain) {
@@ -749,12 +803,9 @@ void Prepare(Scheduler& scheduler, const PrepareInputs& in) {
     if (!Requested()) {
         return;
     }
-    {
-        State& state = GetState();
-        std::scoped_lock lock{state.mutex};
-        if (!state.frame_gen_context || state.prepare_failed) {
-            return;
-        }
+    // Without the lock: AMD's present holds it while it paces frames.
+    if (!prepare_ready.load(std::memory_order_acquire)) {
+        return;
     }
     static std::optional<std::chrono::steady_clock::time_point> last;
     const auto now = std::chrono::steady_clock::now();
@@ -763,10 +814,11 @@ void Prepare(Scheduler& scheduler, const PrepareInputs& in) {
     last = now;
     const Camera camera = ExtractCamera(in.view_projection);
     scheduler.RequestOutsideRenderPassOperationContext();
+    last_prepare_tick.store(scheduler.CurrentTick(), std::memory_order_release);
     scheduler.Record([in, camera, frame_time_ms](vk::CommandBuffer cmdbuf) {
         State& state = GetState();
         std::scoped_lock lock{state.mutex};
-        if (!state.frame_gen_context || state.prepare_failed) {
+        if (!state.frame_gen_context || state.prepare_failed || state.suspended) {
             return;
         }
         constexpr VkAccessFlags WRITES =
@@ -821,6 +873,7 @@ void Prepare(Scheduler& scheduler, const PrepareInputs& in) {
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, {}, {}, to_general);
         if (result != FFX_API_RETURN_OK) {
             state.prepare_failed = true;
+            PublishPrepareReady(state);
             LOG_ERROR(Render_Vulkan, "AMD frame generation: prepare failed ({}), generation off",
                       result);
             return;
@@ -837,9 +890,11 @@ void Prepare(Scheduler& scheduler, const PrepareInputs& in) {
 }
 
 bool SwapchainActive() {
-    State& state = GetState();
-    std::scoped_lock lock{state.mutex};
-    return state.swapchain != VK_NULL_HANDLE;
+    return swapchain_active.load(std::memory_order_acquire);
+}
+
+u64 LastPrepareTick() {
+    return last_prepare_tick.load(std::memory_order_acquire);
 }
 
 u64 TakePreparedFrame() {
@@ -851,7 +906,7 @@ u64 TakePreparedFrame() {
 VkSwapchainKHR CreateSwapchain(const Device&, std::mutex&, const VkSwapchainCreateInfoKHR&) {
     return VK_NULL_HANDLE;
 }
-void DestroySwapchain(const Device&, VkSwapchainKHR) {}
+void DestroySwapchain(const Device&, Scheduler*, VkSwapchainKHR) {}
 void WaitForPresents() {}
 void Shutdown() {}
 std::vector<VkImage> GetImages(const Device&, VkSwapchainKHR) {
@@ -869,6 +924,9 @@ u64 TakePreparedFrame() {
 }
 bool SwapchainActive() {
     return false;
+}
+u64 LastPrepareTick() {
+    return 0;
 }
 
 #endif // _WIN32

@@ -294,6 +294,10 @@ private:
     // Ocarina's FSR upscales (status bar).
     std::atomic<u64> oot_upscaled_frames{};
     std::atomic<u64> oot_upscale_sizes{};
+    /// What OcarinaDlssEnabled last found, published by the GPU thread for the status bar (the
+    /// UI thread reads only this and the settings).
+    enum class OcarinaFsrState : u8 { Unknown, NotOcarina, Native, Unavailable, Enabled };
+    mutable std::atomic<OcarinaFsrState> oot_fsr_state{OcarinaFsrState::Unknown};
 
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);

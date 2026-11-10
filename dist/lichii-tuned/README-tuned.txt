@@ -60,7 +60,7 @@ Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichi
    "AMD FSR & Frame Generation" box:
    - "Use AMD FSR 4 in Ocarina of Time" (on by default) replaces the game's upscale pass with
      AMD FSR 4 through AMD's own runtime: the amd_fidelityfx_*.dll files next to lichii.exe
-     (AMD-FidelityFX-LICENSE.md is their license). Docked, the game renders 1440p and FSR
+     (amd_fidelityfx_license.md is their license). Docked, the game renders 1440p and FSR
      writes 4K. Without FSR 4 for the GPU it uses AMD's FSR 3.1. If FSR 4 draws a black
      picture, it switches to FSR 3.1 for the session. Needs Resolution 1X. The "RCAS
      Sharpness" slider sets its sharpening.

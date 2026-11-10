@@ -267,13 +267,11 @@ add_custom_command(TARGET yuzu POST_BUILD
 
 # AMD FSR and frame generation: AMD's signed FidelityFX DLLs, loaded at runtime from the
 # executable's folder, and the license they are redistributed under. The DLLs are not in the
-# repository (externals/FidelityFX-SDK-2.4/README.md): each is copied only when placed in bin/
-# before configuring; the package workflow adds them itself.
+# repository (externals/FidelityFX-SDK-2.4/README.md): each is copied, with the license, only
+# when it was in bin/ when CMake configured; the package workflow adds both itself.
 if (WIN32)
     set(FFX_SDK_DIR "${PROJECT_SOURCE_DIR}/externals/FidelityFX-SDK-2.4")
-    set(FFX_COPY_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FFX_SDK_DIR}/LICENSE.md" "$<TARGET_FILE_DIR:yuzu>/AMD-FidelityFX-LICENSE.md")
+    set(FFX_COPY_COMMANDS)
     foreach(FFX_DLL amd_fidelityfx_loader_vk.dll amd_fidelityfx_upscaler_vk.dll
                     amd_fidelityfx_framegeneration_vk.dll)
         if (EXISTS "${FFX_SDK_DIR}/bin/${FFX_DLL}")
@@ -282,7 +280,12 @@ if (WIN32)
                     "${FFX_SDK_DIR}/bin/${FFX_DLL}" "$<TARGET_FILE_DIR:yuzu>/${FFX_DLL}")
         endif()
     endforeach()
-    add_custom_command(TARGET yuzu POST_BUILD ${FFX_COPY_COMMANDS} VERBATIM)
+    if (FFX_COPY_COMMANDS)
+        add_custom_command(TARGET yuzu POST_BUILD ${FFX_COPY_COMMANDS}
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FFX_SDK_DIR}/LICENSE.md" "$<TARGET_FILE_DIR:yuzu>/AMD-FidelityFX-LICENSE.md"
+            VERBATIM)
+    endif()
 endif()
 
 if (YUZU_CRASH_DUMPS)

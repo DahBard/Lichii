@@ -33,6 +33,7 @@ namespace AmdFrameGen {
 [[nodiscard]] u64 GeneratedFrames();
 
 /// Whether AMD's frame generation swapchain is in use (it is set up when the emulator starts).
+/// Lock free, so the rasterizer gates the frame generation passes on it.
 [[nodiscard]] bool SwapchainActive();
 
 /// Creates AMD's frame generation swapchain in place of vkCreateSwapchainKHR. Returns
@@ -41,13 +42,15 @@ namespace AmdFrameGen {
 [[nodiscard]] VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
                                              const VkSwapchainCreateInfoKHR& create_info);
 
-/// Waits for AMD's presents, then destroys the swapchain and its context.
-void DestroySwapchain(const Device& device, VkSwapchainKHR swapchain);
+/// Waits for AMD's presents and the last recorded prepare pass, then destroys the swapchain and
+/// its context. scheduler is null when nothing recorded will be submitted any more (shutdown).
+void DestroySwapchain(const Device& device, Scheduler* scheduler, VkSwapchainKHR swapchain);
 
 /// Lets AMD's in-flight presents finish (before the device idles or the swapchain is replaced).
 void WaitForPresents();
 
-/// Destroys every frame generation context once the device is idle (emulator shutdown).
+/// Destroys every frame generation context once the device is idle and lets go of AMD's runtime
+/// (emulator shutdown; does nothing when AMD's runtime was never loaded).
 void Shutdown();
 
 [[nodiscard]] std::vector<VkImage> GetImages(const Device& device, VkSwapchainKHR swapchain);
@@ -86,6 +89,9 @@ struct PrepareInputs {
 
 /// Records AMD's prepare pass for one game frame on the scheduler.
 void Prepare(Scheduler& scheduler, const PrepareInputs& inputs);
+
+/// The scheduler tick the last prepare pass was recorded at, or 0.
+[[nodiscard]] u64 LastPrepareTick();
 
 /// On the scheduler worker, in order with the recorded commands: the frame prepared since the
 /// last call, or 0.

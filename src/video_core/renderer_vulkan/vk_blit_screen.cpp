@@ -13,6 +13,7 @@
 #include "video_core/present.h"
 #include "video_core/renderer_vulkan/present/filters.h"
 #include "video_core/renderer_vulkan/present/layer.h"
+#include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_blit_screen.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -34,7 +35,10 @@ BlitScreen::~BlitScreen() = default;
 
 void BlitScreen::WaitIdle(const Device& device) {
     present_manager.WaitPresent();
+    // AMD's swapchain presents and submits to the graphics queue from its own threads.
+    AmdFrameGen::WaitForPresents();
     scheduler.Finish();
+    std::scoped_lock lock{scheduler.submit_mutex};
     device.GetLogical().WaitIdle();
 }
 

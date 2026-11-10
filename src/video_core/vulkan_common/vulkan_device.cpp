@@ -493,18 +493,23 @@ void Device::RemoveExtensionFeatureIfUnsuitable(bool is_suitable, Feature& featu
 }
 
 namespace {
-/// AMD's FSR and frame generation (CheezyEmu's) run AMD's own shaders inside AMD's runtime
-/// (Windows). On AMD's driver they need float16 and, for FSR 4 on RDNA 4, float8 on the device;
+/// AMD's FSR and frame generation (CheezyEmu's) run AMD's own shaders inside AMD's runtime, on
+/// Windows. On AMD's driver they need float16 and, for FSR 4 on RDNA 4, float8 on the device;
 /// the emulator's shaders use neither for them.
-bool WantsAmdFidelityFx(VkDriverId driver_id) {
+bool AmdFidelityFxDriver(VkDriverId driver_id) {
 #ifdef _WIN32
-    return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY &&
+    return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY;
+#else
+    static_cast<void>(driver_id);
+    return false;
+#endif
+}
+
+bool WantsAmdFidelityFx(VkDriverId driver_id) {
+    return AmdFidelityFxDriver(driver_id) &&
            (Settings::values.amd_fsr4.GetValue() ||
             (Settings::values.frame_gen.GetValue() &&
              Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::AmdFsr));
-#else
-    return false;
-#endif
 }
 } // Anonymous namespace
 
@@ -823,15 +828,17 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         LOG_INFO(Render_Vulkan, "VK_KHR_cooperative_matrix enabled for guest tensor operations");
     }
 
-    // The Ampere workaround above only concerns guest shaders: enable float16 on the device so
-    // host-only shaders (frame generation) may use it. The AMD and Intel workarounds turn it off
-    // for every shader, host ones included.
+    // VK_EXT_shader_float8, for AMD's FSR 4 only (its RDNA 4 network); no other shader uses it.
     if (extensions.shader_float8) {
         LOG_INFO(Render_Vulkan, "VK_EXT_shader_float8 enabled (float8 {}, float8 matrices {}) for "
                                 "AMD FSR 4",
                  features.shader_float8.shaderFloat8 != VK_FALSE,
                  features.shader_float8.shaderFloat8CooperativeMatrix != VK_FALSE);
     }
+
+    // The Ampere workaround above only concerns guest shaders: enable float16 on the device so
+    // host-only shaders (frame generation) may use it. The AMD and Intel workarounds turn it off
+    // for every shader, host ones included.
     host_float16_supported |= float16_math;
     if (host_float16_supported || fsr4_float16) {
         features.shader_float16_int8.shaderFloat16 = VK_TRUE;
@@ -1945,10 +1952,11 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_binary, features.pipeline_binary,
                                        VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
 
-    // VK_EXT_shader_float8, only for AMD's FSR 4 and frame generation: the RDNA 4 FSR 4 network
-    // runs in FP8 and drew a black picture without the feature on the device (CheezyEmu).
+    // VK_EXT_shader_float8, for AMD's FSR 4 and frame generation: the RDNA 4 FSR 4 network runs
+    // in FP8 and drew a black picture without the feature on the device (CheezyEmu). Kept
+    // whatever the settings, so FSR 4 turned on while a game runs has it too.
     if (extensions.shader_float8 &&
-        (!features.shader_float8.shaderFloat8 || !WantsAmdFidelityFx(properties.driver.driverID))) {
+        (!features.shader_float8.shaderFloat8 || !AmdFidelityFxDriver(properties.driver.driverID))) {
         RemoveExtensionFeature(extensions.shader_float8, features.shader_float8,
                                VK_EXT_SHADER_FLOAT8_EXTENSION_NAME);
     }

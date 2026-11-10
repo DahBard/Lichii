@@ -281,7 +281,9 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, frame_gen_multiplier, tr("Frame Generation Multiplier"), QString());
     INSERT(Settings, frame_gen_target_rate, tr("Target Frame Rate"),
            tr("Lichii's own frame generators (Optical Flow, Lossless Scaling) add frames up to "
-              "this rate.\nAMD FSR frame generation always doubles the game's frame rate."));
+              "this rate.\nAMD FSR frame generation always doubles the game's frame rate: for a "
+              "steady 60 on screen, turn the \"FPS Unlock (built-in)\" add-on off so the game "
+              "runs at 30."));
     INSERT(Settings, frame_gen_flow_scale_auto, tr("Auto Flow Scale"), QString());
     INSERT(Settings, frame_gen_flow_scale, tr("Flow Scale"), QString());
     INSERT(Settings, frame_gen_queue_target, tr("Queue Target"), QString());

@@ -204,6 +204,13 @@ Frame* PresentManager::GetRenderFrame() {
     VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::PresentWait};
     // Wait for free presentation frames
     std::unique_lock lock{free_mutex};
+    if (free_queue.empty() && !scheduler.IsSubmitted(AmdFrameGen::LastPrepareTick())) {
+        // Replacing AMD's swapchain on the present thread waits for the last prepare pass:
+        // submit it rather than wait for that thread with it.
+        lock.unlock();
+        scheduler.Flush();
+        lock.lock();
+    }
     free_cv.wait(lock, [this] { return !free_queue.empty(); });
 
     // Take the frame from the queue

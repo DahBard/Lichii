@@ -1149,7 +1149,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     const auto hashes = pipeline->ShaderHashes();
     const bool final_pass = hashes[5] == final_fragment &&
                             std::ranges::find(hashes, final_vertex) != hashes.end();
-    if (final_pass && AmdFrameGen::Requested() && OcarinaDlssEnabled()) {
+    if (final_pass && AmdFrameGen::SwapchainActive() && OcarinaDlssEnabled()) {
         // The HUD is now drawn into FSR's output, which the final pass reads. The mask is built
         // here, where that image holds the scene and its HUD, with the view the HUD draws had
         // bound. (Built with the next frame's FSR instead, the image no longer held this frame:
@@ -3163,8 +3163,8 @@ std::pair<const char*, const char*> RasterizerVulkan::UpscalerIdleReason() const
     return {"WINDOWS ONLY", "AMD FSR runs on Windows only: AMD ships its FSR runtime for Windows. "
                             "On Linux and macOS the game uses its own upscaler."};
 #else
-    constexpr u64 ocarina_program = 0x0400486024DEC000ULL;
-    if (program_id != ocarina_program) {
+    const OcarinaFsrState fsr = oot_fsr_state.load(std::memory_order_relaxed);
+    if (fsr == OcarinaFsrState::NotOcarina) {
         return {"OOT ONLY", "AMD FSR replaces the game's upscaler in The Legend of Zelda: Ocarina "
                             "of Time only, for now. Other games use their own."};
     }
@@ -3175,7 +3175,11 @@ std::pair<const char*, const char*> RasterizerVulkan::UpscalerIdleReason() const
     if (Settings::values.resolution_setup.GetValue() != Settings::ResolutionSetup::Res1X) {
         return {"RES 1X", "Set Resolution to 1X: FSR only runs at the game's own resolution."};
     }
-    if (!OcarinaDlssEnabled()) {
+    if (fsr == OcarinaFsrState::Native) {
+        return {"NATIVE", "EDEN_NX2_DLSS_REPLACEMENT=native: the game's own upscaler runs, to "
+                          "compare what FSR costs."};
+    }
+    if (fsr == OcarinaFsrState::Unavailable) {
         return {"UNAVAILABLE", "AMD FSR couldn't start on this GPU or driver (see the log for "
                                "\"AMD FSR\"). The game uses its own upscaler."};
     }
@@ -3215,8 +3219,8 @@ std::pair<const char*, const char*> RasterizerVulkan::AmdFrameGenIdleReason() co
                            "changing the Frame Generation Type. If it still shows this, AMD's "
                            "swapchain couldn't start (see the log)."};
     }
-    constexpr u64 ocarina_program = 0x0400486024DEC000ULL;
-    if (program_id != ocarina_program) {
+    const OcarinaFsrState fsr = oot_fsr_state.load(std::memory_order_relaxed);
+    if (fsr == OcarinaFsrState::NotOcarina) {
         return {"OOT ONLY", "AMD frame generation works in The Legend of Zelda: Ocarina of Time "
                             "only."};
     }
@@ -3224,7 +3228,11 @@ std::pair<const char*, const char*> RasterizerVulkan::AmdFrameGenIdleReason() co
         return {"RES 1X", "Set Resolution to 1X: AMD frame generation and FSR only run at the "
                           "game's own resolution."};
     }
-    if (!OcarinaDlssEnabled()) {
+    if (fsr == OcarinaFsrState::Native) {
+        return {"NATIVE", "EDEN_NX2_DLSS_REPLACEMENT=native: the game's own upscaler runs, and "
+                          "frame generation takes its motion from FSR's path."};
+    }
+    if (fsr == OcarinaFsrState::Unavailable) {
         return {"NO FSR", "Ocarina's AMD FSR path couldn't start, and frame generation takes its "
                           "motion from it. See the log for \"AMD FSR\"."};
     }
@@ -3244,15 +3252,28 @@ bool RasterizerVulkan::OcarinaDlssEnabled() const {
         const char* const value = std::getenv("EDEN_NX2_DLSS_REPLACEMENT");
         return value && std::string_view{value} == "native";
     }();
-    if (program_id != ocarina_program || oot_live_failed || native) {
-        return false;
+    const auto publish = [this](OcarinaFsrState state) {
+        if (oot_fsr_state.load(std::memory_order_relaxed) != state) {
+            oot_fsr_state.store(state, std::memory_order_relaxed);
+        }
+        return state == OcarinaFsrState::Enabled;
+    };
+    if (program_id != ocarina_program) {
+        return publish(OcarinaFsrState::NotOcarina);
+    }
+    if (native) {
+        return publish(OcarinaFsrState::Native);
+    }
+    if (oot_live_failed) {
+        return publish(OcarinaFsrState::Unavailable);
     }
 #ifdef EGLANTINE_STREAMLINE
     if (Settings::values.nvidia_dlss.GetValue() && Streamline::IsDlssAvailable()) {
-        return true;
+        return publish(OcarinaFsrState::Enabled);
     }
 #endif
-    return Fsr4Upscaler::IsAvailable(device);
+    return publish(Fsr4Upscaler::IsAvailable(device) ? OcarinaFsrState::Enabled
+                                                     : OcarinaFsrState::Unavailable);
 }
 
 /// Capture the two camera matrices from a draw targeting the scene color and depth. Terrain and
@@ -3409,12 +3430,14 @@ void RasterizerVulkan::TrackOcarinaActor(u64, bool is_indexed, bool is_indirect)
         return;
     }
     if (oot_actors_frame != render_trace_frame) {
+        // Swapped, so both keep their capacity: a pose is about 13 KB.
         if (oot_actors_frame + 1 == render_trace_frame) {
-            oot_previous_actors = std::move(oot_actors);
+            std::swap(oot_previous_actors, oot_actors);
         } else {
             oot_previous_actors.clear();
         }
         oot_actors.clear();
+        oot_actors.reserve(MaxOcarinaActors);
         oot_actors_frame = render_trace_frame;
     }
     const auto& draw = maxwell3d->draw_manager.draw_state;
@@ -3488,16 +3511,18 @@ void RasterizerVulkan::TrackOcarinaActor(u64, bool is_indexed, bool is_indirect)
     if (oot_actors.size() >= MaxOcarinaActors) {
         return;
     }
-    OcarinaActorPose pose{
-        .layout = layout,
-        .channel = gpu_memory,
-        .vertex = stream.Address(),
-        .indices = draw.index_buffer.IndexStart(),
-        .base_vertex = static_cast<s32>(draw.base_index),
-        .index_count = index_count,
-    };
+    // Built in place (capacity is reserved) and dropped again if it isn't taken.
+    OcarinaActorPose& pose = oot_actors.emplace_back();
+    pose.layout = layout;
+    pose.channel = gpu_memory;
+    pose.vertex = stream.Address();
+    pose.indices = draw.index_buffer.IndexStart();
+    pose.base_vertex = static_cast<s32>(draw.base_index);
+    pose.index_count = index_count;
     // The same mesh drawn twice in a frame (a shadow pass) keeps its first pose.
-    if (std::ranges::any_of(oot_actors, [&](const auto& actor) { return actor.SameMesh(pose); })) {
+    if (std::ranges::any_of(oot_actors.begin(), oot_actors.end() - 1,
+                            [&](const auto& actor) { return actor.SameMesh(pose); })) {
+        oot_actors.pop_back();
         return;
     }
     bool origin_found{}, bones_found{};
@@ -3518,8 +3543,8 @@ void RasterizerVulkan::TrackOcarinaActor(u64, bool is_indexed, bool is_indirect)
             bones_found = true;
         }
     });
-    if (origin_found && bones_found) {
-        oot_actors.push_back(pose);
+    if (!origin_found || !bones_found) {
+        oot_actors.pop_back();
     }
 }
 
@@ -3861,7 +3886,7 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
         oot_hud_view = VK_NULL_HANDLE;
         // AMD frame generation's HUD mask compares FSR's output before the HUD with the same
         // image at the final pass (the 4K mode compares in AccelerateDisplay instead).
-        if (AmdFrameGen::Requested() && !four_k) {
+        if (AmdFrameGen::SwapchainActive() && !four_k) {
             SaveOcarinaPreHud(
                 target.ImageHandle(),
                 MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, true, target.format).format,
@@ -4258,7 +4283,7 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         !oot_live_dlss->EvaluationFailed() && !frame_dump.Capturing()) {
         try {
             oot_live_dlss->Composite4k(info.image_view, render_trace_frame);
-            if (AmdFrameGen::Requested()) {
+            if (AmdFrameGen::SwapchainActive()) {
                 // The HUD mask for AMD frame generation in the 4K mode: the next frame's motion is
                 // cleared where the HUD sits, so the HUD doesn't move in generated frames.
                 oot_live_dlss->MakeHudMask4k(info.image_view);

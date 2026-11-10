@@ -138,7 +138,7 @@ private:
     void CreateSemaphores();
     void CreateImageViews();
 
-    void Destroy();
+    void Destroy(bool shutting_down = false);
 
     bool NeedsPresentModeUpdate() const;
 
