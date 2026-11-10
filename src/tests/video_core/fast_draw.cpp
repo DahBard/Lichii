@@ -415,3 +415,56 @@ TEST_CASE("Fast draw keeps vertex stream addresses and sizes light", "[fast_draw
     CHECK_FALSE(light(stream(0, 3)));     // frequency
     CHECK_FALSE(light(0x600 / 4 + 64));   // past the sizes
 }
+
+TEST_CASE("Fast draw keeps a vertex stream's stride light only with dynamic strides",
+          "[fast_draw]") {
+    DeltaFixture f;
+    constexpr u32 stride = MAXWELL3D_REG_INDEX(vertex_streams); // stream 0: stride and enable
+    const auto light = [&] {
+        FastDraw::g_delta = {};
+        const u64 serial = FastDraw::Serial();
+        f.Write(stride, f.Reg(stride) + 4);
+        return FastDraw::Serial() == serial;
+    };
+    const bool previous = FastDraw::g_dynamic_strides.exchange(false);
+    CHECK_FALSE(light()); // the stride is in the pipeline key
+    FastDraw::g_dynamic_strides.store(true);
+    CHECK(light());
+    f.DrawArrays(0, 3);
+    f.Write(stride, f.Reg(stride) + 4);
+    f.DrawArrays(3, 3);
+    CHECK(f.Reusable());
+    FastDraw::g_dynamic_strides.store(previous);
+}
+
+TEST_CASE("Fast draw keeps the render enable address light", "[fast_draw]") {
+    FastDrawFixture f;
+    f.DrawArrays(0, 3);
+    constexpr u32 high = MAXWELL3D_REG_INDEX(render_enable.address_high);
+    constexpr u32 low = MAXWELL3D_REG_INDEX(render_enable.address_low);
+    f.Write(high, f.Reg(high) ^ 1);
+    f.Write(low, f.Reg(low) + 0x40);
+    f.Write(MAXWELL3D_REG_INDEX(render_enable.mode), 1); // True: the next draws run
+    f.DrawArrays(3, 3);
+    CHECK(f.Reusable());
+}
+
+TEST_CASE("Fast draw breaks on a release that signals a fence", "[fast_draw]") {
+    DeltaFixture f;
+    constexpr u32 query = MAXWELL3D_REG_INDEX(report_semaphore.query);
+    constexpr u32 short_query = 1U << 28;
+    constexpr u32 report_only = 2;
+    f.Write(MAXWELL3D_REG_INDEX(report_semaphore.address_high), 0);
+    f.Write(MAXWELL3D_REG_INDEX(report_semaphore.address_low), 0x30000);
+    f.DrawArrays(0, 3);
+    FastDraw::g_delta = {};
+    u64 serial = FastDraw::Serial();
+    f.Write(query, 0); // long release: recorded as a memory write
+    CHECK(FastDraw::Serial() == serial);
+    f.Write(query, short_query | report_only); // a short report signals nothing
+    CHECK(FastDraw::Serial() == serial);
+    REQUIRE(FastDraw::g_delta.num_writes == 2);
+    CHECK(FastDraw::g_delta.write_end[1] == 0x30004);
+    f.Write(query, short_query); // short release: a fence
+    CHECK(FastDraw::Serial() != serial);
+}
