@@ -4,7 +4,8 @@ Windows and CachyOS (Linux) builds of [Lichii](https://github.com/zortos293/Lich
 6 P-cores, 8 E-cores, 2 low-power E-cores) driving an AMD Radeon RX 9070 XT over OCuLink, tested
 with The Legend of Zelda: Ocarina of Time.
 
-- Since round 22 this branch's tree is upstream Lichii build 132 (`d2eaae4f3`), and
+- Since round 22 this branch's tree is upstream Lichii nx2 (`17baed716`: build 132 plus 31
+  commits), and
   `lichii-tuned.patch` holds our changes on top of it: branch `tuned4` (backed up in
   `tuned4.bundle`). Round 21's trial on Fritchii v5.5 is branch `tuned5` (`tuned5.bundle`), kept
   for reference.

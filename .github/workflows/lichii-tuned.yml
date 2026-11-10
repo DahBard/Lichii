@@ -1,8 +1,8 @@
 name: lichii-tuned
 
 # Windows and CachyOS (Linux) builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H)
-# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch (upstream Lichii's tree, build
-# 132 since round 22) plus lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the
+# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch (upstream Lichii's tree, nx2
+# 17baed716 since round 22) plus lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the
 # `tuned` branch that touches the patch or this workflow builds the Windows variants. The CachyOS ones build only when the owner asks for a
 # Linux build: run the workflow by hand with `only: cachyos` (or `all`).
 on:

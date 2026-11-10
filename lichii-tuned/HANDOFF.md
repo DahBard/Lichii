@@ -1,6 +1,6 @@
 # Lichii tuned: project handoff
 
-State of the work on 2026-11-09 (round 19), for the next Claude session.
+State of the work on 2026-11-10 (round 22), for the next Claude session.
 
 ## Goal
 
@@ -23,7 +23,8 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   compiled before playing. Every build ships `EDEN_NX2_PRELOAD_ALL_PIPELINES=1` in its
   `nx2_switches.txt` (the owner's request, round 14: each new download's copy lacked it, and r22
   booted with 6,313 of the ~19,400 cached pipelines).
-- The log is `%APPDATA%\eden\log\eden_log.txt` (the previous launch's is `eden_log.txt.old.txt`).
+- The log is `%APPDATA%\lichii\log\eden_log.txt` since the nx2 merge (#1253's data folder;
+  before it `%APPDATA%\eden\log`). The previous launch's log is `eden_log.txt.old.txt`.
 - Sources (the owner, round 20): upstream Lichii (zortos293/Lichii nx2 and its pull requests) and
   Fritchii (Frizti/Lichii, branch `oot-gather-fix`, tags `fritchii-v*`) are the main influences;
   take from other forks only for a very good reason or when the owner names one.
@@ -35,14 +36,14 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Since round 22 (2026-11-10): branch `tuned` = upstream Lichii build 132 (`d2eaae4f3`) + the
-  workflow + this folder again, recorded as a merge so round 21's Fritchii tree (branch `tuned5`)
-  stays in the history. The patch is `git diff --binary d2eaae4f3 tuned4` (342 files, 2.6 MB),
-  backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone
-  that has zortos293/Lichii nx2 up to `d2eaae4f3`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
+- Since round 22 (2026-11-10): branch `tuned` = upstream Lichii nx2 `17baed716` (build 132 plus
+  31 commits, merged in `2d9ea59c5`) + the workflow + this folder. Round 21's Fritchii tree
+  (branch `tuned5`) stays in the history. The patch is `git diff --binary 17baed716 tuned4`
+  (344 files, 2.5 MB), backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle
+  tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to `17baed716`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `d2eaae4f3` (build 132, round 22; `cbb512ee7` merged in round 19, `281477eac`
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `17baed716` (round 22's merge; `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
@@ -83,12 +84,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
-  `0e30416f4`, round 22, and CheezyEmu's FSR port up to `aae4566f5`; pushing it doesn't trigger
-  builds).
+  `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
+  `853ff8213` with follow-ups up to `36948bc36`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `d2eaae4f3`, as `tuned` does). The patch is `git diff --binary d2eaae4f3 tuned4` (342 files,
-  2.6 MB); check it
+  `17baed716`, as `tuned` does). The patch is `git diff --binary 17baed716 tuned4` (344 files,
+  2.5 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -1267,6 +1268,33 @@ Own changes:
   - Owner (2026-11-10): 'dont worry about that. Loading shaders slowly once per build upgrade is
     a fine price to pay.' Dropped: no forced preparation, no install-folder stamp, no
     cross-build pipeline carry-over. The stamp logic stays as it is.
+- Upstream merge (round 22): nx2 `17baed716` (build 132 + 31) on branch `r22-merge-nx2`, then
+  tuned4 fast-forwarded to it. Plan: `merge-plan-nx2.md`.
+  - The merge `853ff8213`: 18 files and 33 hunks, each resolved as planned.
+  - Upstream's #1245/#1246 replace our upload batching (LICHII_UPLOAD_BATCH is gone) and our
+    dispatch barrier ordering.
+  - #959 replaces our over-budget buffer fallback.
+  - GetFrameGenStatus sums the AMD and built-in frame generation counters, so #796's "N FPS + M
+    generated" can't underflow.
+  - Follow-ups:
+    - `7665cf5f5`: the import keeps file times.
+    - `57c6fa941`: the prepared stamp survives a time-only change when the recipe note matches.
+    - `bc370c18f`: the crash folder isn't created before the import.
+    - `c7c78bd3b` and `ff550600e`: Help > Apply Recommended Settings uses the owner's values.
+    - `c16ec4f9e` and `bc22d8072`: docs and launchers name %APPDATA%\lichii; README-tuned.txt
+      gains the first-launch import steps.
+    - `36948bc36`: the tuned code defaults become precache Always, reactive flushing off, async
+      draws Bounded and VRAM Aggressive.
+  - Checks on 69 units, for Linux clang and MinGW clang, with the CI warning flags: clean.
+    nvhost_as_gpu.cpp was checked with g++ only (local clang 18 crashes on it, tuned4 included).
+    Stand-in Catch2 runs: profile_migration 13/13 (the new time case fails without the fix) and
+    recommended_settings 5/5. first_run_config's 3 failures are pre-existing: our seeding
+    rewrites old configs, which upstream's tests forbid. Tests aren't built in CI.
+  - Owner's first launch of the merged build:
+    1. Import dialog: Eden -> Keep Old Data, with Clear shader cache unchecked.
+    2. Restart once: the import launch doesn't read nx2_switches.txt.
+    3. Expect one slow boot, because AMD's driver cache starts cold per exe (accepted). The log
+       should say 'was prepared for this driver already', not a 120k preparation.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
@@ -1386,8 +1414,14 @@ Own changes:
 
 0. Round 22's queue (owner, 2026-11-10), in order:
    - Test the CheezyEmu FSR 4 and frame generation port (done in tuned4 `aae4566f5`, run #48).
-   - Merge upstream Lichii. On 2026-11-10 21:43 +0100 nx2 was at `17baed716`, 31 commits after
-     build 132. Planned in `lichii-tuned/merge-plan-nx2.md` (per-hunk detail in
+   - Done: merged upstream Lichii nx2 `17baed716` (31 commits after build 132), tuned4
+     `36948bc36`. Next: the owner's test of the merged build. Check:
+     - the import;
+     - the 'prepared already' line;
+     - FSR 4 and AMD frame generation;
+     - the ocarina crackle fix (#1196);
+     - the performance against r48.
+     Earlier notes from the planning: Planned in `lichii-tuned/merge-plan-nx2.md` (per-hunk detail in
      `merge-plan-nx2.json`): 18 conflicted files, 29 hunks. Blocker: #1253's data-folder import
      copies without file times, which would re-prepare all ~120k pipelines; Copy() must keep them
      (same push as the merge). Owner decisions (2026-11-10): the recommended table matches the

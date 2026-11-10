@@ -30,7 +30,9 @@ Round 22, in this order:
 
 Then (owner, 2026-11-10), in this order:
 1. Finish and test the CheezyEmu FSR 4 and frame generation port.
-2. A big merge with upstream Lichii (plan: `lichii-tuned/merge-plan-nx2.md`).
+2. A big merge with upstream Lichii: done on 2026-11-10 with nx2 `17baed716` (plan:
+   `lichii-tuned/merge-plan-nx2.md`). The data folder is now `%APPDATA%\lichii`, shared with
+   official Lichii builds.
 3. Once that merge is complete, analyze the newest Fritchii builds for anything worth taking.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
