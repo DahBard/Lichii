@@ -1050,6 +1050,9 @@ Own changes:
   BackingOffset. Fixed in `604dbd24f`. A MinGW-target syntax check (the round 17 method) of the
   merge's Windows files and the patched Qt files finds nothing else. The Linux check can't see
   `#ifdef _WIN32` code.
+- Run #42 (tuned4 `604dbd24f` = r36 + build 132 + the fix): all three variants built (success,
+  ~40 minutes; artifacts `lichii-tuned-r42-pgo-lto` and `-pgo` 62 MB, `-pgo-train` 68 MB, smaller
+  than r40's because AMD's FSR DLLs are no longer bundled). r42 is the round 22 merge build to test.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
