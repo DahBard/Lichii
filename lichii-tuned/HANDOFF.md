@@ -1166,6 +1166,17 @@ Own changes:
   (acquire and present through AMD's runtime). It is built on CheezyEmu's own FSR 4 runtime,
   upscaler and Ocarina motion code, while ours are upstream's (#1060-#1062), so it needs adapting
   rather than copying. Upstream's runtime download lacks the frame generation DLL.
+- Owner (2026-11-10): 'Rip out our FSR4 features in favor of adapting CheezyEmu's. His emulator
+  specializes in AMD compatibility and is thoroughly vetted.' The port (inventory, port, three
+  reviews, fixes) runs on branch `r22-cheezy-fsr` from tuned4 `c3fe6e601`:
+  - Removed: upstream's #1060-#1062 and our LICHII_FSR_JITTER gate.
+  - Taken from cheezy/test `4baa89ec5`: the FSR 4 upscaler, the runtime loader (DLLs next to the
+    exe), the Ocarina FSR path with HUD masks and presets, the FSR 4 output check with its FSR
+    3.1 fallback, and AMD FSR 4 frame generation (FrameGenType::AmdFsr).
+  - Kept: the built-in frame generation with our pacing.
+  - The workflow's 'AMD FidelityFX libraries' step is back. It puts SDK v2.4.0's signed loader
+    (38a56a01...), upscaler (4a7e895a...) and frame generation DLL (d002dabf...) next to
+    lichii.exe. The same files CheezyEmu commits.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
