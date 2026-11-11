@@ -1567,8 +1567,17 @@ Own changes:
        host memory, fence submit batching.
    - Owner (2026-11-11): 'Start the build now ... I accept all of your recommendations on moving
      forward'. B and C follow the plan. The ab-25 (no zero trim) test comes later.
-   - Build A done: r51 = tuned4 `93e92691a` (branch `r22-r51`, workflow `wl1j39f8q`: one
-     implementer, two reviewers, one fixer), run #51.
+   - Build A done: tuned4 `7adb1ae18` (branch `r22-r51`, workflow `wl1j39f8q`: one
+     implementer, two reviewers, one fixer).
+     - Run #51 (`93e92691a`): `pgo` and `pgo-train` built. `pgo-lto` failed at the link:
+       ld.lld reported an undefined "thread-local initialization routine for
+       Nx2Profile::t_compute_programs". That was the first `inline thread_local` in a header
+       with a constructor.
+     - `7adb1ae18` moves it into a function-local thread_local, the tree's existing pattern for
+       non-trivial thread_locals.
+     - Build A ships as run #52 (artifacts `r52-*`). Build B therefore becomes run #53 or later;
+       its branch keeps the name `r22-r52`.
+     - Rule for new code: no `inline thread_local` of a non-trivial type in a header.
      - #1216 9ad7c7cee picked with DjouWish's authorship; it keeps our Writes::Caches.
        EDEN_NX2_TEST_1216=0 (ab-26) restores tuned4's breaks. g_dynamic_strides follows the
        pipeline cache's DynamicFeatures (EDS and VIDS, with the setting). Boot line:

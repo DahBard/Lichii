@@ -32110,7 +32110,7 @@ index 0000000000..7c29afd826
 +
 +} // namespace VideoCommon::Nx2Precompile
 diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
-index 4538491db8..dd313be599 100644
+index 4538491db8..3226fad984 100644
 --- a/src/video_core/nx2_profile.h
 +++ b/src/video_core/nx2_profile.h
 @@ -5,6 +5,7 @@
@@ -32402,8 +32402,8 @@ index 4538491db8..dd313be599 100644
 +class FineScope : public Scope {
 +public:
 +    explicit FineScope(Zone zone_) : Scope{zone_, Fine()} {}
-+};
-+
+ };
+ 
 +/// The ticks two time stamp reads in a row take: what a timed entry measures on top of its own
 +/// time (the least of a few tries).
 +inline u64 TimingOverheadTicks() {
@@ -32485,13 +32485,13 @@ index 4538491db8..dd313be599 100644
 +    u64 weight{}; ///< 0: not timed
 +    u64 start{};
 +    u64 parent_child_ns{};
- };
- 
++};
++
 +
  /// Method calls on this thread by method (3D registers on the back, macros on the front), and
  /// same-value writes among them; MME DMA reads by the macro that made them. The most frequent
  /// are logged with the zones.
-@@ -263,6 +499,28 @@ inline void CountMethod(u32 method, bool same) {
+@@ -263,6 +499,32 @@ inline void CountMethod(u32 method, bool same) {
      }
  }
  
@@ -32508,19 +32508,23 @@ index 4538491db8..dd313be599 100644
 +}
 +
 +/// Compute dispatches on this thread by program (shader hash); the most frequent are logged
-+/// with the zones.
-+inline thread_local std::unordered_map<u64, u64> t_compute_programs;
++/// with the zones. Function-local: MinGW's ThinLTO link drops the initialization routine an
++/// inline thread_local map needs.
++[[nodiscard]] inline std::unordered_map<u64, u64>& ComputePrograms() {
++    thread_local std::unordered_map<u64, u64> programs;
++    return programs;
++}
 +
 +inline void CountComputeProgram(u64 shader_hash) {
 +    if (Enabled()) {
-+        ++t_compute_programs[shader_hash];
++        ++ComputePrograms()[shader_hash];
 +    }
 +}
 +
  inline void CountDmaRead(u32 macro) {
      if (Enabled() && macro < t_dma_reads.size()) {
          ++t_dma_reads[macro];
-@@ -307,6 +565,13 @@ inline void Add(Counter counter, u64 amount) {
+@@ -307,6 +569,13 @@ inline void Add(Counter counter, u64 amount) {
      }
  }
  
@@ -32534,7 +32538,7 @@ index 4538491db8..dd313be599 100644
  /// The front waited for the back since `start` (Ticks) for `site`.
  inline void AddDrain(DrainSite site, u64 start) {
      if (Enabled()) {
-@@ -367,6 +632,27 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
+@@ -367,6 +636,27 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
      line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
                          static_cast<double>(data.counters[6]) * 1e9 / window,
                          static_cast<double>(data.counters[7]) * 1e9 / window);
@@ -32562,7 +32566,7 @@ index 4538491db8..dd313be599 100644
      std::string drains;
      for (size_t i = 0; i < data.drain_count.size(); ++i) {
          if (data.drain_count[i] != 0) {
-@@ -418,17 +704,136 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
+@@ -418,17 +708,136 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
                              static_cast<double>(window) / 1e6);
      }
      LOG_INFO(HW_GPU, "{} per second:{}", thread_name, line);
@@ -32670,10 +32674,10 @@ index 4538491db8..dd313be599 100644
 +                 rate(Counter::LandingChecksDispatch), rate(Counter::LandingChecksDraw),
 +                 rate(Counter::ListCopySubmits));
 +    }
-+    if (!t_compute_programs.empty()) {
++    if (auto& program_counts = ComputePrograms(); !program_counts.empty()) {
 +        std::vector<std::pair<u64, u64>> programs; // count, shader hash
-+        programs.reserve(t_compute_programs.size());
-+        for (const auto& [hash, count] : t_compute_programs) {
++        programs.reserve(program_counts.size());
++        for (const auto& [hash, count] : program_counts) {
 +            programs.emplace_back(count, hash);
 +        }
 +        const size_t top = (std::min<size_t>)(programs.size(), 8);
@@ -32687,7 +32691,7 @@ index 4538491db8..dd313be599 100644
 +        text.pop_back();
 +        LOG_INFO(HW_GPU, "{} compute programs per second ({} programs, top {}):{}", thread_name,
 +                 programs.size(), top, text);
-+        t_compute_programs.clear();
++        program_counts.clear();
 +    }
      t_method_count = {};
      t_method_same = {};
