@@ -96,13 +96,20 @@ void LogTestSwitches(const Core::System& system) {
         fmt::format_to(std::back_inserter(line), "{}{} {}", line.empty() ? "" : ", ", name,
                        on ? "on" : "off");
     }
-    // Option 3's arms (the power-limited CPU), as the code reads them.
+    // Option 3's arms (the power-limited CPU), as the code reads them. Whether the pinning plan
+    // applies (enough P-cores) is worked out here only when pinning is on.
     const s64 idle_spin = Kernel::IdleSpinSetting();
+    const bool pin = Common::PinGpuThreads();
     fmt::format_to(std::back_inserter(line),
-                   ", pin_gpu_threads {} ({}), LICHII_UMWAIT_C02 {}, UMWAIT {}, "
+                   ", pin_gpu_threads {} ({}{}), LICHII_UMWAIT_C02 {}, UMWAIT {}, "
                    "EDEN_NX2_IDLE_SPIN_US {} ({}), EDEN_NX2_CLOCK_TRACE {}",
-                   Common::PinGpuThreads() ? "on" : "off",
+                   !pin                              ? "off"
+                   : Common::PinGpuThreadsOnly()     ? "GPU threads only"
+                                                     : "on",
                    Common::PinGpuThreadsFromEnvironment() ? "EDEN_NX2_PIN_GPU_THREADS" : "setting",
+                   !pin                                  ? ""
+                   : Common::GpuThreadPinningApplies()   ? ", applied"
+                                                         : ", skipped: too few P-cores",
                    Common::SpinWait::UsesC02() ? "on (idle polls in one UMWAIT)" : "off",
                    Common::SpinWait::UsesWaitpkg() ? "on" : "off",
                    idle_spin < 0 ? std::string{"default"} : std::to_string(idle_spin),
