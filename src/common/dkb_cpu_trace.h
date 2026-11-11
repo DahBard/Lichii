@@ -10,6 +10,10 @@
 
 #include "common/thread_cpu_clock.h"
 
+namespace Common::ClockTrace {
+struct Slot;
+}
+
 namespace Common::DkbCpuTrace {
 
 enum class Role : size_t {
@@ -55,6 +59,8 @@ constexpr std::optional<u64> CpuTimeDelta(const ThreadSample& before, const Thre
 
 Snapshot ReadSnapshot();
 
+/// Made by each role thread on its own stack. With EDEN_DKB_FRAME_TRACE its CPU clock is in the
+/// snapshots; with EDEN_NX2_CLOCK_TRACE it holds the thread's clock trace slot (ClockTrace).
 class Registration {
 public:
     explicit Registration(Role role);
@@ -66,6 +72,7 @@ private:
     ThreadCpuClock clock;
     Role role;
     bool registered{};
+    ClockTrace::Slot* clock_slot{};
 };
 
 } // namespace Common::DkbCpuTrace

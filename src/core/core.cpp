@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "game_settings.h"
+#include "common/clock_trace.h"
 #include "common/cpu_features.h"
 #include "audio_core/audio_core.h"
 #include "common/fs/fs.h"
@@ -563,10 +564,13 @@ struct System::Impl {
         }
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
+        Common::ClockTrace::StartSession();
         return SystemResultStatus::Success;
     }
 
     void ShutdownMainProcess() {
+        // Before the role threads it samples stop: each session's trace starts afresh.
+        Common::ClockTrace::StopSession();
         debug_service.reset();
         // Waits for a call in progress (it opens the RomFS, a quick step).
         VideoCommon::Nx2Precompile::SetGameFiles(0, {});

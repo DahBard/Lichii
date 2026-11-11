@@ -63,6 +63,7 @@ struct Topology {
     std::vector<ULONG> fastest;   ///< The highest efficiency class (P-cores).
     std::vector<ULONG> shared;    ///< Every core sharing a last-level cache with them.
     std::vector<ULONG> efficient; ///< The slower cores among those (E-cores).
+    std::vector<ClassifiedProcessor> classes;
 };
 
 template <typename T>
@@ -98,6 +99,8 @@ Topology Detect() {
         ULONG id;
         u32 cache; ///< Processor group and last-level cache index.
         BYTE efficiency;
+        WORD group;
+        BYTE number;
     };
     std::vector<Cpu> cpus;
     for (ULONG offset = 0; offset + sizeof(DWORD) * 2 <= length;) {
@@ -111,6 +114,8 @@ Topology Detect() {
                 .id = info->CpuSet.Id,
                 .cache = (u32{info->CpuSet.Group} << 8) | info->CpuSet.LastLevelCacheIndex,
                 .efficiency = info->CpuSet.EfficiencyClass,
+                .group = info->CpuSet.Group,
+                .number = info->CpuSet.LogicalProcessorIndex,
             });
         }
         offset += info->Size;
@@ -122,6 +127,9 @@ Topology Detect() {
     const BYTE top = std::ranges::max_element(cpus, by_class)->efficiency;
     const BYTE bottom = std::ranges::min_element(cpus, by_class)->efficiency;
     if (top == bottom) {
+        for (const Cpu& cpu : cpus) {
+            topology.classes.push_back({cpu.group, cpu.number, CoreClass::Uniform, cpu.efficiency});
+        }
         LOG_INFO(Common, "CPU: {} logical processors of one core type, no core placement",
                  cpus.size());
         return topology;
@@ -155,6 +163,11 @@ Topology Detect() {
                 topology.efficient.push_back(cpu.id);
             }
         }
+        topology.classes.push_back({cpu.group, cpu.number,
+                                    cpu.efficiency == top ? CoreClass::Performance
+                                    : usable              ? CoreClass::Efficient
+                                                          : CoreClass::LowPower,
+                                    cpu.efficiency});
     }
 
     const Policy policy = ReadPolicy();
@@ -221,6 +234,10 @@ void SetCurrentThreadCoreRole(CoreRole role, const char* thread_name) {
                  thread_name != nullptr && thread_name[0] != '\0' ? thread_name : "thread", set,
                  cpus->size(), result == FALSE ? ", failed" : "");
     }
+}
+
+const std::vector<ClassifiedProcessor>& ClassifiedProcessors() {
+    return GetTopology().classes;
 }
 
 } // namespace Common::Windows

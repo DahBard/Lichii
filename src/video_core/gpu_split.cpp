@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 
+#include "common/clock_trace.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/logging.h"
 #include "common/settings.h"
@@ -623,6 +624,7 @@ void GpuSplit::Backoff(u32 spins, u64 target) {
     const u32 seen = front_wake.load(std::memory_order_seq_cst);
     if (consumed.load(std::memory_order_seq_cst) < target) {
         front_wake.wait(seen, std::memory_order_seq_cst);
+        Common::ClockTrace::NoteProcessor();
     }
     front_waiting.store(false, std::memory_order_relaxed);
 }
@@ -853,6 +855,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
 #endif
     u64 read_position = 0;
     while (!stop_token.stop_requested()) {
+        Common::ClockTrace::NoteProcessorInLoop();
         Nx2Profile::Report("GPU back thread", true);
         if (tick_requested.load(std::memory_order_relaxed)) [[unlikely]] {
             // The tick uses the scheduler: a drain waits for the idle hook after it.
@@ -908,6 +911,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                     !hook_requested.load(std::memory_order_seq_cst) &&
                     !tick_requested.load(std::memory_order_seq_cst)) {
                     wake.wait(seen, std::memory_order_seq_cst);
+                    Common::ClockTrace::NoteProcessor();
                 }
                 back_waiting.store(false, std::memory_order_relaxed);
                 continue;

@@ -3,6 +3,7 @@
 
 #include <mutex>
 
+#include "common/clock_trace.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/dkb_frame_trace.h"
 
@@ -22,7 +23,9 @@ Registry& GetRegistry() {
 
 } // namespace
 
-Registration::Registration(Role role_) : clock{DkbFrameTrace::Enabled()}, role{role_} {
+Registration::Registration(Role role_)
+    : clock{DkbFrameTrace::Enabled()}, role{role_},
+      clock_slot{ClockTrace::RegisterThread(static_cast<size_t>(role_))} {
     if (!DkbFrameTrace::Enabled()) {
         return;
     }
@@ -38,6 +41,7 @@ Registration::Registration(Role role_) : clock{DkbFrameTrace::Enabled()}, role{r
 }
 
 Registration::~Registration() {
+    ClockTrace::UnregisterThread(clock_slot);
     if (!registered) {
         return;
     }

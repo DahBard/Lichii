@@ -15,6 +15,7 @@
 #endif
 
 #include "common/assert.h"
+#include "common/clock_trace.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -123,6 +124,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             std::getenv("EDEN_NX2_MME_DMA_STATS") != nullptr ? new ThreadStats{} : nullptr;
         namespace WaitStats = VideoCommon::GpuWaitStats;
         while (!stop_token.stop_requested()) {
+            Common::ClockTrace::NoteProcessorInLoop();
             if (thread_stats) {
                 thread_stats->MaybeLog(scheduler.HasPendingChannels());
             }
@@ -176,11 +178,13 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
 #else
                         std::this_thread::sleep_for(std::chrono::microseconds{50});
 #endif
+                        Common::ClockTrace::NoteProcessor();
                     } else {
                         // A GPU release that meets a suspended acquire wakes this at once;
                         // CPU releases are still found by polling.
                         Tegra::Nx2SemaphoreWaiters::Get().WaitForLatch(
                             seen_latch, std::chrono::milliseconds{1});
+                        Common::ClockTrace::NoteProcessor();
                     }
                     continue;
                 }
@@ -189,6 +193,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 const ThreadStats::Timer timer{thread_stats, ThreadStats::Idle};
                 const WaitStats::IdleScope idle{WaitStats::g_front_idle_ns};
                 state.queue.PopWait(next, stop_token);
+                Common::ClockTrace::NoteProcessor();
             }
             if (stop_token.stop_requested()) {
                 break;

@@ -10,6 +10,7 @@
 #if defined(_M_X64) || defined(__x86_64__)
 #include <immintrin.h>
 #endif
+#include "common/clock_trace.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/spin_wait.h"
@@ -121,6 +122,7 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
     };
 
     while (true) {
+        Common::ClockTrace::NoteProcessorInLoop();
         // If the thread is scheduled for termination, exit.
         if (thread->HasDpc() && thread->IsTerminationRequested()) {
             thread->Exit(kernel);
@@ -331,6 +333,8 @@ void PhysicalCore::Idle(KernelCore& kernel) {
         std::unique_lock lk{m_guard};
         m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load() != 0; });
     }
+    // The host thread may have slept and woken on another processor.
+    Common::ClockTrace::NoteProcessor();
     m_profile.Switch(GuestCoreProfile::Activity::Kernel);
 }
 

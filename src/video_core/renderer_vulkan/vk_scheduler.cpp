@@ -23,6 +23,7 @@
 
 #include "common/logging.h"
 #include "common/settings.h"
+#include "common/clock_trace.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/thread.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -679,6 +680,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
                     return !worker_waiting;
                 });
             }
+            Common::ClockTrace::NoteProcessor();
             worker_waiting = false;
 
             // If we've been asked to stop, we're done.
