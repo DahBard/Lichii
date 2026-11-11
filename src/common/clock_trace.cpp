@@ -1168,6 +1168,13 @@ void StartSession() {
         return;
     }
 #if LICHII_CLOCK_TRACE
+    // A process that exits with a session running (no ShutdownMainProcess) stops the sampler
+    // here rather than in g_sampler's destructor, which may run after the logger's: exit runs
+    // what is registered later first.
+    [[maybe_unused]] static const bool stop_at_exit = [] {
+        std::atexit([] { StopSession(); });
+        return true;
+    }();
     std::scoped_lock lock{g_session_mutex};
     g_sampler.reset();
     g_sampler = std::make_unique<Sampler>();
