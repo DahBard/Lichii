@@ -1342,6 +1342,32 @@ Own changes:
     bytes', then 'Merged 1 recorded profile(s) into merged.profdata'.
   - The profile changes every object, so the compiler cache missed: pgo took 41 min to build
     (job 45 min), pgo-lto 59 min (job 64 min); pgo-train, which doesn't use it, 13 min.
+- r50 test (owner, 2026-11-11; other areas than r49, so frame rates don't compare directly):
+  - First launch of the build: 4985 cached pipelines in ~306 s (cold AMD cache, accepted).
+    'prepared for this driver already'. 'FPS Unlock (built-in) (5 records)': #1180 is on.
+    FSR 4.1.2 and AMD frame generation as before.
+  - Play: 57-60 fps in light areas, 36-42 fps in heavier ones. No device loss.
+  - Zero-page passes:
+    - 0.90-1.10 s at 4.2-9.0 GB resident (r49: 1.33-1.37 s at 7.5-8.5 GB): page reads 700-860
+      ms, working set query 150-280 ms, unlock runs 73-218 ms. The early exit saved ~20%:
+      touching ~2 M pages is the cost.
+    - The backoff works: 10 -> 20 -> 40 -> 80 s, reset by big trims at area loads.
+    - Frames around 5 passes in play: 0, 0, 1, 3 and 16 frames over 30 ms. In r49 every pass
+      gave 5-18.
+    - Next: an A/B with ab-25 (no passes; the owner has 32 GB). Or run the pass on the two
+      low-power E-cores our placement leaves idle: they are on the SoC tile, outside the compute
+      tile's L3.
+  - Empty flushes ('Scheduler per second'): 0-10/s in play. Fritchii's EXP61 (4,600/s there)
+    would do nothing here. Settled.
+  - Recorded PGO profile: no measurable gain.
+    - The back thread's draw zone per draw: 0.593 us in r49, 0.586 us in r50.
+    - Guest code per dispatcher entry: 13.7-18.4 us in r49, 15.2-17.3 us in r50 (JIT code;
+      PGO doesn't affect it).
+    - Lichii's own eglantine.profdata already covers the hot paths. It does no harm, so keep it.
+  - New: 16 'Unmapped Device WriteBlock' lines at 396.77 s, into the 1 MiB range that also had
+    'Unmapped Device ReadBlock' lines at 357.17 s (buffer_cache.h:4388). A write-back into
+    memory the game had freed, in an area r49 didn't visit; none of r50's changes touch it.
+  - The 'Userspace PANIC' after 'Shutdown requested' is the usual forced stop.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
