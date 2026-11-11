@@ -27,6 +27,13 @@ class System;
 
 namespace Kernel {
 
+/// EDEN_NX2_IDLE_SPIN_US (read once): microseconds an idle core polls before it blocks, or -1
+/// when unset.
+s64 IdleSpinSetting();
+/// What PhysicalCore::Idle polls for: the setting, or by default 100 us for Switch 2 titles (0 on
+/// Android and for other titles).
+s64 IdleSpinMicroseconds(const KernelCore& kernel);
+
 class PhysicalCore {
 public:
     PhysicalCore(KernelCore& kernel, std::size_t core_index);

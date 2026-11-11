@@ -10,8 +10,11 @@
 #include <string>
 #include <utility>
 
+#include "common/clock_trace.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "common/spin_wait.h"
+#include "common/thread.h"
 #include "core/core.h"
 #include "core/device_memory.h"
 #include "core/frontend/emu_window.h"
@@ -19,6 +22,7 @@
 #include "core/hle/kernel/k_address_arbiter.h"
 #include "core/hle/kernel/k_spin_lock.h"
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/physical_core.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -92,6 +96,18 @@ void LogTestSwitches(const Core::System& system) {
         fmt::format_to(std::back_inserter(line), "{}{} {}", line.empty() ? "" : ", ", name,
                        on ? "on" : "off");
     }
+    // Option 3's arms (the power-limited CPU), as the code reads them.
+    const s64 idle_spin = Kernel::IdleSpinSetting();
+    fmt::format_to(std::back_inserter(line),
+                   ", pin_gpu_threads {} ({}), LICHII_UMWAIT_C02 {}, UMWAIT {}, "
+                   "EDEN_NX2_IDLE_SPIN_US {} ({} us), EDEN_NX2_CLOCK_TRACE {}",
+                   Common::PinGpuThreads() ? "on" : "off",
+                   Common::PinGpuThreadsFromEnvironment() ? "EDEN_NX2_PIN_GPU_THREADS" : "setting",
+                   Common::SpinWait::UsesC02() ? "on" : "off",
+                   Common::SpinWait::UsesWaitpkg() ? "on" : "off",
+                   idle_spin < 0 ? std::string{"default"} : std::to_string(idle_spin),
+                   Kernel::IdleSpinMicroseconds(system.Kernel()),
+                   Common::ClockTrace::Enabled() ? "on" : "off");
     LOG_INFO(HW_GPU, "TEST switches in effect: {}", line);
 }
 

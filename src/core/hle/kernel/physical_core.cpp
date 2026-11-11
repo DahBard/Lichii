@@ -278,25 +278,32 @@ void PhysicalCore::LogBacktrace(KernelCore& kernel) {
     }
 }
 
+s64 IdleSpinSetting() {
+    static const s64 setting = [] {
+        const char* text = std::getenv("EDEN_NX2_IDLE_SPIN_US");
+        return text ? static_cast<s64>(std::strtoll(text, nullptr, 10)) : s64{-1};
+    }();
+    return setting;
+}
+
+s64 IdleSpinMicroseconds([[maybe_unused]] const KernelCore& kernel) {
+    if (const s64 setting = IdleSpinSetting(); setting >= 0) {
+        return setting;
+    }
+#ifdef __ANDROID__
+    return 0;
+#else
+    const KProcess* process = kernel.ApplicationProcess();
+    return process != nullptr && process->IsSwitch2() ? 100 : 0;
+#endif
+}
+
 void PhysicalCore::Idle(KernelCore& kernel) {
     // Guest job systems hand work between cores many times per frame; blocking at once adds the
     // host's thread wake-up latency to every handoff. EDEN_NX2_IDLE_SPIN_US=<n>: poll for that
     // many microseconds before blocking. Switch 2 titles poll 100 us by default outside Android
     // (title 1's frames: 42 ms without, 35 ms with 50 us, 34 ms with 100 us, 36 ms with 300 us).
-    static const long long spin_setting = [] {
-        const char* text = std::getenv("EDEN_NX2_IDLE_SPIN_US");
-        return text ? std::strtoll(text, nullptr, 10) : -1LL;
-    }();
-    long long spin_us = spin_setting;
-    if (spin_us < 0) {
-#ifdef __ANDROID__
-        spin_us = 0;
-#else
-        const KProcess* process = kernel.ApplicationProcess();
-        spin_us = process != nullptr && process->IsSwitch2() ? 100 : 0;
-#endif
-    }
-    const auto spin = std::chrono::microseconds{spin_us};
+    const auto spin = std::chrono::microseconds{IdleSpinMicroseconds(kernel)};
     m_profile.Switch(GuestCoreProfile::Activity::IdleSpin);
     if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
         // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
