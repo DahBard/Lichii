@@ -71,15 +71,17 @@ TEST_CASE("Clock trace logs a start line and a 10 s window, and stops", "[common
         // A second thread for a role that has one gets no slot.
         const RoleThread second_back{DkbCpuTrace::Role::GpuBack, false};
 
+        // The window line comes 10 s after the sampler's setup, which can take a while on a
+        // host whose performance counters were never read.
         ClockTrace::StartSession();
-        std::this_thread::sleep_for(11500ms);
+        std::this_thread::sleep_for(14s);
         const auto stop_start = std::chrono::steady_clock::now();
         ClockTrace::StopSession();
         CHECK(std::chrono::steady_clock::now() - stop_start < 1s);
 
         // The next session starts afresh.
         ClockTrace::StartSession();
-        std::this_thread::sleep_for(1500ms);
+        std::this_thread::sleep_for(3s);
         ClockTrace::StopSession();
     }
 
