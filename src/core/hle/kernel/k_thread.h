@@ -51,6 +51,10 @@ class KProcess;
 class KScheduler;
 class KThreadQueue;
 
+namespace HeapTrace {
+class Call;
+}
+
 using KThreadFunction = KProcessAddress;
 
 enum class ThreadType : u32 {
@@ -1023,6 +1027,10 @@ public:
     /// by the thread itself.
     u8 m_nx2_arb_spin_credit{8};
     u8 m_nx2_arb_spin_probe{};
+
+    /// EDEN_NX2_HEAP_TRACE: this thread's traced MapPhysicalMemory or UnmapPhysicalMemory while
+    /// it runs (on the thread's stack). Touched only by the thread itself.
+    HeapTrace::Call* m_nx2_heap_trace_call{};
 };
 
 class KScopedDisableDispatch {

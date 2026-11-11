@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
@@ -34,11 +33,6 @@ bool ReadSwitch() {
     const char* const value = std::getenv("EDEN_NX2_HEAP_TRACE");
     return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
-
-/// The guest thread whose traced call holds a physical memory lock, and that call. Only that
-/// thread sets, clears and reads g_call; other threads only see that the owner isn't them.
-std::atomic<const KThread*> g_owner{};
-Call* g_call{};
 
 struct ProcessCounters {
     u32 faults{}; ///< Page faults of all its threads (Windows counts them in 32 bits)
@@ -181,6 +175,16 @@ u64 NowNs() {
     return (std::max)(static_cast<u64>(ns), u64{1});
 }
 
+void Reset() {
+    if (!enabled) {
+        return;
+    }
+    std::scoped_lock lock{g_window.mutex};
+    g_window.start_ns = 0;
+    g_window.start_faults = 0;
+    g_window.totals = {};
+}
+
 void Call::Begin(KernelCore& kernel, Direction direction, u64 bytes, const size_t& mapped,
                  u64 start) {
     locked_ns = NowNs();
@@ -190,11 +194,9 @@ void Call::Begin(KernelCore& kernel, Direction direction, u64 bytes, const size_
     call_direction = direction;
     call_bytes = bytes;
     phase_ns = {};
-    const KThread* expected = nullptr;
-    owner = g_owner.compare_exchange_strong(expected, GetCurrentThreadPointer(kernel),
-                                            std::memory_order_acq_rel);
-    if (owner) {
-        g_call = this;
+    thread = GetCurrentThreadPointer(kernel);
+    if (thread->m_nx2_heap_trace_call == nullptr) {
+        thread->m_nx2_heap_trace_call = this;
     }
     faults_before = ReadProcessCounters().faults;
     zero_filled_before = Common::HostMemory::ZeroFilledBytes();
@@ -205,9 +207,8 @@ void Call::End() {
     const ProcessCounters counters = ReadProcessCounters();
     const u64 zero_filled = Common::HostMemory::ZeroFilledBytes() - zero_filled_before;
     const u64 mapped_after = *mapped_size;
-    if (owner) {
-        g_call = nullptr;
-        g_owner.store(nullptr, std::memory_order_release);
+    if (thread->m_nx2_heap_trace_call == this) {
+        thread->m_nx2_heap_trace_call = nullptr;
     }
     std::scoped_lock lock{g_window.mutex};
     if (g_window.start_ns == 0) {
@@ -236,12 +237,10 @@ void Call::End() {
 }
 
 void Phases::Begin(KernelCore& kernel) {
-    const KThread* const holder = g_owner.load(std::memory_order_acquire);
-    if (holder == nullptr || holder != GetCurrentThreadPointer(kernel)) {
-        return;
+    call = GetCurrentThreadPointer(kernel)->m_nx2_heap_trace_call;
+    if (call != nullptr) {
+        since = NowNs();
     }
-    call = g_call;
-    since = NowNs();
 }
 
 void Phases::EndSlow(Phase phase) {

@@ -28,6 +28,7 @@
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/hardware_properties.h"
+#include "core/hle/kernel/heap_trace.h"
 #include "core/hle/kernel/init/init_slab_setup.h"
 #include "core/hle/kernel/k_client_port.h"
 #include "core/hle/kernel/k_dynamic_resource_manager.h"
@@ -934,6 +935,8 @@ void KernelCore::Initialize() {
 
 void KernelCore::Shutdown() {
     impl->Shutdown(*this);
+    // EDEN_NX2_HEAP_TRACE: a later session starts a window of its own.
+    HeapTrace::Reset();
 }
 
 void KernelCore::CloseServices() {

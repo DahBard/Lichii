@@ -11,6 +11,7 @@
 namespace Kernel {
 
 class KernelCore;
+class KThread;
 
 /// EDEN_NX2_HEAP_TRACE=1: what the guest's MapPhysicalMemory and UnmapPhysicalMemory (supervisor
 /// calls 0x2c and 0x2d) cost the host. A call is timed from before it takes its page table's
@@ -40,9 +41,15 @@ extern const bool enabled;
     return enabled ? NowNs() : 0;
 }
 
+/// Drops the unfinished 10 s window (KernelCore::Shutdown), so a later session's first lines
+/// cover only that session.
+void Reset();
+
 /// A call, made once it holds its physical memory lock so that it ends before the next call on
 /// that page table starts. `start` is Start(); `mapped` the page table's mapped physical memory
-/// size, whose change is what the call mapped or unmapped.
+/// size, whose change is what the call mapped or unmapped. While it runs it is its guest
+/// thread's (KThread::m_nx2_heap_trace_call), so a thread that stops in a call (emulation
+/// stopped) leaves nothing behind for the next session.
 class Call {
 public:
     Call(KernelCore& kernel, Direction direction, u64 bytes, const size_t& mapped, u64 start) {
@@ -67,8 +74,8 @@ private:
 
     const size_t* mapped_size{}; ///< Set while traced
     // Set by Begin, so that an untraced call stores nothing else.
+    KThread* thread; ///< The guest thread making the call
     Direction call_direction;
-    bool owner; ///< Its Phases are counted (one call at a time)
     u64 call_bytes;
     u64 mapped_before;
     u64 start_ns;
@@ -80,7 +87,7 @@ private:
 
 /// Splits what a function does for a traced call into phases: End(phase) gives `phase` the time
 /// since the split began or since the previous End. Nothing unless the calling guest thread is
-/// the one whose traced call holds a physical memory lock.
+/// in a traced call.
 class Phases {
 public:
     explicit Phases(KernelCore& kernel) {
