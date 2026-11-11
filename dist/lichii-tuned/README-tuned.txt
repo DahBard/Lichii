@@ -221,6 +221,21 @@ below), plus:
    - perf-trace's "Scheduler per second" line also counts the GPU submissions with nothing
      new in them, to see whether skipping them (Fritchii's EXP61) would help here.
    - The first build optimized with your recorded Ocarina PGO profile.
+ * r51, aimed at the GPU back thread (18-21 ms a frame against a 16.7 ms budget):
+   - Upstream Lichii #1216: a vertex stream's stride word, the render enable addresses and the
+     back macros' calls no longer end the cheap repeat draws, which made about 28,000 draws a
+     second take the full path at Kokiri. ab-26 brings r50's behaviour back.
+   - Upstream #1251's layout of the split GPU thread's queue: the two threads stop pulling the
+     same cache line back and forth (no switch; compare against r50 on the same route).
+   - Small upstream speedups: no second flush after each fence, the driver's memory budget asked
+     at most every 50 ms, flat texture lookup tables, no copies of compute image handles; and
+     no cache gather at fences when the CPU wrote nothing. ab-28 turns the switchable ones off.
+   - Upstream #717's check: compute bindings in one piece skip a page walk of up to 1 GiB.
+     ab-27 turns it off.
+   - More logging with perf-trace: which kinds of state change end repeat draws, compute
+     dispatch steps and slow dispatches, fence and lock times, and a one-time "Stream buffer
+     write rate" line. perf-trace-noprofile logs the frame trace alone, for the frame rate you
+     actually get; verify-r51 checks the repeat draws and back macros against the slow way.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -284,6 +299,17 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               zeros stay in RAM (about 7 GB more in Ocarina), logged like
                               perf-trace.bat: compare the frames around perf-trace's
                               "Zero-page pass" lines and the 1% lows
+ ab-26-no-1216.bat            repeat draws end at stride words, render enable addresses and
+                              back macro calls as in r50 (EDEN_NX2_TEST_1216=0); unprofiled:
+                              compare with perf-trace-noprofile.bat
+ ab-27-no-contig.bat          compute bindings in one piece walk the page tables again
+                              (EDEN_NX2_TEST_CONTIG=0); unprofiled, compare with
+                              perf-trace-noprofile.bat
+ ab-28-no-quick-wins.bat      r51's switchable small speedups off (EDEN_NX2_TEST_QUICK=0);
+                              unprofiled, compare with perf-trace-noprofile.bat
+ verify-r51.bat               resolves repeat draws in full and runs back macros the old way
+                              ("Fast draw verify" mismatches and the back macros' "with other
+                              writes" should stay 0, no "Nx2Perf mapping runs" errors); slower
  verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
                               verify ... differ", tombstone hits and the bank check's "without
                               the frame check (mode 3)" should stay 0); slower
@@ -318,6 +344,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               frame times in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1). Draws are timed
                               one sampled frame in four (LICHII_TRACE_DRAWS_EVERY=4)
+ perf-trace-noprofile.bat     default settings with only the frame trace (EDEN_DKB_FRAME_TRACE=1):
+                              gpu_back_cpu_ms_per_frame and frame times without the zones'
+                              cost; the baseline for ab-26 to ab-28
  frame-times.bat              default settings with only each frame's time logged
                               (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
