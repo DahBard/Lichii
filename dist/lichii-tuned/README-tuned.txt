@@ -322,7 +322,8 @@ below), plus:
               be too short for C0.2. If it matches the baseline, C0.2 had no measurable effect
               as built, which does not make it useless: Windows may keep C0.2 off, and the log
               cannot show that. Lower package power or higher P-core ghz at the same frame rate
-              show that it acted
+              show that it acted. If it helps, a later build tells the deeper state from the
+              single wait (an arm with the single wait in C0.1)
        ab-40  ab-37 and ab-39 together, and an idle emulated core polls 30 microseconds before
               it sleeps instead of 100 (shorter, not gone: without the poll another game's
               frames took 42 ms instead of 34-35)
