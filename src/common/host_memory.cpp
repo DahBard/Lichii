@@ -56,6 +56,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -1283,12 +1284,20 @@ namespace {
 std::atomic<u64> g_zero_filled_bytes{};
 
 [[maybe_unused]] bool IsZeroPage(const u8* page) {
+    // Stops at the first non-zero line: most pages hold data in their first bytes. Reading every
+    // page whole, a pass took ~1.35 s at 7.5-8.5 GB resident (r49).
     const auto* words = reinterpret_cast<const u64*>(page);
-    u64 bits = 0;
-    for (size_t i = 0; i < PageAlignment / sizeof(u64); ++i) {
-        bits |= words[i];
+    constexpr size_t LineWords = 8; // 64 bytes
+    for (size_t i = 0; i < PageAlignment / sizeof(u64); i += LineWords) {
+        u64 bits = 0;
+        for (size_t j = 0; j < LineWords; ++j) {
+            bits |= words[i + j];
+        }
+        if (bits != 0) {
+            return false;
+        }
     }
-    return bits == 0;
+    return true;
 }
 } // namespace
 
@@ -1296,11 +1305,18 @@ u64 HostMemory::ZeroFilledBytes() noexcept {
     return g_zero_filled_bytes.load(std::memory_order_relaxed);
 }
 
-std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+std::pair<size_t, size_t> HostMemory::TrimZeroPages(ZeroTrimPhases* phases) const {
 #ifdef _WIN32
     if (backing_base == nullptr) {
         return {0, 0};
     }
+    const auto micros_since = [](std::chrono::steady_clock::time_point begin) {
+        return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - begin)
+                                    .count());
+    };
+    ZeroTrimPhases timing{};
+    auto phase_start = std::chrono::steady_clock::now();
     std::vector<ULONG_PTR> entries(size_t{1} << 22);
     for (int attempt = 0;; ++attempt) {
         if (K32QueryWorkingSet(GetCurrentProcess(), entries.data(),
@@ -1312,6 +1328,8 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
         }
         entries.assign((std::max)(entries.size() * 2, size_t{entries[0]} + (size_t{1} << 18)), 0);
     }
+    timing.query_us = micros_since(phase_start);
+    phase_start = std::chrono::steady_clock::now();
     const size_t count = (std::min)(size_t{entries[0]}, entries.size() - 1);
     const auto backing_begin = reinterpret_cast<uintptr_t>(backing_base);
     const auto view_begin = reinterpret_cast<uintptr_t>(impl ? impl->virtual_base : nullptr);
@@ -1355,6 +1373,8 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     }
     std::sort(trim.begin(), trim.end());
     trim.erase(std::unique(trim.begin(), trim.end()), trim.end());
+    timing.scan_us = micros_since(phase_start);
+    phase_start = std::chrono::steady_clock::now();
     // A run can span two views, which VirtualUnlock refuses as a whole: then page by page.
     const auto unlock = [](uintptr_t begin, uintptr_t end) {
         if (VirtualUnlock(reinterpret_cast<void*>(begin), end - begin) ||
@@ -1370,11 +1390,19 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
         while (j < trim.size() && trim[j] == trim[j - 1] + PageAlignment) {
             ++j;
         }
+        const auto run_start = std::chrono::steady_clock::now();
         unlock(trim[i], trim[j - 1] + PageAlignment);
+        timing.longest_unlock_us = (std::max)(timing.longest_unlock_us, micros_since(run_start));
+        ++timing.unlock_runs;
         i = j;
+    }
+    timing.unlock_us = micros_since(phase_start);
+    if (phases != nullptr) {
+        *phases = timing;
     }
     return {(backing_pages.size() + view_pages.size()) * PageAlignment, zero_bytes};
 #else
+    static_cast<void>(phases);
     return {0, 0};
 #endif
 }

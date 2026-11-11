@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <mutex>
 
 #include "common/logging.h"
@@ -26,7 +27,11 @@ DeviceMemory::DeviceMemory()
     : buffer{Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize(),
              VirtualReserveSize} {
 #ifdef _WIN32
-    zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
+    // EDEN_NX2_ZERO_TRIM=0: no zero-page passes (A/B: ab-25-no-zero-trim.bat).
+    if (const char* value = std::getenv("EDEN_NX2_ZERO_TRIM");
+        value == nullptr || value[0] != '0') {
+        zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
+    }
 #endif
 }
 
@@ -35,7 +40,7 @@ DeviceMemory::~DeviceMemory() = default;
 #ifdef _WIN32
 // Windows can't punch holes in the guest memory section, so pages holding only zeros (games clear
 // their heaps while booting: Ocarina leaves ~7 GB) stay resident until they leave the working set.
-// A pass comes every 5 s while they keep turning up, backing off to once a minute.
+// A pass comes every 5 s while they keep turning up, backing off to once every 5 minutes.
 void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
@@ -69,19 +74,35 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             logged_commit = commit;
         }
         const auto start = std::chrono::steady_clock::now();
-        const auto [resident, trimmed] = buffer.TrimZeroPages();
+        Common::HostMemory::ZeroTrimPhases phases{};
+        const auto [resident, trimmed] = buffer.TrimZeroPages(&phases);
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - start)
                             .count();
         if (trimmed < Busy) {
-            interval = (std::min)(interval * 2, std::chrono::seconds{60});
+            // A pass that trims little still queries the working set and checks every resident
+            // page. A slow one is logged, to line it up with slow frames.
+            interval = (std::min)(interval * 2, std::chrono::seconds{300});
+            if (ms >= 100) {
+                LOG_INFO(HW_Memory,
+                         "Zero-page pass: {} MiB trimmed of {} MiB resident in {} ms "
+                         "(next in {} s); working set query {} ms, page reads {} ms, {} unlock "
+                         "runs {} ms (longest {:.1f} ms)",
+                         trimmed >> 20, resident >> 20, ms, interval.count(),
+                         phases.query_us / 1000, phases.scan_us / 1000, phases.unlock_runs,
+                         phases.unlock_us / 1000,
+                         static_cast<double>(phases.longest_unlock_us) / 1e3);
+            }
             continue;
         }
         interval = 5s;
         LOG_INFO(HW_Memory,
                  "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms; the kernel "
-                 "zero-filled {} MiB so far",
-                 trimmed >> 20, resident >> 20, ms, Common::HostMemory::ZeroFilledBytes() >> 20);
+                 "zero-filled {} MiB so far; working set query {} ms, page reads {} ms, {} unlock "
+                 "runs {} ms (longest {:.1f} ms)",
+                 trimmed >> 20, resident >> 20, ms, Common::HostMemory::ZeroFilledBytes() >> 20,
+                 phases.query_us / 1000, phases.scan_us / 1000, phases.unlock_runs,
+                 phases.unlock_us / 1000, static_cast<double>(phases.longest_unlock_us) / 1e3);
     }
 }
 #endif

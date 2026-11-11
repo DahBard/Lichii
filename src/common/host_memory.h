@@ -64,9 +64,19 @@ public:
     /// it needs RAM. The contents stay; using the pages brings them back.
     void HintCold(size_t physical_offset, size_t length,
                   std::optional<size_t> virtual_offset) const;
+    /// Where a TrimZeroPages pass spent its time, for its log line.
+    struct ZeroTrimPhases {
+        u64 query_us{};          ///< The working set query
+        u64 scan_us{};           ///< Reading the resident pages
+        u64 unlock_us{};         ///< VirtualUnlock of the zero pages, run by run
+        u64 unlock_runs{};       ///< Runs of adjacent zero pages
+        u64 longest_unlock_us{}; ///< The slowest run
+    };
+
     /// Windows: resident pages of guest memory (backing and its views) that hold only zeros leave
-    /// the working set, like HintCold. Returns {resident bytes looked at, bytes trimmed}.
-    std::pair<size_t, size_t> TrimZeroPages() const;
+    /// the working set, like HintCold. Returns {resident bytes looked at, bytes trimmed}, and the
+    /// pass's phases in `phases` when given.
+    std::pair<size_t, size_t> TrimZeroPages(ZeroTrimPhases* phases = nullptr) const;
 
     /// Bytes ClearBackingRegion has filled with zeros (memset) since start.
     static u64 ZeroFilledBytes() noexcept;
