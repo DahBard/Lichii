@@ -279,7 +279,7 @@ TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_ma
     };
     constexpr std::string_view RoutineHead =
         "2818201ECA9200B04A0138912BE03BD54C0140F94B0100F9CC0200B46B010CCB0DE03BD5"
-        "4E0180D2AE09CE9A7F010EEBCB818B9A4C0540F94C0000B5EC030BAA6E010CCB8C0D8E8B"
+        "4E0180D2AE09CE9A7F010EEBCB818B9A4C0540F94C0000B5EC030BAA6E010CCB8C018E8B"
         "4C0500F98201239EA301239E4218231E4208211E";
     const auto water_patched = [](const std::vector<u8>& nso) {
         return WordAt(nso, WaterHookOffset) == WaterCallInstruction &&
