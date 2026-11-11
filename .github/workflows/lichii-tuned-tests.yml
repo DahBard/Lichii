@@ -76,6 +76,9 @@ jobs:
             objects-tuned-tests-v1-
 
       # The build workflow checks the warnings; this one only has to run the tests.
+      # -fsized-deallocation: tests instantiate fssystem_bucket_tree.h's sized ::operator delete,
+      # which libstdc++ declares only with it (the MinGW runtime has it; clang-cl's STL always
+      # declares it, and lichii.exe never instantiates that code).
       - name: Configure
         shell: msys2 {0}
         run: |
@@ -101,7 +104,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
             "-DCMAKE_C_FLAGS=$TUNE_FLAGS" \
-            "-DCMAKE_CXX_FLAGS=$TUNE_FLAGS"
+            "-DCMAKE_CXX_FLAGS=$TUNE_FLAGS -fsized-deallocation"
 
       - name: Save CPM downloads
         if: steps.cpm-cache.outputs.cache-hit != 'true'
