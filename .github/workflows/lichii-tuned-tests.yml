@@ -135,3 +135,13 @@ jobs:
           export PATH="/ucrt64/bin:$PATH"
           cd build/release/bin
           ./tests.exe --order decl --colour-mode none
+
+      # The clock trace's PDH, power and thread-time calls on a real Windows host (the test is
+      # skipped in the run above, without the variable). It prints the lines it logged.
+      - name: Run the clock trace
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/ucrt64/bin:$PATH"
+          cd build/release/bin
+          EDEN_NX2_CLOCK_TRACE=1 ./tests.exe "[clock_trace]" --colour-mode none

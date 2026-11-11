@@ -37,7 +37,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 - Since round 22 (2026-11-10): branch `tuned` = upstream Lichii nx2 `17baed716` (build 132 plus
   31 commits, merged in `2d9ea59c5`) + the workflow + this folder. Round 21's Fritchii tree
   (branch `tuned5`) stays in the history. The patch is `git diff --binary 17baed716 tuned4`
-  (346 files, 2.6 MB), backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle
+  (393 files, 2.9 MB), backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle
   tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to `17baed716`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
@@ -95,12 +95,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
   `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
-  `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`; pushing it
-  doesn't trigger builds).
+  `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`, builds A, B and r54 up to
+  `cbe51e88a`, and r55 up to `3bf40a3c2`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `17baed716`, as `tuned` does). The patch is `git diff --binary 17baed716 tuned4` (346 files,
-  2.6 MB); check it
+  `17baed716`, as `tuned` does). The patch is `git diff --binary 17baed716 tuned4` (393 files,
+  2.9 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -1853,6 +1853,46 @@ Own changes:
        HLE, delta draws nearly everywhere).
      - Frame generation stays AMD FSR 2x. The adaptive target rate (frame_gen_target_rate)
        drives only Lichii's own frame generation.
+   - r55 (run #55, tuned4 `3bf40a3c2` = branch `r22-r55`): build C part 1 and option 3's tests.
+     - Build C part 1: #16 (e05a72847, delta draws for pipelines with computed texture handles;
+       ab-36 turns it off), zones inside 'compute synchronize' and 'compute FSR', the stream
+       write probe fixed, the per-draw trims and the translation cache off by default
+       (EDEN_NX2_TEST_DRAW_TRIMS=1 / EDEN_NX2_TEST_XLATE_CACHE=1 bring one back), no clock reads
+       per draw unless logged, and the reason a late publish to an idle back waited (profile).
+     - EDEN_NX2_HEAP_TRACE: the host cost of MapPhysicalMemory and UnmapPhysicalMemory every
+       10 s, in every timing launcher (the 24-44 fps spread between sessions after loads).
+     - One boot line, "TEST switches in effect:", names every TEST and A/B switch and its state.
+     - Option 3 (the power-limited CPU):
+       - EDEN_NX2_CLOCK_TRACE (src/common/clock_trace.*, Windows): every 10 s the clock, CPU
+         time (polls and work), P/E/LP-E share and migrations of the back, front, Vulkan worker
+         and guest cores; each core class's busy, utility and clock; package power where Windows
+         has it; the power mode, AC and battery. A start line has the core classes, the plan, the
+         power mode and the plan's processor settings. In every timing launcher.
+       - EDEN_NX2_PIN_GPU_THREADS=0/1/2 overrides the pin_gpu_threads setting for one run; 2
+         (TEST) pins only the GPU front and back and keeps other threads off their cores.
+       - LICHII_UMWAIT_C02=1 (TEST): UMWAIT asks for C0.2, and an idle guest core waits its
+         whole poll in one UMWAIT.
+       - Arms (unprofiled, frame, heap and clock traces): ab-37 no kernel spinning, ab-38
+         EDEN_NX2_PIN_GPU_THREADS=2, ab-39 C0.2, ab-40 all three with a 30 us idle poll, ab-41
+         the 30 us poll alone. README-tuned has the run protocol.
+     - pgo-train names each session's file lichii-pgo-<time>-<pid>.profraw. CI: each recording
+       is cut to its last dump and merged 70:1; a symbols artifact per variant; the tests
+       workflow also runs the clock trace's unit test with EDEN_NX2_CLOCK_TRACE=1 on its
+       Windows runner (the only real Windows the trace runs on before the owner's laptop).
+     - Reviews: the assembly review fixed a use-after-free in the heap trace (a stopped
+       session's globals), launchers without the heap trace, missing switch-line entries and
+       three CI problems. Option 3: workflow `wv9q5mza3` (implement, code and measurement
+       reviews: 22 findings, all addressed in 11 commits); its fixes were re-reviewed in
+       `wuy4loezg`.
+     - Profile: r55 changes the back loop, Backoff and the idle path that pgo-r49 covers, so
+       compare r55 only with its own baseline.
+     - Test plan (frame generation AMD FSR 2x throughout):
+       - Sitting 1, option 3, by README-tuned's protocol: one warm-up baseline, one baseline
+         with HWiNFO open (clock check), then blocks N, ab-37, ab-39, ab-40, ab-38 and the
+         reverse (N = perf-trace-noprofile), a third block if there is time.
+       - Sitting 2, build C: A B C C B A A B C with A = perf-trace-noprofile, B = ab-36 (#16
+         off), C = ab-26 (#1216 off); perf-trace-fine once; verify-r55 for ~5 min at the Kokiri
+         water and Castle Town.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

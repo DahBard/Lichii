@@ -18,7 +18,8 @@ with The Legend of Zelda: Ocarina of Time.
   - `lichii-tuned-r<run>-<variant>-symbols`: that variant's lichii.exe before it was stripped, for
     `symbolize_crash.py` (names the functions in a `lichii-crash-*.txt`).
 - `.github/workflows/lichii-tuned-tests.yml` builds upstream's unit tests (`tests`) from the same
-  source with the same MinGW clang and runs them, on every push of the patch. It uploads nothing.
+  source with the same MinGW clang and runs them, on every push of the patch, then runs the clock
+  trace's test with `EDEN_NX2_CLOCK_TRACE=1` on the runner. It uploads nothing.
 - PGO: profiles the owner records with a `pgo-train` build (`lichii-pgo-*.profraw`, zipped) are
   attached to pre-releases whose tag starts with `pgo-` (the first is `pgo-r49`). Each build except
   `pgo-train` downloads them (`fetch_pgo_profiles.py`), keeps the last dump of each session
