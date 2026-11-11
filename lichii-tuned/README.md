@@ -15,12 +15,17 @@ with The Legend of Zelda: Ocarina of Time.
   - Windows: `pgo` (MinGW clang, Lichii's PGO profile, `-march=x86-64-v3 -mtune=arrowlake`),
     `pgo-lto` (the same plus ThinLTO) and `pgo-train`, with AMD's FSR 4 and frame generation
     libraries.
+  - `lichii-tuned-r<run>-<variant>-symbols`: that variant's lichii.exe before it was stripped, for
+    `symbolize_crash.py` (names the functions in a `lichii-crash-*.txt`).
 - `.github/workflows/lichii-tuned-tests.yml` builds upstream's unit tests (`tests`) from the same
   source with the same MinGW clang and runs them, on every push of the patch. It uploads nothing.
 - PGO: profiles the owner records with a `pgo-train` build (`lichii-pgo-*.profraw`, zipped) are
   attached to pre-releases whose tag starts with `pgo-` (the first is `pgo-r49`). Each build except
-  `pgo-train` downloads them (`fetch_pgo_profiles.py`) and merges them into Lichii's profile,
-  weighted 4:1 toward the recorded game. Files in `pgo/` here are merged the same way.
+  `pgo-train` downloads them (`fetch_pgo_profiles.py`), keeps the last dump of each session
+  (`profraw_last_dump.py`: the recording appends all its counts so far every 30 s) and merges
+  that into Lichii's profile, weighted 70:1 toward the recorded game. By counts that keeps `pgo-r49`
+  at 97% of the merged profile, as when r50-r54 merged all 34 of its dumps 4:1 (a file that can't
+  be cut is still merged whole, 4:1). Files in `pgo/` here are merged the same way.
 - `HANDOFF.md`: how it's built, what's in it, the test results and the next steps.
 
 The package's `README-tuned.txt` lists the changes and the A/B launchers that switch each one off.

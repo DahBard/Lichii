@@ -54,8 +54,18 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   - Recorded profiles: the owner zips them and attaches the zip to a pre-release tagged `pgo-*`
     (the first is `pgo-r49`, 92 MB).
   - Every non-train variant downloads them with `lichii-tuned/fetch_pgo_profiles.py` and merges
-    them 4:1 with Lichii's. So do files in `lichii-tuned/pgo/`.
-  - If llvm-profdata can't read them, the build warns and uses Lichii's profile alone. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
+    them with Lichii's. So do files in `lichii-tuned/pgo/`.
+  - Since r55 each recording is first cut to the last dump of each session
+    (`lichii-tuned/profraw_last_dump.py`): a pgo-train build appends all its counts so far every
+    30 s, and r50-r54 merged all 34 dumps of `pgo-r49`, the start of the session up to 34 times.
+    The cut is weighted 70:1 (a whole file still 4:1) so that by counts `pgo-r49` stays 97% of
+    the merged profile, as in r50-r54 (70 x 5.08e11 against eglantine.profdata's 1.04e12; at 4:1
+    it would have been 66%). r55's PGO input still changed: the start of the session no longer
+    counts up to 34 times.
+  - A recording llvm-profdata can't read is left out with a warning; if none can be read, the
+    build uses Lichii's profile alone. Artifacts: `lichii-tuned-r<run>-<variant>` and
+    `lichii-tuned-r<run>-<variant>-symbols` (lichii.exe before stripping, for
+    `lichii-tuned/symbolize_crash.py`). Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
 - Removed on 2026-11-11: job `cachyos` (manual runs only since round 17; same workflow and run number; artifacts `lichii-tuned-r<run>-cachyos-<variant>`,
   each a tar.gz inside the zip so the executable bits survive): variants `pgo` and `pgo-lto` in

@@ -152,6 +152,22 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python lichii-tuned/fetch_pgo_profiles.py lichii-tuned/pgo
 
+      # Symbols for crash reports (lichii-crash-*.txt names lichii.exe+offset): MinGW links with
+      # the COFF symbol table, the symbols artifact keeps that exe, and Package strips the one
+      # that ships. Only the checkout changes, not lichii-tuned.patch. Linked unstripped, lld also
+      # writes a .buildid section and a CodeView debug entry, which the stripped exe keeps.
+      - name: Keep the symbol table
+        if: ${{ !matrix.msvc }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=externals/cmake-modules/DetectPlatform.cmake
+          sed -i 's/-Wl,--strip-all //' "$file"
+          if grep -q -e '--strip-all' "$file"; then
+            echo "::error::$file still strips lichii.exe"
+            exit 1
+          fi
+
       - name: Configure
         if: ${{ !matrix.msvc }}
         shell: msys2 {0}
@@ -159,19 +175,44 @@ jobs:
           set -euo pipefail
           command -v llvm-ar llvm-ranlib clang ld.lld || true
           # Profiles recorded with a pgo-train build (lichii-tuned/pgo/*.profraw, or zips of them)
-          # are merged with Lichii's own profile, weighted 4:1 toward the recorded game.
+          # are merged with Lichii's own profile. A last dump is weighted 70:1 and a whole file 4:1:
+          # either way pgo-r49 is 97% of the merged counts, as in r50-r54.
           profdata="$PWD/eglantine.profdata"
           shopt -s nullglob
           for zip in lichii-tuned/pgo/*.zip; do
-            python -m zipfile -e "$zip" lichii-tuned/pgo/
+            python -m zipfile -e "$zip" lichii-tuned/pgo/ ||
+              echo "::warning::could not extract all of $zip"
           done
           raws=(lichii-tuned/pgo/*.profraw lichii-tuned/pgo/*/*.profraw)
           if [ "${{ matrix.train }}" != "true" ] && [ ${#raws[@]} -gt 0 ]; then
+            # A pgo-train build appends a dump of all its counts so far every 30 s: merge only
+            # the last dump of each session that llvm-profdata reads, cut into build/pgo-last
+            # (out of the raws glob). MSYS2's Python is a native program: it gets a Windows path.
+            mkdir -p build/pgo-last
+            profdata_tool=$(cygpath -m "$(command -v llvm-profdata)") || profdata_tool=llvm-profdata
             inputs=(--weighted-input=1,eglantine.profdata)
-            for raw in "${raws[@]}"; do inputs+=("--weighted-input=4,$raw"); done
-            if llvm-profdata merge -o merged.profdata "${inputs[@]}"; then
+            n=0 cuts=0 wholes=0
+            for raw in "${raws[@]}"; do
+              n=$((n + 1))
+              last="build/pgo-last/$n-${raw##*/}"
+              if python -I lichii-tuned/profraw_last_dump.py --llvm-profdata "$profdata_tool" \
+                "$raw" "$last"; then
+                echo "PGO profile $raw: merging the last readable dump of each session ($last)"
+                inputs+=("--weighted-input=70,$last")
+                cuts=$((cuts + 1))
+              elif llvm-profdata show "$raw" > /dev/null 2>&1; then
+                echo "::warning::PGO profile $raw: profraw_last_dump.py failed; merging the whole file"
+                inputs+=("--weighted-input=4,$raw")
+                wholes=$((wholes + 1))
+              else
+                echo "::warning::PGO profile $raw: llvm-profdata does not read it; not merged"
+              fi
+            done
+            if [ $((cuts + wholes)) -eq 0 ]; then
+              echo "::warning::llvm-profdata reads none of the recorded profiles; using Lichii's own"
+            elif llvm-profdata merge --failure-mode=all -o merged.profdata "${inputs[@]}"; then
               profdata="$PWD/merged.profdata"
-              echo "Merged ${#raws[@]} recorded profile(s) into merged.profdata"
+              echo "Merged $((cuts + wholes)) recorded profile(s) into merged.profdata ($cuts cut, $wholes whole)"
             else
               echo "::warning::llvm-profdata could not read the recorded profiles; using Lichii's own"
             fi
@@ -282,6 +323,21 @@ jobs:
           export PATH="/ucrt64/bin:$PATH"
           cd build/release/bin
           test -f lichii.exe
+          # The symbols artifact gets lichii.exe as linked; the package ships it stripped.
+          symbols="$(cygpath -u "$GITHUB_WORKSPACE")/build/symbols"
+          mkdir -p "$symbols"
+          cp lichii.exe "$symbols/lichii.exe"
+          llvm-objcopy --strip-all lichii.exe
+          if [ -f "$GITHUB_WORKSPACE/lichii-tuned/symbolize_crash.py" ]; then
+            cp "$GITHUB_WORKSPACE/lichii-tuned/symbolize_crash.py" "$symbols/"
+          fi
+          {
+            echo "lichii-tuned r${GITHUB_RUN_NUMBER} ${{ matrix.variant }}, commit ${GITHUB_SHA}"
+            echo "Symbols for lichii-crash-*.txt of the lichii-tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }} package:"
+            echo "  python3 -I symbolize_crash.py lichii-crash-<pid>.txt lichii.exe"
+            sha256sum "$symbols/lichii.exe" | sed "s|  .*|  lichii.exe (this one, with symbols)|"
+            sha256sum lichii.exe | sed "s|  .*|  lichii.exe (shipped, stripped)|"
+          } > "$symbols/lichii-symbols.txt"
           windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
             --no-system-dxc-compiler --no-system-d3d-compiler lichii.exe
           deps() {
@@ -356,6 +412,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload symbols
+        if: ${{ !matrix.msvc }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lichii-tuned-r${{ github.run_number }}-${{ matrix.variant }}-symbols
+          path: build/symbols/
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Summary
         if: always()
         shell: bash
@@ -370,6 +435,9 @@ jobs:
             fi
             if [ -s lichii-tuned/lichii-tuned.patch ]; then
               echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
+            fi
+            if [ -f build/symbols/lichii.exe ]; then
+              echo "- symbols: \`lichii-tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }}-symbols\` (lichii.exe before stripping)"
             fi
             if [ -f merged.profdata ]; then
               echo "- profile: eglantine.profdata merged with recorded profiles"
