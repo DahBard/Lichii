@@ -1303,6 +1303,21 @@ Own changes:
   - FSR 4 and AMD frame generation;
   - the ocarina crackle fix;
   - the 'N FPS + M generated' display.
+- r49 test (owner, 2026-11-11, second launch after the import):
+  - Import: every path is in `%APPDATA%\lichii`, and the stamp held ('was prepared for this
+    driver already').
+  - Settings: the new defaults read as defaults ('--'): precache Always, reactive flushing off,
+    async draws Bounded, VRAM Aggressive.
+  - Boot: 3329 pipelines in 17 s, first frame at 39 s.
+  - FSR 4.1.2 2560x1440 -> 3840x2160, output check passed. AMD frame generation 4.0.2
+    generating. AMD's swapchain was first made at the 320x320 placeholder window (harmless,
+    rebuilt at the real size).
+  - Play: 43-58 fps per 10 s (r48 42-53), 1% lows 21-33 fps. One rough window when FSR
+    started (max 1.04 s). The back thread's compute zone 84-153 ms/s (r48 up to 290).
+  - Upstream lines: texture cache thresholds 8888/9656 MiB with 21 GB of commit left ('the
+    device budget bounds the thresholds', #1210); #1236 refreshed a reused range at an area
+    load; #1231's compute bindings past 8 MiB.
+  - No device loss and no new errors: the nx2:gsv 903 and prepo:u 10500 stubs were in r48 too.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
