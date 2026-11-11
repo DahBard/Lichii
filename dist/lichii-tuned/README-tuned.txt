@@ -255,6 +255,13 @@ below), plus:
    - Upstream #1306 and #1311: the texture collector frees faster the further past its limit,
      for the device-memory crash breaking pots in Hyrule Castle. ab-35 turns #1306 off.
    - perf-trace logs what each change does, and verify-r52 checks them against the slow ways.
+ * r55, more for the GPU back thread (build C, part 1):
+   - Upstream #1161's last repeat draw change: draws whose textures the shader picks from data
+     in memory (about 31,000 a second at Kokiri's water) take the cheap repeat path again; each
+     one checks that data first. ab-36 turns it off.
+   - perf-trace splits "compute FSR" (the FSR 4 dispatch) and "compute synchronize" into their
+     steps, and the one-time "Stream buffer write rate" line measures for real, with small
+     copies too. perf-trace-fine adds the finer zones (slower).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -339,6 +346,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               Hyrule Castle pot crash may come back, so only for comparisons.
                               ab-29 to ab-35 are unprofiled: compare with
                               perf-trace-noprofile.bat
+ ab-36-no-1161-handles.bat    repeat draws as in r54 for shaders that pick their textures from
+                              memory (EDEN_NX2_TEST_1161_HANDLES=0); unprofiled, compare with
+                              perf-trace-noprofile.bat
  verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and
                               bitsets missed, "Read download check" differing bytes, fast draw,
                               delta descriptor and uniform keep mismatches should stay 0, no
@@ -380,6 +390,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               frame times in the log (EDEN_NX2_GPU_PROFILE=1,
                               EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1). Draws are timed
                               one sampled frame in four (LICHII_TRACE_DRAWS_EVERY=4)
+ perf-trace-fine.bat          perf-trace.bat plus the fine zones and counters
+                              (EDEN_NX2_GPU_PROFILE=2): slower, for where the time goes
  perf-trace-noprofile.bat     default settings with only the frame trace (EDEN_DKB_FRAME_TRACE=1):
                               gpu_back_cpu_ms_per_frame and frame times without the zones'
                               cost; the baseline for ab-26 to ab-28
