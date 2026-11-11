@@ -13444,7 +13444,7 @@ index 291e1d1aea..e9899d4310 100644
            "[video_core][async_draw][spirv]") {
      auto job = std::make_shared<GraphicsPrograms>();
 diff --git a/src/tests/video_core/buffer_cache_ports.cpp b/src/tests/video_core/buffer_cache_ports.cpp
-index 8d16a878f2..cc4c7e1991 100644
+index 8d16a878f2..1edf93c858 100644
 --- a/src/tests/video_core/buffer_cache_ports.cpp
 +++ b/src/tests/video_core/buffer_cache_ports.cpp
 @@ -28,6 +28,7 @@
@@ -13702,7 +13702,7 @@ index 8d16a878f2..cc4c7e1991 100644
            "[buffer_ports]") {
      Fixture f;
      f.memory->EnableNativeTiling();
-@@ -832,20 +1030,26 @@ TEST_CASE("Native uniform banks upload directly without overwriting GPU-owned by
+@@ -832,20 +1030,29 @@ TEST_CASE("Native uniform banks upload directly without overwriting GPU-owned by
      std::memset(f.bytes + 0x10000, 0x5a, 0x10000);
      Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
      REQUIRE(f.runtime.upload_bytes == 0x10000);
@@ -13713,8 +13713,11 @@ index 8d16a878f2..cc4c7e1991 100644
 +    Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
 +    REQUIRE(f.runtime.uploads == uploads);
 +    REQUIRE(Access::CpuMarks(*f.cache) == 16);
-+    // A write the tracker missed is found on the next bind, and only its page is marked.
++    // A write the tracker missed is found on the next bind, and only its page is marked. Such
++    // writes are collected by the dirty memory managers, which flag the page (mode 3, the
++    // default, compares only pages a reason applies to).
 +    std::memset(f.bytes + 0x13000, 0x77, 0x1000);
++    Core::g_collected_write_pages.Mark(0x23000, 0x1000);
      Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
 -    REQUIRE(f.runtime.uploads == 1);
 -    Access::NextFrame(*f.cache);
@@ -13735,7 +13738,7 @@ index 8d16a878f2..cc4c7e1991 100644
      Fixture f;
      f.memory->EnableNativeTiling();
      Tegra::Control::ChannelState state{0};
-@@ -859,20 +1063,18 @@ TEST_CASE("Native uniform uploads stop at holes and keep unaligned bank boundari
+@@ -859,20 +1066,18 @@ TEST_CASE("Native uniform uploads stop at holes and keep unaligned bank boundari
      std::memset(f.bytes + 0x10000, 0x6b, 0x20000);
      f.device.Unmap(0x22000, 0x1000);
      Access::Uniform(*f.cache, channel, id, 0x20123, 0x10000);
@@ -13760,7 +13763,7 @@ index 8d16a878f2..cc4c7e1991 100644
  }
  
  TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[buffer_ports]") {
-@@ -901,6 +1103,56 @@ TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[buffer_po
+@@ -901,6 +1106,56 @@ TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[buffer_po
      REQUIRE(f.bytes[0x21008] == 0x34);
  }
  
@@ -13818,7 +13821,7 @@ index 8d16a878f2..cc4c7e1991 100644
            "[buffer_ports]") {
      KeepFixture f{nullptr};
 diff --git a/src/tests/video_core/fast_draw.cpp b/src/tests/video_core/fast_draw.cpp
-index bf5a0a6206..17ba08c7af 100644
+index bf5a0a6206..22a4474603 100644
 --- a/src/tests/video_core/fast_draw.cpp
 +++ b/src/tests/video_core/fast_draw.cpp
 @@ -215,8 +215,7 @@ TEST_CASE("Fast draw records bind and constant data changes, keeps index buffer
@@ -13963,7 +13966,7 @@ index bf5a0a6206..17ba08c7af 100644
  TEST_CASE("Fast draw keeps vertex stream addresses and sizes light", "[fast_draw]") {
      DeltaFixture f;
      const auto stream = [](u32 index, u32 word) {
-@@ -365,3 +468,56 @@ TEST_CASE("Fast draw keeps vertex stream addresses and sizes light", "[fast_draw
+@@ -365,3 +468,60 @@ TEST_CASE("Fast draw keeps vertex stream addresses and sizes light", "[fast_draw
      CHECK_FALSE(light(stream(0, 3)));     // frequency
      CHECK_FALSE(light(0x600 / 4 + 64));   // past the sizes
  }
@@ -14013,10 +14016,14 @@ index bf5a0a6206..17ba08c7af 100644
 +    u64 serial = FastDraw::Serial();
 +    f.Write(query, 0); // long release: recorded as a memory write
 +    CHECK(FastDraw::Serial() == serial);
++    // Apart from the release's 16 bytes: #1161's list merges a range that overlaps another.
++    f.Write(MAXWELL3D_REG_INDEX(report_semaphore.address_low), 0x30100);
 +    f.Write(query, short_query | report_only); // a short report signals nothing
 +    CHECK(FastDraw::Serial() == serial);
 +    REQUIRE(FastDraw::g_delta.num_writes == 2);
-+    CHECK(FastDraw::g_delta.write_end[1] == 0x30004);
++    CHECK(FastDraw::g_delta.write_end[0] == 0x30010);
++    CHECK(FastDraw::g_delta.write_begin[1] == 0x30100);
++    CHECK(FastDraw::g_delta.write_end[1] == 0x30104);
 +    f.Write(query, short_query); // short release: a fence
 +    CHECK(FastDraw::Serial() != serial);
 +}
