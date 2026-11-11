@@ -537,10 +537,11 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
         LOG_INFO(Render_Vulkan,
                  "Fast draws: extended dynamic state {}, dynamic vertex input {}, dynamic strides "
                  "{} (EDEN_NX2_TEST_1216 {}), attribute formats as draw parameters {} "
-                 "(EDEN_NX2_TEST_1161_DRAWS {})",
+                 "(EDEN_NX2_TEST_1161_DRAWS {}), delta draws with computed handles {}",
                  features.has_extended_dynamic_state, features.has_dynamic_vertex_input,
                  dynamic_strides, test ? "on" : "off", test_1161 && dynamic_input,
-                 test_1161 ? "on" : "off");
+                 test_1161 ? "on" : "off",
+                 VideoCommon::Nx2Test::Handles1161() ? "on" : "off (EDEN_NX2_TEST_1161_HANDLES=0)");
         InitFastDrawBreakClasses();
     }
     buffer_cache.SetPendingCpuWrites(
@@ -749,6 +750,10 @@ bool RasterizerVulkan::DeltaStillHolds(u64 serial, u64 map_serial) {
     if (taken_draw.pipeline->DeltaImagesChange()) {
         return full(FullDraw::SampledImages);
     }
+    // Handles computed at draw time come from memory the delta doesn't track (storage buffers).
+    if (taken_draw.pipeline->ComputedHandlesChanged()) {
+        return full(FullDraw::ComputedHandles);
+    }
     return true;
 }
 
@@ -812,14 +817,14 @@ void RasterizerVulkan::ReportFastDraws() {
              "Fast draw per second: {:.0f} delta | full: {:.0f} after an ineligible draw, {:.0f} "
              "different kind, {:.0f} state changed, {:.0f} after a submit, {:.0f} render pass or "
              "pipeline changed, {:.0f} pipeline takes no delta draws, {:.0f} handle buffer bound, "
-             "{:.0f} handle data written, {:.0f} sampled image to prepare, {:.0f} vertex attribute "
-             "types changed",
+             "{:.0f} handle data written, {:.0f} sampled image to prepare, {:.0f} computed handle "
+             "changed, {:.0f} vertex attribute types changed",
              static_cast<double>(stats.delta) / seconds, per_second(FullDraw::NoCandidate),
              per_second(FullDraw::Kind), per_second(FullDraw::StateChanged),
              per_second(FullDraw::Submitted), per_second(FullDraw::RenderPass),
              per_second(FullDraw::DeltaPipeline), per_second(FullDraw::HandleBind),
              per_second(FullDraw::HandleData), per_second(FullDraw::SampledImages),
-             per_second(FullDraw::VertexInput));
+             per_second(FullDraw::ComputedHandles), per_second(FullDraw::VertexInput));
     static constexpr std::array<const char*, static_cast<size_t>(Ineligible::Count)>
         ineligible_names{"indirect",       "mesh",          "not built",     "writes images",
                          "transform feedback", "inline index", "quads",       "repacked vertices",

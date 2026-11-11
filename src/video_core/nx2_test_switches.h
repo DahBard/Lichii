@@ -36,6 +36,13 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_1161_HANDLES=0 keeps pipelines with texture handles computed at draw time
+/// out of delta draws (DeltaBlocker::ComputedHandles), as before upstream #1161's e05a72847.
+[[nodiscard]] inline bool Handles1161() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_1161_HANDLES");
+    return on;
+}
+
 /// TEST: EDEN_NX2_TEST_BANK_BITS=0 restores the native bank check's walk of every page with a
 /// snapshot lookup each (BufferCache::CheckNativeBankPagesTracked).
 [[nodiscard]] inline bool BankBits() {
