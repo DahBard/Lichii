@@ -37,7 +37,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 - Since round 22 (2026-11-10): branch `tuned` = upstream Lichii nx2 `17baed716` (build 132 plus
   31 commits, merged in `2d9ea59c5`) + the workflow + this folder. Round 21's Fritchii tree
   (branch `tuned5`) stays in the history. The patch is `git diff --binary 17baed716 tuned4`
-  (344 files, 2.5 MB), backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle
+  (346 files, 2.6 MB), backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle
   tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to `17baed716`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
@@ -85,11 +85,12 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
 - Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
   `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
-  `853ff8213` with follow-ups up to `36948bc36`; pushing it doesn't trigger builds).
+  `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`; pushing it
+  doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `17baed716`, as `tuned` does). The patch is `git diff --binary 17baed716 tuned4` (344 files,
-  2.5 MB); check it
+  `17baed716`, as `tuned` does). The patch is `git diff --binary 17baed716 tuned4` (346 files,
+  2.6 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -1319,6 +1320,22 @@ Own changes:
     load; #1231's compute bindings past 8 MiB.
   - No device loss and no new errors: the nx2:gsv 903 and prepo:u 10500 stubs were in r48 too.
   - Owner: no ocarina crackle, no white patches after area changes, nothing wrong noticed.
+- r50 (tuned4 `cd5482ece`, branch `r22-r50`): the two confirmed items from the Fritchii review
+  (0b in the next steps), plus a counter and a test fix.
+  - `f5f9e135b`, the zero-page trim. Fritchii's early-exit page check (81ab48f7d); a 300 s
+    backoff; every pass over 100 ms logged with its phases (working set query, page reads,
+    unlock runs); EDEN_NX2_ZERO_TRIM=0 with the `ab-25-no-zero-trim.bat` A/B against perf-trace.
+    The bulk-mapping wait was not taken.
+  - `61bba960f` and `6f2ca4c73`, upstream's open PR #1180 cherry-picked unchanged: the water
+    ripples keep a remainder per water object. FPS Unlock and Dynamic FPS go from 2 to 5
+    records each: a hook at 0x475F8, a nop at 0x4760C, a cave at 0x3C46300-0x3C46393, and timer
+    state at 0x4E9FE00-0x4E9FE97 (state_size 0x98). No overlap with our other built-ins.
+  - `46dfd5ab5`: with EDEN_NX2_GPU_PROFILE, the 'Scheduler per second' line counts flushes with
+    nothing recorded since the last submit. This decides whether Fritchii's EXP61 matters here.
+  - `cd5482ece`: the built-in patch test expected the eight-frame Dynamic FPS average.
+  - The first build to merge the owner's recorded profile: the `pgo-r49` release, downloaded by
+    `fetch_pgo_profiles.py`. Check 'fetch_pgo_profiles:' and 'Merged 1 recorded profile(s)' in
+    the CI log.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
