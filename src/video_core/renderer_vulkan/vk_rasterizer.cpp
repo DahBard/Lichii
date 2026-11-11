@@ -600,8 +600,27 @@ void RasterizerVulkan::InitFastDrawBreakClasses() {
 GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_indirect) {
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
-    const FastDraw::Delta delta = std::exchange(FastDraw::g_delta, FastDraw::Delta{});
-    taken_delta = delta;
+    // Only the entries in use: the delta is ~540 bytes, a few of them used.
+    std::optional<FastDraw::Delta> whole; // TEST: EDEN_NX2_TEST_DRAW_TRIMS=0
+    if (VideoCommon::Nx2Test::DrawTrims()) {
+        FastDraw::Delta& source = FastDraw::g_delta;
+        taken_delta.binds = std::exchange(source.binds, {});
+        taken_delta.num_writes = std::exchange(source.num_writes, 0);
+        taken_delta.num_device_writes = std::exchange(source.num_device_writes, 0);
+        taken_delta.no_uniform_keeps = std::exchange(source.no_uniform_keeps, false);
+        std::copy_n(source.write_begin.begin(), taken_delta.num_writes,
+                    taken_delta.write_begin.begin());
+        std::copy_n(source.write_end.begin(), taken_delta.num_writes,
+                    taken_delta.write_end.begin());
+        std::copy_n(source.device_begin.begin(), taken_delta.num_device_writes,
+                    taken_delta.device_begin.begin());
+        std::copy_n(source.device_end.begin(), taken_delta.num_device_writes,
+                    taken_delta.device_end.begin());
+    } else {
+        whole.emplace(std::exchange(FastDraw::g_delta, FastDraw::Delta{}));
+        taken_delta = *whole;
+    }
+    const FastDraw::Delta& delta = whole ? *whole : taken_delta;
     const auto full = [&](FullDraw reason) -> GraphicsPipeline* {
         ++fast_draw_stats.full[static_cast<size_t>(reason)];
         return nullptr;
@@ -1049,8 +1068,20 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     {
         Profile::Scope scope{Profile::Zone::FlushWork};
         FlushWork();
+        // TEST (EDEN_NX2_TEST_DRAW_TRIMS): the buffer cache's invalidations wait for the draw's
+        // cache lock below. The texture, query and shader caches' run here, before the pipeline
+        // lookup: an invalidated shader can delete the pipeline it would return.
+        defer_buffer_invalidation = VideoCommon::Nx2Test::DrawTrims();
         gpu_memory->FlushCaching();
+        defer_buffer_invalidation = false;
     }
+    // A draw that ends before the lock applies them here.
+    SCOPE_EXIT {
+        if (!deferred_buffer_invalidations.empty()) {
+            std::scoped_lock lock{buffer_cache.mutex};
+            ApplyDeferredBufferInvalidations();
+        }
+    };
     if (frame_dump.Capturing()) {
         frame_dump.DrainIfFull();
     }
@@ -1268,6 +1299,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         mesh_emulation_vertices_per_group = pipeline->MeshEmulationVerticesPerGroup();
     }
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+    ApplyDeferredBufferInvalidations();
     // What the next draw's TakeReusableDraw compares with, read once the caches are locked: a
     // break from here on, this draw's own resolve included, ends the delta chain.
     const u64 draw_serial = FastDraw::Serial();
@@ -3074,7 +3106,10 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
     if (Settings::values.skip_cpu_inner_invalidation.GetValue()) {
         return;
     }
-    {
+    if (defer_buffer_invalidation) {
+        deferred_buffer_invalidations.insert(deferred_buffer_invalidations.end(),
+                                             sequences.begin(), sequences.end());
+    } else {
         std::scoped_lock lock{buffer_cache.mutex};
         for (const auto& [addr, size] : sequences) {
             buffer_cache.WriteMemory(addr, size);
@@ -3088,6 +3123,13 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
     if (any(pipeline_cache.page_filter)) {
         pipeline_cache.InvalidateRegions(sequences);
     }
+}
+
+void RasterizerVulkan::ApplyDeferredBufferInvalidations() {
+    for (const auto& [addr, size] : deferred_buffer_invalidations) {
+        buffer_cache.WriteMemory(addr, size);
+    }
+    deferred_buffer_invalidations.clear();
 }
 
 bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
@@ -3510,6 +3552,17 @@ std::pair<const char*, const char*> RasterizerVulkan::AmdFrameGenIdleReason() co
 #endif
 }
 
+bool RasterizerVulkan::OcarinaDlssEnabledThisFrame() {
+    if (!VideoCommon::Nx2Test::DrawTrims()) {
+        return OcarinaDlssEnabled(); // TEST
+    }
+    if (oot_fsr_latch_frame != render_trace_frame) {
+        oot_fsr_latched = OcarinaDlssEnabled();
+        oot_fsr_latch_frame = render_trace_frame;
+    }
+    return oot_fsr_latched;
+}
+
 bool RasterizerVulkan::OcarinaDlssEnabled() const {
     constexpr u64 ocarina_program = 0x0400486024DEC000ULL;
     // EDEN_NX2_DLSS_REPLACEMENT=native keeps the game's own upscale, to compare what FSR costs.
@@ -3545,7 +3598,7 @@ bool RasterizerVulkan::OcarinaDlssEnabled() const {
 /// materials draw with several vertex shaders, so any draw into a scene-sized target qualifies;
 /// the camera buffer's contents are checked below.
 void RasterizerVulkan::TrackOcarinaCamera() {
-    if (!OcarinaDlssEnabled()) {
+    if (!OcarinaDlssEnabledThisFrame()) {
         return;
     }
     // Why no scene camera was found, logged every 600 frames without one: FSR and AMD frame
@@ -3691,7 +3744,7 @@ void RasterizerVulkan::TrackOcarinaCamera() {
 /// skinned layout Link is drawn with (position, eight joint indices and weights in 48 bytes) and
 /// a pose buffer, so other characters move in the motion as well.
 void RasterizerVulkan::TrackOcarinaActor(u64, bool is_indexed, bool is_indirect) {
-    if (!is_indexed || is_indirect || !OcarinaDlssEnabled()) {
+    if (!is_indexed || is_indirect || !OcarinaDlssEnabledThisFrame()) {
         return;
     }
     if (oot_actors_frame != render_trace_frame) {
@@ -4168,6 +4221,7 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
     } catch (const vk::Exception& error) {
         LOG_WARNING(Render_Vulkan, "Ocarina DLSS unavailable: {}", error.what());
         oot_live_failed = true;
+        oot_fsr_latch_frame = ~u64{0};
         return false;
     }
 }
@@ -4561,6 +4615,7 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         } catch (const vk::Exception& error) {
             LOG_WARNING(Render_Vulkan, "Ocarina DLSS 4K presentation unavailable: {}", error.what());
             oot_live_failed = true;
+            oot_fsr_latch_frame = ~u64{0};
         }
     }
     return info;

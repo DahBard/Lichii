@@ -51,4 +51,12 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_DRAW_TRIMS=0 restores, per draw, three copies of the whole fast draw
+/// delta, the buffer cache's FlushCaching invalidations under their own lock and the Ocarina
+/// FSR state read by each tracker call.
+[[nodiscard]] inline bool DrawTrims() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_DRAW_TRIMS");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test

@@ -303,6 +303,11 @@ private:
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaDlssEnabled() const;
+    /// OcarinaDlssEnabled, read once a frame for the per-draw trackers (TEST:
+    /// EDEN_NX2_TEST_DRAW_TRIMS=0 reads it every call). A failure clears it.
+    bool OcarinaDlssEnabledThisFrame();
+    /// The invalidations defer_buffer_invalidation kept, with buffer_cache.mutex held.
+    void ApplyDeferredBufferInvalidations();
     void TrackOcarinaCamera();
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
     [[nodiscard]] bool OcarinaFsrPresetActive() const;
@@ -360,6 +365,8 @@ private:
     } oot_motion;
     std::unique_ptr<class OcarinaLiveDlss> oot_live_dlss;
     bool oot_live_failed{};
+    u64 oot_fsr_latch_frame{~u64{0}}; ///< render_trace_frame of oot_fsr_latched
+    bool oot_fsr_latched{};
     const char* oot_fallback_reason{};
     /// The last reason Ocarina's FSR path declined a frame, for the status bar (UI thread).
     std::atomic<const char*> oot_idle_reason{};
@@ -533,6 +540,10 @@ private:
         handle_spans;
     /// The constant buffer binds and data since the previous draw.
     VideoCommon::Nx2FastDraw::Delta taken_delta;
+    /// PrepareDraw: the buffer cache's part of FlushCaching's invalidations, applied under the
+    /// draw's cache lock (TEST: EDEN_NX2_TEST_DRAW_TRIMS).
+    bool defer_buffer_invalidation{};
+    std::vector<std::pair<DAddr, std::size_t>> deferred_buffer_invalidations;
     FastDrawStats fast_draw_stats;
     /// Nx2FastDraw::Enabled and VerifyEnabled as the drawing thread last read them.
     bool fast_draw_on{};
