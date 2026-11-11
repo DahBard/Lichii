@@ -677,8 +677,8 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
     if (FastDraw::g_vertex_streams_dynamic.load(std::memory_order_relaxed) &&
         maxwell3d->dirty.flags[Dirty::VertexInput]) {
         if (!draw.pipeline->HasDynamicVertexInput() ||
-            FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs) !=
-                draw.pipeline->DynamicAttributeTypes()) {
+            !pipeline_cache.KeepsAttributeTypes(
+                *draw.pipeline, FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs))) {
             return full(FullDraw::VertexInput);
         }
         ++fast_draw_stats.formats_kept;
@@ -1351,7 +1351,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     } else {
         // What the delta draw would have kept: the texture buffer bindings. Only draws that
         // passed DeltaStillHolds are compared; the others would have been resolved in full.
-        const bool verify_kept = verify_views && delta_holds;
+        // TEST: EDEN_NX2_TEST_1161_DRAWS=0 compares every verified draw, as r51 did.
+        const bool verify_kept =
+            verify_views &&
+            (delta_holds || !FastDraw::g_test_1161_draws.load(std::memory_order_relaxed));
         const u64 kept_bindings =
             verify_kept ? buffer_cache.KeptGraphicsBindingsHash(false, false, true) : 0;
         if (fast_draw_on) {

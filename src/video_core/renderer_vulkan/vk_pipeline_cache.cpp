@@ -1117,6 +1117,19 @@ void PipelineCache::RefreshGraphicsKey() {
         vertex_attribute_types, graphics_key.unique_hashes, vertex_attribute_masks);
 }
 
+bool PipelineCache::KeepsAttributeTypes(const GraphicsPipeline& pipeline, u64 attribute_types) {
+    // The masks are those of the last lookup's programs.
+    const u64 keyed = graphics_key.unique_hashes == pipeline.ShaderHashes()
+                          ? VideoCommon::KeyedAttributeTypes(
+                                attribute_types, graphics_key.unique_hashes, vertex_attribute_masks)
+                          : attribute_types;
+    if (keyed != pipeline.DynamicAttributeTypes()) {
+        return false;
+    }
+    vertex_attribute_types = attribute_types;
+    return true;
+}
+
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
     ++lookup_serial;
     if (!RefreshStages(graphics_key.unique_hashes)) {

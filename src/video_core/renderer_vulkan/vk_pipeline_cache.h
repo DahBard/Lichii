@@ -150,6 +150,12 @@ public:
 
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
 
+    /// A delta draw with the vertex input dirty: whether pipeline's key keeps the attribute types
+    /// of these registers (FixedPipelineState::DynamicAttributeTypes). If so they become the
+    /// registers' copy RefreshGraphicsKey starts from, since UpdateVertexInput clears the flag
+    /// it recomputes them under.
+    [[nodiscard]] bool KeepsAttributeTypes(const GraphicsPipeline& pipeline, u64 attribute_types);
+
     [[nodiscard]] const DynamicFeatures& GetDynamicFeatures() const noexcept {
         return dynamic_features;
     }
