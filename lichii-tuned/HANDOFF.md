@@ -1529,6 +1529,45 @@ Own changes:
      - Fritchii's translator-hash stamp: it would invalidate the owner's preparation.
      - AMD_APP_CACHE, the high refresh mode (it competes with AMD frame generation), and the
        settings revisions (FXAA None: the owner already runs AA None).
+0c. The GPU back thread is the bottleneck (2026-11-11). Workflow `wf8k93g9e`, details in
+   `lichii-tuned/back-thread-plan.json`.
+   - Per game frame in the r49 and r50 logs:
+
+     | Thread | Busy |
+     |---|---|
+     | Back thread | 18.4 / 21.3 ms of wall time; unprofiled CPU (`gpu_back_cpu_ms_per_frame`) 15.6-21.5 ms |
+     | Each guest core | 7-9.5 ms |
+     | Front | ~8.3 ms busy |
+     | Vulkan worker | ~4.5 ms |
+     | GPU (submission sum) | 10.9 ms (p90 12.9) |
+
+   - Back thread zones per frame:
+     - method 3.4 ms (~104k methods);
+     - compute 2.3-3.4 ms (16-22 us per dispatch);
+     - 'other' 2.1-2.6 ms;
+     - uniform buffers 1.5 ms;
+     - per-draw zones ~5-6 ms;
+     - 0 delta draws.
+   - The profile itself costs ~1 ms per frame: CallMethod skips the WriteStateRegister shortcut,
+     and non-3D entries take full scopes. Normal play should run without EDEN_NX2_GPU_PROFILE.
+   - Skeptic's verdict: builds A and B save ~3-5 ms, taking typical play from ~45-50 to ~52-58
+     fps. Heavy areas (Castle Town, water) end around 15-17 ms. A locked 60 everywhere is
+     uncertain and needs build C, plus the texture collector Finish hitches gone (upstream
+     #1306/#1311) for the 1% lows.
+   - Plan:
+     - Now (no build): pin_gpu_threads=true A/B.
+     - Build A: upstream #1216 9ad7c7cee behind a TEST switch (vertex stride words,
+       render-enable addresses, back-macro DeferWords: the two biggest fast-draw breaks); a
+       break-mask counter; #1251 (ring cache-line layout); quick wins (#1161 58144d258,
+       d5c9589d0, 0593fd75f, cccac7bb7, the InvalidateGPUCache early-out); #717 CONTIG behind a
+       switch; profile fixes; compute sub-zones; TEST zones.
+     - Build B: #1161's fast-draw half (792e12a47); #1274 FoldInstance; bank-check bitsets;
+       #1161's reports/fences half; per-draw trims; maybe EXP63.
+     - Build C, by data: pair blocks, a dispatch memo, delta-after-lookup, the stream buffer in
+       host memory, fence submit batching.
+   - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
+     preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
+     EXP26/28/53/61, #1131.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

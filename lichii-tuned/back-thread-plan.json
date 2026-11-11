@@ -1,0 +1,1037 @@
+{
+ "made": "2026-11-11",
+ "logs": "r49 (2bcb3130) and r50 (796f895c) owner logs",
+ "ours": "tuned4 cd5482ece",
+ "zones": {
+  "zones": [
+   {
+    "zone": "method",
+    "ms_per_frame": "3.4 / 3.5 (sampled; 29-33 ns per method; 105-135k methods/frame in play)",
+    "code": "SampledScope in Maxwell3D::ProfiledCallMethod (src/video_core/engines/maxwell_3d.cpp:597-606) and CallConstBufferWords (maxwell_3d.cpp:747), reached from GpuSplit::Execute's fast_maxwell3d path (src/video_core/gpu_split.cpp:693-737). Kind::Multi entries use a full Scope (gpu_split.cpp:761-768), and so does Kepler compute (kepler_compute.cpp:192). Handlers: CallMethodFast (maxwell_3d.cpp:627-660) leads to ProcessCBData, DrawManager::DrawBegin/DrawEnd (draw_manager.cpp:236-290), ProcessCBBind (maxwell_3d.cpp:1065), ProcessQueryGet (925), ProcessQueryCondition (967) and ProcessCounterReset (1035). Caveat: with EDEN_NX2_GPU_PROFILE set, CallMethod skips its WriteStateRegister shortcut (maxwell_3d.cpp:582-591) and counts every write into two 0x2000-entry arrays, so this zone is larger than in unprofiled play.",
+    "what": "One ring entry per 3D method. Each entry does the shadow-RAM step, dirty flags and the handler. Executable methods do real work: a constant buffer (CB) word write into guest memory, a CB bind through the buffer cache, draw begin/end, and query report, counter reset and render enable operations. Runs of CB words are batched up to 64 (gpu_split.cpp:697-723). For the categories, see method_stream.",
+    "reducible_ms": "1.0-1.5. Fold the later instances of instance loops (~10k draw.begin per frame, upstream PR #1274): 0.3-0.4. Send each CB select+data run as one entry (~50k methods per frame down to ~8k): 0.8-1.0. Part of the zone is profiler overhead that unprofiled play doesn't pay."
+   },
+   {
+    "zone": "compute",
+    "ms_per_frame": "2.3 / 3.4 (131-148 dispatches/frame, 16-22 us each; r48 rough windows reached 254-290 ms/s with fewer dispatches)",
+    "code": "RasterizerVulkan::DispatchCompute (src/video_core/renderer_vulkan/vk_rasterizer.cpp:2203-2420); the zone opens at 2212. It covers ComputePipeline::Configure (vk_compute_pipeline.cpp:434ff) and has no sub-zones.",
+    "what": "Per dispatch: FlushWork and FlushCaching, the CurrentComputePipeline lookup, the cache locks, Nx2CollectListCopies, and a full resolve with no memo or delta: UBO state, a storage buffer bind per descriptor, SynchronizeDescriptors, texture handle reads (handle programs evaluated per dispatch), image views and push descriptors. Then list-slot and indirect handling, recording, and TryOcarinaDlss. That last step records CheezyEmu's FSR 4 evaluation in place of Ocarina's upscale dispatch (2345-2395), which can make one dispatch per frame expensive. 16-22 us per dispatch is 4x a full draw.",
+    "reducible_ms": "0.5-1.5 once measured. First add fine zones (lookup, configure, FSR replacement, record) and the top shader hashes by CPU time. Then a dispatch memo for repeated dispatches with the same QMD and CB contents: the gpu_work line shows 59x 1x1x1 and 15x 6x1x1 repeats of the same hashes. Upstream #1246 (a dispatch's barrier in its own command) is a small extra."
+   },
+   {
+    "zone": "split wait",
+    "ms_per_frame": "2.4 / 2.9 (idle; ~85 waits/frame)",
+    "code": "GpuSplit::BackLoop (gpu_split.cpp:812-858): SpinUntil with 8192 pauses (UMWAIT on Arrow Lake, common/spin_wait.h:61-81), then the idle hook Scheduler::FlushDeferred (vk_rasterizer.cpp:451-453), then a futex wait.",
+    "what": "The back has nothing to run: the front hasn't published yet. Only the spinning part counts as CPU busy. The front line shows 'publishes to an idle back late by 50.4 ms (5991/s), early 2388/s', so ~1.3 ms/frame of this idle comes from words the front held while the back waited.",
+    "reducible_ms": "Not reducible on the back itself. ~0.5-1 ms/frame can be turned into overlap by publishing earlier while the back is idle (publish_every/early publish). The rest shrinks when the front waits less: acquire 290 ms/s and list writers 145 ms/s, both from waits for the back, which #1274's list draws/dispatches target."
+   },
+   {
+    "zone": "other",
+    "ms_per_frame": "2.1 / 2.6",
+    "code": "Wall time minus all zones (nx2_profile.h:522-528). It covers: GpuSplit::Execute's own decode and per-entry checks (gpu_split.cpp:680-783, 864-893: hook_requested/tick_requested loads, MaybeTick, consumed.store seq_cst, NotifyFront); method_sink.emplace_back and ConsumeSink/ConsumeSinkImpl (maxwell_3d.cpp:327-354, profiled only as the fine 'sink' zone); Kind::Call bodies outside any zone (gpu_split.cpp:773-780); the idle hook's Scheduler::Flush (gpu_split.cpp:840-842, 874-877); the tick hook GPU::TickWork for guest read flushes (gpu_split.h:738-744); preemption and descheduling on the power-limited CPU; the profiler's own Report and counting.",
+    "what": "Per-entry dispatch overhead for ~110-135k ring entries per frame, sunk state writes, deferred front calls, submits from the idle hook (2213 submits/s in total), tick work, and off-CPU time. See other_bucket.",
+    "reducible_ms": "0.5-1.0. Fewer entries (instance fold, CB fusion), the idle-hook submit and NotifyFront only when needed. Most of the rest is time the thread is descheduled."
+   },
+   {
+    "zone": "uniform buffers",
+    "ms_per_frame": "1.45 / 1.49 (3.2-4.2k calls/frame, one per stage per draw, 0.32-0.39 us each; bank check excluded)",
+    "code": "BufferCache::BindHostStageBuffers (src/video_core/buffer_cache/buffer_cache.h:1758-1763) leads to BindHostGraphicsUniformBuffers (2590) and BindHostGraphicsUniformBuffer (2606-2840): the root-table bank-17 stream, the UniformRangeKept/RebindKeptUniform keep check, the alignment check, IsRegionGpuModified, then BindSmallUniformReusing (uniform_stream_reuse.h) or BindMappedUniformBuffer plus ReadBlockUnsafe, or the cached path with SynchronizeBuffer.",
+    "what": "For each enabled UBO of the stage: it looks up the binding, touches the buffer, checks the GPU-modified state, copies the guest bytes to scratch, compares them with what the slot streamed last, and copies them into the stream buffer. This runs on delta draws too.",
+    "reducible_ms": "0.3-0.5. Upstream PR #1059 (a32f462aa, compares in place: 27.6 to 8.9 ns for an unchanged 256 B bind) makes the reuse path one compare. The function-static env reads in the hot path cost a TLS read each under MSVC (#1059 and #1095 note this)."
+   },
+   {
+    "zone": "draw",
+    "ms_per_frame": "1.2 / 1.0 (0.58-0.61 us exclusive per draw)",
+    "code": "RasterizerVulkan::Draw (vk_rasterizer.cpp:1318) and PrepareDraw (776-1160), exclusive of its sub-zones: TakeReusableDraw/DeltaStillHolds, mesh checks, std::scoped_lock{buffer_cache.mutex, texture_cache.mutex} (1003), SetEngine, SetVertexRepackLayout, TrackOcarinaCamera/TrackOcarinaActor/TracePendingCpuWrites (1099-1101), query NotifySegment/HandleTransformFeedback/CounterEnable (1132-1137, the fine 'draw queries' zone), the final-pass/HUD mask check, and the TickWork scope (785).",
+    "what": "Fixed per-draw bookkeeping and the cache locks; spin-lock contention waits land here.",
+    "reducible_ms": "0.2-0.3. Gate the Ocarina trackers behind a cheap pipeline-hash check, and take the cache locks once per draw (see flush work)."
+   },
+   {
+    "zone": "update buffers",
+    "ms_per_frame": "1.1 / 0.9 (0.53 us per draw)",
+    "code": "GraphicsPipeline::Configure/ConfigureDelta: vk_graphics_pipeline.cpp:1059-1080 and 1182-1224 (the fine 'geometry buffers' zone at 1061). Index and vertex buffer binds; the BindHostStageBuffers loop (UB/SB nested zones excluded).",
+    "what": "Index/vertex buffer resolution and binding (FindBuffer, SynchronizeBuffer, repack checks) on both paths.",
+    "reducible_ms": "0.1-0.2. The translation cache (b1e650849e, see levers) partly targets this."
+   },
+   {
+    "zone": "bank check",
+    "ms_per_frame": "0.7 / 0.8 (1.4-1.5k calls/frame, 0.39-0.46 us each; 89% of pages skipped)",
+    "code": "buffer_cache.h:2695 calls CheckNativeBankPagesTracked (buffer_cache.h:2940-3030), our port of Fritchii EXP9, mode 3.",
+    "what": "For each 64 KiB native bank bind, the 16 pages are walked twice: GetPointer per page for the mapped size, then per page two atomic Take() RMWs (g_collected_write_pages, g_buffer_write_pages), an unordered_map try_emplace into native_indirect_page_snapshots, and the reason checks. Only ~67k of ~660k pages/s are compared with memcmp. The cost is the lookups and RMWs, not the compares.",
+    "reducible_ms": "0.4-0.5. Check the flags with a plain load before the RMW Take. Cache a per-bank-start array of snapshot pointers (or a flat page-indexed table) instead of 16 hash lookups. Do one mapped-size pass. A global 'no flagged page since the last bind' epoch would skip clean banks entirely."
+   },
+   {
+    "zone": "read handles",
+    "ms_per_frame": "0.7 / 0.6 (0.33 us per draw)",
+    "code": "vk_graphics_pipeline.cpp:863 and 1165 (the fine 'storage bindings' zone at 739). Texture/sampler handle reads from CBs, and the handle-table programs of tuned4.",
+    "what": "Reads every texture handle the pipeline uses from guest CB memory. Delta draws and texture-memo hits (59%) skip part of it.",
+    "reducible_ms": "0.2-0.3, mostly by converting full draws to delta (lever 1)."
+   },
+   {
+    "zone": "configure",
+    "ms_per_frame": "0.64 / 0.63 (0.29-0.34 us per draw)",
+    "code": "vk_rasterizer.cpp:1060 (ConfigureDelta) and 1073 (Configure), exclusive of the zones nested in them.",
+    "what": "GraphicsPipeline::Configure glue: descriptor queue setup, the memo check, and the UBO/SSBO state.",
+    "reducible_ms": "0.1-0.2 through more delta draws."
+   },
+   {
+    "zone": "flush work",
+    "ms_per_frame": "0.6 / 0.56 (0.30-0.39 us per draw)",
+    "code": "vk_rasterizer.cpp:815-818: FlushWork (4315-4366, SubmissionPolicy::Advance with the AMD 512-draw budget; DispatchWork every 32 draws) and MemoryManager::FlushCaching (memory_manager.cpp:1106-1114), which leads to RasterizerVulkan::InnerInvalidation (vk_rasterizer.cpp:2790-2826).",
+    "what": "Each draw flushes the accumulator of inline CB words (memory_manager.cpp:661-676 adds one range per word). InnerInvalidation then takes buffer_cache.mutex with no page-filter test (2812-2817) and runs buffer_cache.WriteMemory for each range. PrepareDraw takes the same mutex again a few lines later (1003).",
+    "reducible_ms": "0.1-0.2. Do the CB-write invalidation inside PrepareDraw's existing lock, add the accumulator's range per run rather than per word, and skip when the buffer cache's page filter has nothing there."
+   },
+   {
+    "zone": "fence + fence skipped",
+    "ms_per_frame": "0.6/0.8 + 0.33/0.38 (~230-250 fences made per frame at 2.5-2.9 us; ~145-155 skipped at 2.0-2.25 us)",
+    "code": "FenceManager::SignalFence (src/video_core/fence_manager.h:87-140), from query_cache.h:397, kepler_compute.cpp:127/402/437, puller.cpp:653/1126 and dma_pusher.cpp:559. Made fences: make_shared InnerFence, CommitCacheFlushes / CommitAsyncFlushesHigh (buffer_cache.h:2105-2171), which records the download copies (256 MB/s, 20k copies/s), query CommitAsyncFlushes, FlushCommands/DeferFlush, and InvalidateGPUCache. Skipped fences run func() plus rasterizer.InvalidateGPUCache, which leads to GPU::InvalidateGPUCache (gpu.cpp:117-147): mutex, std::function, GatherGPUDirtyMemory over every core.",
+    "what": "About 400 fence signals per frame from report and query releases, compute QMD releases and syncpoints. Even an empty one costs ~2 us, mostly the dirty-memory gather.",
+    "reducible_ms": "0.2-0.4. Return early from GPU::InvalidateGPUCache when !Core::g_writes_collected (the flag is set by every new collected write, gpu_dirty_memory_manager.h:151-156; AccelerateDMA::ApplyCollectedWrites already checks it, vk_rasterizer.cpp:4377). Pool the InnerFence objects. Coalesce back-to-back query fences with no work between them."
+   },
+   {
+    "zone": "fill image views",
+    "ms_per_frame": "0.42 / 0.44 (560-650 calls/frame, ~0.62-0.66 us each, memo misses only)",
+    "code": "vk_graphics_pipeline.cpp:884 (FillImageViews) under Configure; the texture memo is reported at vk_graphics_pipeline.cpp:371.",
+    "what": "Texture-cache image view and sampler lookups for draws the memo or delta path can't cover.",
+    "reducible_ms": "0.1-0.2 through more delta draws and memo hits. Pipelines with computed handles use neither."
+   },
+   {
+    "zone": "pipeline lookup",
+    "ms_per_frame": "0.34 / 0.35 (1.05-1.17k lookups/frame, ~0.28 us)",
+    "code": "vk_rasterizer.cpp:844-847: PipelineCache::CurrentGraphicsPipeline. Skipped on delta draws.",
+    "what": "Hashing and comparing the graphics key, and the async-build bookkeeping.",
+    "reducible_ms": "0.1-0.15 through more delta draws."
+   },
+   {
+    "zone": "storage buffers",
+    "ms_per_frame": "0.33 / 0.43 (~1.4-1.5k/frame, 0.22-0.24 us)",
+    "code": "buffer_cache.h:1766-1768: BindHostGraphicsStorageBuffers.",
+    "what": "SSBO binds per stage, including tuned4's 64 handle-table bases (#354).",
+    "reducible_ms": "~0.05-0.1."
+   },
+   {
+    "zone": "dynamic state / push descriptors / render targets",
+    "ms_per_frame": "0.27/0.21 + 0.24/0.18 + 0.17 (~0.13, 0.05 and 0.09 us per call)",
+    "code": "vk_rasterizer.cpp:1127-1130 (UpdateDynamicStates); vk_graphics_pipeline.cpp:1080/1220/1224 (push descriptors) and 1139/1271 (render targets).",
+    "what": "Dirty-flag-driven dynamic state, descriptor push, and framebuffer lookup per draw.",
+    "reducible_ms": "~0.05 together; not worth targeting."
+   },
+   {
+    "zone": "GPU wait / texture upload (spiky)",
+    "ms_per_frame": "GPU wait 0.12/0.33; texture upload 0.28/0.31 (one ~0.2 ms upload per frame on average)",
+    "code": "'Finish sites: 2.2-3.4/s waiting 9-24 ms/s at texture_cache.h:219': the collector's FlushPending calls runtime.Finish() before swizzling evicted GPU-modified images back (texture_cache.h:215-225). Texture uploads: the TextureUpload zone.",
+    "what": "A full host-GPU wait on the back, 4-7 ms each, about 3 times a second. Little effect on average frame time, but it hurts the 1% lows.",
+    "reducible_ms": "~0.3 on average, much more for 1% lows. Look at upstream #1306 and #1311 (collector pacing) and Fritchii EXP57 (caps collector GPU waits)."
+   }
+  ],
+  "fast_draws": "Correction: in gameplay, delta (fast) draws are not 0. The 'Fast draw per second: 0/1/79/223/304 delta' lines are the boot and menu windows (r49 49-59 s, r50 335-355 s; 100-2600 draws/s). In play, r49 reports 33,931-42,530 delta draws/s out of 90,762-110,896 draws/s (37-42%), and r50 reports 26,880-33,215 out of 84,905-90,114 (31-37%), e.g. r50 L4756/L4958 (vk_rasterizer.cpp:615/652/685).\n\nWhy the rest are full (r50 476 s): 42,111 'state changed', 5,831 'handle data written' (CB data reached the pipeline's texture handles: a real change), 2,972 'after an ineligible draw', 2,271 'different kind' (indexed vs non-indexed), 2,254 'pipeline takes no delta draws', 26 'after a submit'.\n\nIneligible draws: indirect 1.8-2.8k/s, mesh 0.7-2.1k/s, and 1.4-4.1k/s from pipelines with 'computed handles'. Those are tuned4's handle-table pipelines, which #858's ComputedHandles blocker keeps out of both the memo and delta draws (HANDOFF round 18).\n\n'State changed' by last break:\n- register 27-34k/s\n- deferred call 10-17k/s\n- delta overflow 1.5-2.8k/s\n- fence release 0.2-0.3k/s\n- tick work ~25/s\n\nRegisters by method:\n- 0x700, vertex_streams[0] word 0 (stride/enable): 7-15k/s; 0x73c (stream 15 word 0) 0.4-0.8k/s.\n- 0x4da, blend.enable[2]: 3.2-4.5k/s.\n- 0x460, 0x464, 0x466 (vertex_attrib_format): 2-5k/s, 0.3-0.7k/s, 0.4-0.9k/s.\n- 0x853, pipelines[5].register_count, a real fragment program change: 1.8-2.9k/s.\n- 0x64f, viewport_clip_control: 1.3-2.1k/s.\n- 0x372, polygon_offset_fill_enable: 0.4-1.7k/s.\n- 0x301, viewport[0].scale_y: 0.4-0.6k/s.\n- 0x201, rt[0] address: 0.3-0.5k/s.\n- 0x783 (blend_per_target) and 0x648 (cull face): ~0.3k/s each.\n\nCode: Nx2FastDraw::Break bumps g_serial for every changed 3D register that isn't a fast-draw parameter (Maxwell3D::IsFastDrawParameter/IsFastDrawVertexBuffer/IsFastDrawDeltaMethod, maxwell_3d.cpp:356-443). In tuned4, IsFastDrawVertexBuffer accepts only words 1 and 2 of a stream (address), not word 0 (stride/enable) (maxwell_3d.cpp:414-420). Every Kind::Call without FastDrawNeutral breaks (gpu_split.cpp:773-776), and that includes the back-macro calls FrontRunOnBack defers (17.7k/s, the back's 'macro' zone count). Delta::MaxWrites = 16 CB write ranges per gap (nx2_fast_draw.h:133) overflows with Ocarina's ~5 CB uploads per draw.\n\nWhat would enable more:\n1. Upstream open PR #1216's last commit 9ad7c7cee (DjouWish, 2026-11-10; its other three commits are already in tuned4 as 9389e4f68/974469aa5/cf811c16a). Stride words become light when the device has extended dynamic state and VK_EXT_vertex_input_dynamic_state (g_dynamic_strides), the back-macro DeferWords calls become FastDrawNeutral, render_enable.address becomes a report operand, and fence-flagged short-query releases break again. That covers the two largest break reasons, ~20-30k/s of the ~42-53k. Check first that the RX 9070 XT driver exposes vertex_input_dynamic_state: the setting is true, but nothing in the log confirms the extension, so add a one-line log.\n2. Raise Delta::MaxWrites to 64 (removes the 1.5-2.8k/s overflows).\n3. Later, our own experiment: registers that only feed dynamic state UpdateDynamicStates sets on both paths (viewport transform, cull face, polygon offset enable with EDS2), gated per device feature and checked with EDEN_NX2_FAST_DRAW_VERIFY=1. Blend enable, attribute formats and clip control are in the pipeline key, so they must keep breaking unless the key excludes them.\n\nPayoff: prepare time is 5.5-6.3 us for a full draw and 1.0-1.2 us for a delta draw ('prepare us per draw'). Each converted draw saves ~4.8 us. Moving 20-25% of ~2,100 draws per frame saves ~2-2.5 ms/frame; 1.5-2.5 ms is realistic.",
+  "other_bucket": "'other' is not a measured zone. Report sets it to the window's wall time minus the sum of all zones (nx2_profile.h:522-528). It therefore holds every back-thread instruction outside a zone, plus any time the thread was descheduled outside a zone.\n\nWhat it contains:\n- GpuSplit::Execute's decode switch and per-entry overhead for ~110-135k ring entries per frame: the head decode, back_engine, the HasSegment/Direct/IsLast tests, the hook_requested and tick_requested loads, the 4096-word consumed.store(seq_cst) with NotifyFront (gpu_split.cpp:680-783, 864-893).\n- Non-executable state writes that are not Direct: method_sink.emplace_back (gpu_split.cpp:729-730) and their later ConsumeSink/ConsumeSinkImpl, i.e. ProcessDirtyRegisters for each sunk write (maxwell_3d.cpp:327-354). This is outside every zone at level 1; the fine 'sink' zone covers it.\n- Kind::Call bodies that open no zone (gpu_split.cpp:773-780): front-deferred report and DMA notes and similar calls.\n- The idle hook Scheduler::FlushDeferred, which leads to Flush and SubmitExecution when the back runs dry (gpu_split.cpp:840-842 and 874-877; 2,213 submits/s in total).\n- MaybeTick's tick hook GPU::TickWork for guest read flushes (gpu_split.h:738-744, RequestTick from GPU::OnCPURead, gpu.cpp:347-376).\n- Preemption on the power-limited laptop (wall time, not CPU).\n- The profiler's own Report and per-method counting.\n\nHow to split it, in order of cost:\n1. Run once with EDEN_NX2_GPU_PROFILE=2 (no build needed). It adds the fine zones 'sink', 'macro end', 'tick work', 'cb bind', 'cb upload', 'query report', 'counter reset', 'render enable', 'draw setup', 'draw queries', 'geometry buffers' and 'storage bindings' (nx2_profile.h:84-98), and the uniform counters.\n2. Add TEST zones, profile-only:\n   - 'deferred call' around the Kind::Call body, with a top-N by function pointer as TopMethods does for methods;\n   - 'idle hook' around both idle_hook() calls;\n   - 'tick hook' inside MaybeTick when the exchange succeeds;\n   - 'notify front' around NotifyFront when front_waiting is set;\n   - a SampledScope 'ring dispatch' around Execute itself, with the 3D CallMethod's sampled time subtracted as a child.\n3. Log the back's CPU time against its wall time over the same window (Common::CurrentThreadCpuTimeNs is already read in Report). other_cpu = (busy CPU − zoned time that was on CPU) is hard to get exactly, but wall − CPU − split-wait sleep gives the descheduled share.\n\nExpect most of the 2.1-2.6 ms to be entry dispatch, sink consumption and the idle-hook submits. Those shrink with fewer entries (instance fold, CB fusion), not with micro-tuning.",
+  "method_stream": "Numbers come from the 'GPU back thread methods per second' lines in gameplay windows (r49 12 windows, r50 12 windows; method counts above 2 M/s), divided by each window's fps. Script: /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/bt-zones/methods.py.\n\nTotals: methods per frame 113k (r49) and 135k (r50). The 3D register writes the profile counts number 88k and 99k per frame, of which 26.5k and 29.5k repeat the value. The top-24 list covers ~71%; the tail is mostly more CB data words (0x8e7-0x8f3) and assorted state.\n\nAll 3D (Maxwell3D), per frame in r50:\n- CB select (const_buffer.size/address_high/address_low/offset, 0x8e0-0x8e3): 30.9k, 0 same. Per draw that is ~4.8 uploads (0x8e2 396k/s against ~82k draws/s).\n- CB data (0x8e4-0x8f3): over 20.7k in the top-24 alone, 6.3k 'same'. Same here means equal to the previous word; it is still a memory write at an advancing offset, so it can't be dropped. Most uploads are 1-3 words: data[0] 382k/s, [1] 214k/s, [2] 114k/s.\n- draw.begin (0x586): 10.1k, 9.95k same. These are the instance_id=Subsequent writes of an instance loop, ~6 per draw.end/draw.\n- CB bind (bind_groups[n].raw_config, 0x904/0x914/0x91c/0x924): 8.8k, 1.8k same.\n- vertex_id_base, global_base_vertex_index, global_base_instance_index (0x446/0x50d/0x50e): 7.1k, 0 same. Real per-draw parameters.\n- index_buffer.count/first (0x5f8/0x5f7): 4.2k, 3.0k same.\n- report_semaphore.query, clear_report_value, render_enable.mode (0x6c3/0x54c/0x556): 3.5k, all same. Executable per-draw query ops, fast-draw neutral.\n- draw.end (0x585): 2.4k, all same. The General-mode ends that each issue a draw.\n- MME DMA operands 0x154/0x155/0x158: 1.5k (17.7k/s, one per back macro).\n- pipelines program registers (0x816/0x813/0x817/0x853...): ~0.7k.\n\nSo the back's 1.13 M/s of 'same value' writes are almost all executable methods. The front already drops same-value state registers before queueing: FrontWrite skips 5.46 M of its 9.28 M writes per second (maxwell_3d.cpp:1611-1619), plus #488's instance-loop store-only methods (1620-1633) and the instance-loop draw.end and vertex_buffer writes (FrontSkipsLoopWrite, 2486-2510). The earlier 'can the front drop 0x586?' question therefore needs per-method semantics, not a same-value test.\n\nWhere they can go:\n1. Front, before queueing. Fold the later instances of an instance loop into one call: upstream open PR #1274's FoldInstance (57be5a6673: GpuSplit::FoldInstance/FlushFold before the next Reserve/Publish/Drain, DrawManager::AddLoopInstances, a FastDrawNeutral Defer, EDEN_NX2_FOLD_INSTANCES=0). That is ~9-10k entries per frame down to ~1-2k. The PR's list-draw/list-dispatch parts overlap tuned4's Nx2ListIndirect (#805 port) and need a separate review.\n2. Front, our own design (no upstream PR does this). Fuse 'CB select (4 regs) + N data words' into one Call entry. It applies the final register values (with the same shadow-RAM Track/Replay handling and dirty flags), then WriteWordsCached, NoteFastDrawConstantData and the accumulator range once. That is ~50k methods per frame down to ~8k entries. It must keep CallConstBufferWords' page and size clipping (maxwell_3d.cpp:709-713) and the perf_verify path.\n3. Front, small. Drop index_buffer.count when the front knows draw_indexed is already set inside an instance loop and no draw was issued since (~2k/frame). Drop a CB bind whose raw_config, address and size all match that slot's last bind (rare).\n4. Back. Nothing large: state writes already take WriteStateRegister (maxwell_3d.cpp:582-591, unprofiled), and CB words are batched (gpu_split.cpp:697-723). Upstream #1095 (52d46375f) is largely in tuned4 already: WriteStateRegister, ProcessShadowRam and ProcessDirtyRegisters are inline in maxwell_3d.h:3339-3380. Only its EDEN_NX2_PERF_VERIFY-as-plain-flag part would add a little.",
+  "top_levers": [
+   "0. Measure before building: one run with EDEN_NX2_GPU_PROFILE=2 (no new build) to split 'method' into cb bind/cb upload/query report/render enable/sink and 'draw' into draw setup/draw queries/tick work. Also log whether the device has VK_EXT_vertex_input_dynamic_state, which decides lever 1. Profiled runs overstate 'method': CallMethod skips its WriteStateRegister shortcut under the profile (maxwell_3d.cpp:582-591).",
+   "1. More delta draws: port upstream open PR #1216's last commit 9ad7c7cee (stride words, back-macro calls and render-enable addresses keep fast draws), and raise Nx2FastDraw::Delta::MaxWrites from 16 to 64 (nx2_fast_draw.h:133). It targets the two largest break reasons (0x700 stride 7-15k/s, deferred calls 10-17k/s) and the 1.5-2.8k/s overflows. Full draws cost 5.5-6.3 us and delta draws 1.0-1.2 us. Estimate 1.5-2.5 ms/frame. Verify with EDEN_NX2_FAST_DRAW_VERIFY=1. Doesn't touch FSR 4, frame generation or the preparation stamp.",
+   "2. Fewer ring entries: upstream open PR #1274's instance folding (57be5a6673, FoldInstance/AddLoopInstances, EDEN_NX2_FOLD_INSTANCES) takes ~10k draw.begin per frame down to ~1-2k calls: 0.3-0.5 ms/frame on the back. Its list-draw/dispatch half could also cut the front's 'list writers' and 'list GPU wait' waits, but it overlaps our #805 Nx2ListIndirect and needs its own review.",
+   "3. Fuse each CB select+data run into one front entry (our own design; vet with EDEN_NX2_PERF_VERIFY and the maxwell_fast_method test): ~50k of ~120k methods per frame are const_buffer size/addr/offset plus 1-3 data words. Estimate 0.8-1.2 ms/frame on the back, less ring traffic on the front.",
+   "4. Bank check rewrite (our EXP9 port, CheckNativeBankPagesTracked buffer_cache.h:2940ff): plain loads before the two atomic Take() RMWs, a per-bank snapshot pointer cache instead of 16 unordered_map lookups per bind, and one mapped-size pass. 0.7-0.8 down to ~0.3 ms/frame. Also port upstream #1059 (a32f462aa, compare small UBOs in place) for the 1.45 ms uniform zone: ~0.2-0.3 ms.",
+   "5. Compute: 131-178 dispatches per frame at 16-22 us each (2.3-3.4 ms/frame) with no sub-zones. Add fine zones (lookup, configure, the TryOcarinaDlss FSR 4 replacement, record), then a dispatch memo for the repeated small dispatches. Estimate 0.5-1.5 ms. Keep the FSR 4 replacement path unchanged. Upstream #1246 is a small extra.",
+   "6. Fences: ~400 SignalFence per frame, and even a skipped one costs ~2 us in GPU::InvalidateGPUCache's gather (gpu.cpp:117-147). Return early when !Core::g_writes_collected, as AccelerateDMA already does (vk_rasterizer.cpp:4377); pool InnerFence; coalesce back-to-back query fences. Estimate 0.2-0.4 ms/frame.",
+   "7. Lock contention and per-draw locks: the back waits 17-82 ms/s on spin mutexes in r50 (15-30 ms/s in r49), i.e. 0.5-2 ms/frame inside zones. Fold MemoryManager::FlushCaching's InnerInvalidation (it takes buffer_cache.mutex per draw, vk_rasterizer.cpp:2812) into PrepareDraw's existing lock, add accumulator ranges per run rather than per word, and find the other holders (fence thread, async read-back readers). Estimate 0.3-0.8 ms/frame.",
+   "8. Back idle: the front's line shows 'publishes to an idle back late by 50.4 ms/s' (~1.3 ms/frame). Publish sooner when back_waiting/back_idle_at says the back is idle; part of the 2.4-2.9 ms split wait becomes overlap.",
+   "9. Hitches (1% lows, not the average): texture-cache collector Finish at texture_cache.h:219, 2-3.4 per second at 4-7 ms each. Look at upstream #1306 and #1311 and Fritchii EXP57.",
+   "Vetted but not first: Eglantine b1e650849e (per-thread GPU page translation cache, Fritchii EXP63 default off, ~3% of the back in kraibse's test) is low risk and worth an A/B after levers 1-4. Eglantine f27522bfb9 'hot pages' (Fritchii EXP48 default off) uploads a hot page at most once a frame, so a CPU write after its upload reaches the GPU a frame late: stale data within a frame, rejected under our correctness rule. Upstream #1088/#1245 (AMD 512-draw budget, batched uploads) and #974 are already in tuned4. Combined realistic total of levers 1-8: ~5-8 ms/frame, enough for the 5-6 ms the back must lose if most of it lands."
+  ]
+ },
+ "survey": {
+  "method": "Read-only survey, done 2026-11-11. Our tree: tuned4 cd5482ece (worktree wt-tuned4). Scratch files: /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/bt-survey/.\n\nHow I checked what we already carry: for each fork commit I matched its subject against `git log 17baed716..tuned4` and nx2, then grepped tuned4's source for the commit's identifiers (Fritchii renames commits when porting, so subjects alone miss some). Sources covered:\n- the 84 upstream PR heads already fetched;\n- 33 newer PR heads (#1241-#1311), fetched into refs/remotes/upstream-pr2/<n>;\n- Fritchii oot-gather-fix 6649abc4f (v5.8.2);\n- CheezyEmu 4baa89ec5 and Sharkiix v3.1.0.\nUpstream nx2 is still 17baed716 and Eglantine nx2 is still 78743f30c (checked with ls-remote). kraibse's Eglantine commits b1e650849e, f27522bfb9 and d3612f82b1 are not on Eglantine nx2, so I read them through Fritchii's cherry-picks 85a33019b, d20c32704 and 1c8474ee9. The GitHub API and GraphQL were blocked in this session, so PR text comes from commit messages only.\n\nWhat the r50 log (ReportFastDraws and the GPU_PROFILE lines, gameplay at about 47-50 fps) shows. This corrects one premise of the task:\n- Delta draws are NOT zero: 29-42k delta draws a second against about 48k full draws a second. A full draw costs 5.7-6.3 us to prepare, a delta draw 1.0-1.2 us.\n- What ends the fast-draw chain, per second (\"by last break\"):\n  - register change 27k, by method: 0x700 (vertex_streams[0] stride/enable) 10.3k; 0x4da (blend) 3.8k; 0x460/0x464/0x466 (vertex_attrib_format) 3.7k; 0x853 (pipelines[5] program offset, a real change) 1.9k; 0x372 (polygon_offset_fill) 1.7k; 0x64f (viewport_clip_control) 1.5k;\n  - deferred call (back macros, FrontRunOnBack) 12-14k;\n  - delta overflow 2.8k;\n  - handle data written 5.8-6.4k;\n  - pipelines without delta draws (computed handles) 1.4-4.1k.\n  So most full draws come from a handful of break causes that the open upstream PRs remove.\n- Spin mutex contention on the back: 843/s, 69.8 ms/s (51.6 ms/s in the next window), about 1.0-1.4 ms a frame. The only SpinRecursiveMutex instances are the buffer cache's and the texture cache's mutexes (buffer_cache_base.h:555, texture_cache_base.h:494).\n- Buffer downloads: 228-256 MB/s in 17-21k copies.\n- Fence: 12-14k fences a second (34-38 ms/s) plus 8-9k skipped fences (13-17 ms/s); 2,100-2,200 submits a second, and only 5-30 a second are empty.\n- 3D register writes: 3.7M a second, 1.22-1.28M of them same-value. The method zone runs 5.0-5.3M methods a second at about 32 ns each.\n- Compute: 7.9-9.1k dispatches a second take 120-126 ms/s, about 14 us per dispatch.\n\nEstimates: converting about 35k full draws a second to delta draws saves at most about 160 ms/s, roughly 3 ms a frame. Each break removed can expose the next break, so I expect 1.5-2.5 ms. That makes the fast-draw items below the biggest single lever, and they all come from upstream Lichii.\n\nItems already in tuned4, not repeated in the list:\n- #974 (cf811c16a, 974469aa5, 9389e4f68);\n- #1059 (81ee8c090);\n- #1088 AMD 512-draw submissions (vk_rasterizer.cpp:4335-4340);\n- #1094, #1244, #933, #954, #1095, #1245 (in nx2), #1246 (7fcfb6412);\n- #805's split, back macros and fenced-release commits;\n- Fritchii EXP9/18/29/35/36/42/43.\nGains quoted below are the authors' own unless I say otherwise; I measured nothing.",
+  "items": [
+   {
+    "source": "upstream PR #1216, commit 9ad7c7cee (DjouWish, 2026-11-10); same idea as #1161 commit 7824123e5",
+    "title": "Stride words, render enable addresses and back macro calls no longer end fast draws",
+    "target_zone": "fast-draw full path: draw / uniform buffers / update buffers / configure / read handles / bank check. Breaks addressed: 'deferred call' 12-14k/s and method 0x700 (stride) 10.3k/s",
+    "status": "open-upstream-pr",
+    "measured_gain": "No number in the commit. #1161's version of the deferred-call part: 'At Kokiri village's water with #974 in, they were the last break before about 29,500 full draws a second.' Our log: deferred call 12,030-13,909/s, 0x700 about 10,300/s, together about 24k of about 48k full draws/s. At 4.6 us saved per converted draw that is up to about 110 ms/s, about 2 ms a frame.",
+    "applicability": "Applies. tuned4 has #974's three commits but not this fourth one. Hunks:\n- maxwell_3d.cpp:395-412 (IsFastDrawReportOperand): add the render_enable addresses.\n- maxwell_3d.cpp:414-421 (IsFastDrawVertexBuffer): stride word gated by g_dynamic_strides.\n- maxwell_3d.cpp:445-449 (ProcessMethodCall): keep the fence-flagged short-query release as a break.\n- gpu_split.h:281: DeferWords gains a flags argument.\n- The back macro call at maxwell_3d.cpp ~2183-2197 (split.DeferWords(..., Writes::Caches)) adds FastDrawNeutral.\n- vk_rasterizer constructor sets g_dynamic_strides.\nThe AMD driver exposes vertex_input_dynamic_state (r50 log: 'Vertex repacking without dynamic vertex input disabled'; DynamicState setting 2), so the stride part takes effect. Keep our Writes::Caches argument rather than upstream's Writes::Anywhere.",
+    "effort": "Small: about 90 lines including tests; mechanical merge onto our #805 back-macro code.",
+    "risk": "Low-medium. A missed break means a stale binding (wrong vertex stride or wrong draw). Verify with EDEN_NX2_FAST_DRAW_VERIFY=1 and EDEN_NX2_BACK_MACRO_VERIFY in Kokiri, the water and Castle Town. It does not touch FSR, frame generation or the preparation stamp."
+   },
+   {
+    "source": "upstream PR #1161 (Ocarina water branch), commit 792e12a47 (Lucas Borges)",
+    "title": "Fewer full draws and cheaper reports on the split's back",
+    "target_zone": "fast-draw breaks (vertex_attrib_format 0x460/0x464/0x466 at about 3.7k/s, 'delta overflow' 2.8k/s, 'handle data written' 5.8-6.4k/s); fence and query zones (report allocations, query id FIFO, report lock skip)",
+    "status": "open-upstream-pr",
+    "measured_gain": "No number in the commit. It lists the mechanisms: 'vertex stream stride/enable and vertex attribute formats are draw parameters with dynamic vertex input', 'a full delta write list widens its closest range instead of ending reuse', 'texture handle checks compare only the words handles are read from', 'reports skip the buffer cache lock when their page can't be a read-back page', 'free query ids are a vector FIFO (MSVC's deque of size_t allocated every two pushes)'. Our log counts about 12k/s full draws that these breaks cause.",
+    "applicability": "Applies, with work. tuned4 has neither ComputedHandlesChanged nor the attribute-type-class compare. The commit touches 20 files (nx2_fast_draw.h +112, query_cache.h +63, fence_manager.h, vk_graphics_pipeline, fixed_pipeline_state, vk_master_semaphore). Our query_cache and fence_manager differ: we have fake occlusion, preflush and async read-back. Port in two halves: fast-draw first, then reports and fences.",
+    "effort": "Medium: 400 lines, 20 files. Overlaps #1216's stride part; take #1216 first.",
+    "risk": "Medium. The report lock skip touches the read-back pages our preflush and async read-back mark. Check against EDEN_NX2_READ_CHECK=1 and the white-flash cases fixed in fence_manager.h:89-92."
+   },
+   {
+    "source": "upstream PR #1161, commit e05a72847",
+    "title": "Delta draws for pipelines with computed texture handles",
+    "target_zone": "fast-draw: 'pipelines without delta draws: computed handles'",
+    "status": "open-upstream-pr",
+    "measured_gain": "'At Kokiri village's water they were about 31,000 full draws a second (4.0 us to prepare each, against 1.0 us for a delta draw).' Our r49/r50 log shows only 975-4,145/s, so about 5-17 ms/s here (more at the water).",
+    "applicability": "Applies. tuned4 still blocks these pipelines with DeltaBlocker::ComputedHandles (vk_graphics_pipeline.cpp:461-485). The commit is 4 files, +92/-24.",
+    "effort": "Small-medium",
+    "risk": "Medium. The handle programs are re-evaluated under the cache locks, so wrong textures appear if it is wrong. Use FAST_DRAW_VERIFY."
+   },
+   {
+    "source": "upstream PR #1161, commit 58144d258 (cherry-pick of upstream 5b6fd59ff, which is on no branch we have; Citron 3a3297553)",
+    "title": "fence_manager: don't flush again after queueing a fence",
+    "target_zone": "fence (0.6-0.8 ms a frame) and submits (2,100-2,200 a second)",
+    "status": "open-upstream-pr",
+    "measured_gain": "No timing given. The text says the second FlushCommands 'submitted again whenever draws or native work had been counted since the last FlushCommands, at fences with downloads or queries (thousands a second in Switch 2 titles)'.",
+    "applicability": "Applies as is: tuned4 fence_manager.h:132-134 still calls `if (should_flush) rasterizer.FlushCommands();` after QueueFence. It is a 3-line change; the OpenGL half is irrelevant on Windows/Vulkan. Check that our InnerFence::Queue submits, or defers through Scheduler::DeferFlush, the same way.",
+    "effort": "Trivial",
+    "risk": "Low. If Queue does not submit on some path, a fence could wait. Watch the 'finishes waiting' and GPU wait lines."
+   },
+   {
+    "source": "upstream PR #1161, commit d5c9589d0 (cherry-pick of upstream 73f82c80b; originally #717's EDEN_NX2_MEMSTAT_MS by stephenjayakar)",
+    "title": "Reuse the device memory usage for 50 ms",
+    "target_zone": "'other' / TickFrame on the back (buffer_cache.h:186-188 and texture_cache.h:570 call GetDeviceMemoryUsage every frame)",
+    "status": "open-upstream-pr",
+    "measured_gain": "'with VK_EXT_memory_budget each answer is a driver and OS query (~0.1-0.5 ms on Windows, PR author)'. With two calls a frame, that could be 0.2-1 ms a frame on the back. Unverified on AMD Windows.",
+    "applicability": "Applies cleanly. tuned4 vulkan_device.cpp:2073-2086 queries the driver every call (physical.GetMemoryProperties plus vmaGetHeapBudgets).",
+    "effort": "Trivial: about 20 lines.",
+    "risk": "Low. The texture cache's pressure reaction is up to 50 ms late. We run with large VRAM headroom (16 GB card)."
+   },
+   {
+    "source": "upstream PR #1161, commits cccac7bb7 (cherry-pick of upstream a518616c1) and 0593fd75f (cherry-pick of upstream 5edee0ccf)",
+    "title": "Flat hash maps for TIC/TSC lookups; NativeImageHandles returned by reference",
+    "target_zone": "read handles (0.6-0.7 ms), fill image views (0.42 ms), compute (2.3-3.4 ms)",
+    "status": "open-upstream-pr",
+    "measured_gain": "cccac7bb7: no number ('each lookup chased a bucket pointer and then a heap node'). 0593fd75f: 'DispatchNativeCompute asks for every Ocarina of Time dispatch with constant buffer 0 (~4,700 a second in the field): two vector copies, each a heap allocation and free, on the split back.'",
+    "applicability": "Both apply. tuned4 texture_cache_base.h:145-146 still uses std::unordered_map, and kepler_compute.h:315 returns std::pair<std::vector<u32>, std::vector<u32>> by value.",
+    "effort": "Trivial: about 10 lines each.",
+    "risk": "Low. The commit argues iterator stability for the flat map (no rehash on erase)."
+   },
+   {
+    "source": "upstream PR #1099, commit c9f775dd0 (zortos293)",
+    "title": "Don't note synchronized payload releases as pending results",
+    "target_zone": "spin mutex contention on the back (843/s, 52-70 ms/s) and fence/report work",
+    "status": "open-upstream-pr",
+    "measured_gain": "'NoteReportPending (#1028) would only take the buffer cache's lock twice for each of them, about 1,700 times a second in Ocarina of Time.' No timing given.",
+    "applicability": "Applies with adaptation. tuned4 query_cache.h:316-317 computes report_noted without `!is_synced`, and our lambda does not capture is_synced, so it must be derived. Take #1099's other commit c0b8b7b51 (keep a payload release delayed over a pending report) with it for correctness.",
+    "effort": "Small",
+    "risk": "Low-medium. It sits next to the fence-flagged report path behind the white flashes. Check READ_CHECK."
+   },
+   {
+    "source": "upstream PR #1274, commit 57be5a667 (DjouWish, 2026-11-10)",
+    "title": "Host GPU reads the list words it wrote; instance loops reach the back as one count",
+    "target_zone": "method (3.4-3.5 ms; about 500k draw.begin writes a second) plus front waits that idle the back (split wait 2.4-2.9 ms)",
+    "status": "open-upstream-pr",
+    "measured_gain": "No fps number. 'The later instances of an instance loop are draw.begin writes of the register's own value that only count an instance on the back (about 500,000 a second in Ocarina of Time). The front counts them and sends the count as one call.' Also removes front waits for about 45 array draws and about 11 dispatches a frame whose parameters the GPU writes. 500k of 5.3M methods at about 32 ns each is about 16 ms/s, about 0.3 ms a frame; the wait removal adds more.",
+    "applicability": "Applies; nothing similar in tuned4 (no FoldInstance). 23 files, +1264: new nx2_list_draw.h and nx2_list_dispatch.h, plus vk_buffer_cache and vk_rasterizer hooks. It is new upstream (one day old), so expect revisions.",
+    "effort": "Medium-large",
+    "risk": "Medium-high. The indirect array draw and the marker grid change how culling results reach draws: missing objects if wrong. Kill switches exist (EDEN_NX2_LIST_DRAW, LIST_DISPATCH, FOLD_INSTANCES), but our policy makes those experiment-only."
+   },
+   {
+    "source": "upstream PR #805 newer revision, commit ddf01f582 (jpkto); also in #1161",
+    "title": "Put uploads ahead of a submission's work unless that work uses their bytes",
+    "target_zone": "render pass breaks at MappedUploadMemory (mostly GPU time, some back-thread recording cost)",
+    "status": "open-upstream-pr",
+    "measured_gain": "'about 48 render pass breaks a frame at MappedUploadMemory ... Each break costs about 12 us of GPU time plus the attachments' store and load.' No CPU number.",
+    "applicability": "Not in tuned4 (no SubmissionUses). It is the only non-TEST #805 commit we lack apart from 34621dcd6; the others (783a9a340 early downloads, 1457bd01f render pass variant) are already in. 13 files, +557.",
+    "effort": "Medium",
+    "risk": "Medium. Reordering an upload is wrong if the use tracking misses a use (stale data). It has its own check, EDEN_NX2_UPLOAD_REORDER_CHECK. Mostly a GPU-side gain, so low priority for the back thread."
+   },
+   {
+    "source": "upstream PR #717, commit eb3553bcb (the-cashman and others; based on old nx2 92f021240)",
+    "title": "Ocarina split-thread performance bundle: bind memo, pipeline skips, dynamic state and vertex input caches, UBO range reuse, compute bind cache, fence trim/fold, front state deltas, draw batch, native OoT macros",
+    "target_zone": "almost every back zone: fill image views, push descriptors, pipeline lookup, dynamic state, uniform buffers, compute, fence, method, macro",
+    "status": "open-upstream-pr",
+    "measured_gain": "Whole bundle only: 'Ocarina of Time goes from about 31 to about 46 FPS in Kokiri Forest at 1440p on a Ryzen 7 3700X and RTX 3080. Most of the gain is generic split GPU thread, cache and JIT work'. No per-switch numbers.",
+    "applicability": "Partly. tuned4 has its zstd/strcmp/poll patches (05b4d4aaa) and trap fast paths (98843dfae). None of its about 110 EDEN_NX2_* switches are in tuned4. Not in tuned4: BINDMEMO, PIPE_SKIP, DYNSTATE_CACHE, VERTEX_INPUT_CACHE, UBO_RANGE_REUSE, COMPUTE_BINDCACHE, FRONT_STATE, DRAW_BATCH, OOT_MACROS, FENCE_TRIM/FOLD, BANK_LRU. The base is far behind; port only through Fritchii's adapted slices (items below) or pick single pieces. Not mergeable whole (132 files, +15k).",
+    "effort": "Large (per piece: medium)",
+    "risk": "High as a bundle. Fritchii turned EXP26 and EXP28 (its slices of #717) on by default, then reverted both the same day (7e8fd7cc7, 1ec01d89d)."
+   },
+   {
+    "source": "Fritchii EXP32, commits e949a92b0 and 4a3f7b727 (core of #717's BINDMEMO)",
+    "title": "Texture binding memo: reuse the previous draw's resolved views, samplers and descriptors",
+    "target_zone": "fill image views (0.42-0.44 ms), push descriptors (0.18-0.24 ms), part of read handles",
+    "status": "fork-only",
+    "measured_gain": "None stated. Off by default in Fritchii v5.8.2; it has a verify mode.",
+    "applicability": "Applies conceptually. tuned4 has no binding memo, but #805 brought memoized textures (see #1161 b2304fa55 / 6ec24332c), which overlap. Check how much of fill image views those memos already skip before porting.",
+    "effort": "Medium",
+    "risk": "Medium-high: wrong textures if the memo misses a TIC/TSC change. Not validated by Fritchii's own defaults."
+   },
+   {
+    "source": "Fritchii EXP50 / EXP52 / EXP54 / EXP55 (f37d573b9, 626997885, ec3df1fb7, 208cb2579)",
+    "title": "Cheaper clean pipeline lookups: blend compared by value, programs-only key refresh, topology class, attribute-type patch",
+    "target_zone": "pipeline lookup (0.34 ms), configure (0.63 ms)",
+    "status": "fork-only",
+    "measured_gain": "EXP52: Refresh ran on '~27.5k of ~51k Refreshes per second in Castle Town' when only the programs changed; 'Off by default, not measured yet'. EXP50: 'about half the lookups took a full Refresh'. No timings.",
+    "applicability": "Applies on top of our EXP19 clean lookup (ported in round 16); each has a =2 verify mode.",
+    "effort": "Small-medium each",
+    "risk": "Medium: the wrong pipeline gets bound if the key compare misses a field. Fritchii keeps all of them off."
+   },
+   {
+    "source": "Fritchii EXP48, commit d20c32704 (port of Eglantine f27522bfb9 by kraibse)",
+    "title": "Stop write-protecting guest pages the CPU rewrites every frame (hot pages)",
+    "target_zone": "update buffers (0.9-1.1 ms), bank check, VirtualProtect calls on the back",
+    "status": "fork-only",
+    "measured_gain": "'~25k protect calls and ~130k pages a second in OoT ... kraibse measured frame 25.9 -> 24.7 ms and the back thread 14.5 -> 13.8 ms a frame, protect calls -71%.'",
+    "applicability": "Applies. tuned4 word_manager.h has no hot-page state. Fritchii adapted it to keep ForEachModifiedRange and clean-word bookkeeping.",
+    "effort": "Small-medium (88 lines in word_manager.h)",
+    "risk": "Medium. Fritchii: 'a hot page written again after its upload reaches the GPU one frame later'. That is a one-frame staleness and possible flicker. Off by default in Fritchii."
+   },
+   {
+    "source": "Fritchii EXP63, commit 85a33019b (port of Eglantine b1e650849e by kraibse)",
+    "title": "Per-thread cache of GPU page translations",
+    "target_zone": "read handles / update buffers / storage buffers (GpuToCpuAddress)",
+    "status": "fork-only",
+    "measured_gain": "'kraibse measured the back thread 13.64 -> 13.25 ms per frame (OoT Kokiri).'",
+    "applicability": "Applies. tuned4 memory_manager.cpp:318-338 GpuToCpuAddress has no cache; the map_serial it needs already exists (memory_manager.cpp:172, 236). Do NOT copy Fritchii's version as is: it calls std::getenv on every lookup. Read the switch once into a static.",
+    "effort": "Small",
+    "risk": "Low-medium. Our lookup is already only two table reads, so the gain may be smaller than kraibse's. Invalidation by map_serial must cover every remap."
+   },
+   {
+    "source": "Fritchii EXP28 (4875a28bc) / EXP26 (c56e0ab1b) / EXP27 (6de2b2739) / EXP22 (c51c24f99): slices of #717 and #641",
+    "title": "Fence trim/fold, bank check trims, publish-on-wait/dispatch batch, state deltas on the ring",
+    "target_zone": "fence (0.6-0.8 ms) plus fence skipped (0.33-0.38 ms); bank check (0.7-0.8 ms); split wait (2.4-2.9 ms); method (3.4 ms)",
+    "status": "fork-only",
+    "measured_gain": "None quoted. EXP28: 'payload releases (QMD releases, ~4,300 a second in Ocarina)'. Fritchii made EXP26=3 and EXP28=3 the default on 2026-11-08 and reverted both the same day.",
+    "applicability": "Applies, on top of our EXP9=3 bank check. EXP22 drops nothing that changes the result: 'per-register merge of rewrites is left out'.",
+    "effort": "Medium each",
+    "risk": "Medium-high: Fritchii itself reverted them. Take them only with a verify A/B, after the upstream items."
+   },
+   {
+    "source": "Fritchii EXP59 bit 4, commit 7df8caa2b",
+    "title": "Compute storage synchronizes walk only the dirty tracker words",
+    "target_zone": "compute (2.3-3.4 ms; about 14 us per dispatch)",
+    "status": "fork-only",
+    "measured_gain": "None; it only adds a 'skipped N of M' counter. It has a & 8 verify bit ('Must stay 0').",
+    "applicability": "Applies to tuned4's BindHostComputeStorageBuffers; it is scoped to compute, so the graphics graveyard-glitch path keeps the full walk.",
+    "effort": "Small",
+    "risk": "Medium: a missed upload means stale compute input. Use the & 8 verify."
+   },
+   {
+    "source": "Fritchii EXP53 (1c8474ee9, from Eglantine d3612f82b1) and EXP61 (c338269b9)",
+    "title": "Conditional render macro evaluated on the back; skip empty FlushCommands submits",
+    "target_zone": "front waits (macro DMA reads) and submits",
+    "status": "fork-only",
+    "measured_gain": "EXP53: front 'macro dma read' wait '116-246 ms/s in fights and Lake Hylia'. EXP61: '~4,600 empty vkQueueSubmit a second in Castle Town'.",
+    "applicability": "Low value for the back thread. EXP53 moves work onto the back. EXP61 is moot: our r50 log shows only 5-30 empty flushes a second, and our counter already exists (vk_scheduler.cpp:246).",
+    "effort": "Small",
+    "risk": "EXP53: objects drawn or skipped wrongly if the evaluation differs. Skip both for this goal."
+   },
+   {
+    "source": "upstream PR #1131, commit 1d8e4e2db (Liomar Oliveira)",
+    "title": "Skip re-uploading native uniform banks whose bytes did not change (XXH3)",
+    "target_zone": "uniform buffers / bank check",
+    "status": "open-upstream-pr",
+    "measured_gain": "'~212 banks per frame, 83 % unchanged and skipped ... Ryzen 7 3800X + RX 6700 XT: 42.28 -> 42.69 / 43.12 fps (two runs)'",
+    "applicability": "Does not apply: superseded. tuned4 replaced the once-a-frame bank re-upload (native_indirect_uniforms_this_frame) with Fritchii EXP9's per-bind page check (7864fd62e, 78b9e52d8: EXP9=3, 'without the once-a-frame compare'). The code #1131 patches is gone.",
+    "effort": "n/a",
+    "risk": "n/a"
+   },
+   {
+    "source": "upstream PR #1242, commit 099821a12",
+    "title": "Windows: enable Segment Heap (manifest)",
+    "target_zone": "allocation cost on every thread ('other', std::function per report, vectors)",
+    "status": "open-upstream-pr",
+    "measured_gain": "None stated.",
+    "applicability": "Applies: 5 lines in dist/yuzu.manifest; tuned4 has none.",
+    "effort": "Trivial",
+    "risk": "Medium/unknown. Segment Heap can be slower for heavy small-allocation churn than LFH. Take it only with an A/B frame-time run. No correctness risk."
+   },
+   {
+    "source": "CheezyEmu 4baa89ec5; Sharkiix v3.1.0 4b1f217f3",
+    "title": "No back-thread changes found",
+    "target_zone": "n/a",
+    "status": "fork-only",
+    "measured_gain": "n/a",
+    "applicability": "CheezyEmu: 193 commits over nx2 97b57ff36. Only FSR, frame generation, UI, a pipeline cache and a draw-skip default; nothing for split or back-thread CPU time. Sharkiix v3.1: 3 commits (AMD graphics pipeline libraries, build fixes). Nothing to take for this goal; CheezyEmu's FSR, frame generation and Radeon work is already ported.",
+    "effort": "n/a",
+    "risk": "n/a"
+   }
+  ]
+ },
+ "ideas": [
+  {
+   "area": "Method processing on the GPU back thread. Measured in r50 at 452 s: 4.79 M method-zone entries/s, 153 ms/s, 40.5 fps, so about 118k entries and 3.8 ms per frame. Of these, 3.54 M/s are 3D register writes. Most of the rest (1.25 M/s) are not 3D: compute and other engine entries, each timed with a full Scope.\n\nEstimated split of the 3D part per second. These are reasoned costs to confirm with EDEN_NX2_GPU_PROFILE=2:\n- CB uploads: about 415k runs, 0.85 M words.\n- CB select state writes (0x8e0-0x8e3): 1.08 M. These are Direct macro writes, about 10 ns each.\n- draw.begin: 384k, 377k of them same-value instance-loop writes.\n- CB binds: about 0.33 M.\n- Per-draw query ops (0x6c3/0x54c/0x556): about 120k.\n- Per-draw parameters (0x446/0x50d/0x50e): 0.28 M.\n\nTwo corrections to phase 1:\n1. Profiling itself inflates the 'method' zone by about 0.8-1.3 ms/frame. Each counted 3D write pays about 5-8 ns, and each full Scope on a non-3D entry about 15-25 ns.\n2. CB select+data fusion saves 0.3-0.5 ms standalone, not 0.8-1.0 ms. The CB write work itself stays.\n\nThe largest finding: our ring layout has real false sharing. The front writes write_position (offset 40) on every Commit. The back reads ring (offset 32) and system (offset 8) on every entry, and they are on the same 64-byte line. Probe: /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/bt-method/off.cpp. Upstream #1251's layout commit fixes it.\n\nA Fritchii finding is also relevant. Fritchii has shipped in-order state-pair blocks plus a front-side drop of same-value compute writes as built-in defaults since v5.5. The owner's Fritchii log counts them at 1.6-1.9 M pairs/s and 0.26-0.33 M dropped compute writes/s.\n\nRealistic total for this area: about 1.2-2.4 ms/frame unprofiled. Some of these overlap.",
+   "ideas": [
+    {
+     "title": "0. Fix the profile so 'method' measures what normal play pays (time non-3D entries by sampling, count entries per engine)",
+     "zone": "method / other (measurement)",
+     "mechanism": "These paths time each entry with a full Nx2Profile::Scope: non-3D Kind::Method and Kind::Multi entries (gpu_split.cpp:745, 751, 768), compute macro emits (kepler_compute.cpp:192) and back-macro 3D writes (macro.cpp:1422). A full Scope makes two rdtsc reads plus bookkeeping. The 3D path already uses SampledScope (maxwell_3d.cpp:599, 747). Switch these to SampledScope. Add one profile-only counter per entry kind on the back: 3D Direct, 3D sunk, 3D CB run, non-3D Method by engine, Multi, Call, Engine. Report them beside 'GPU back thread methods per second'. Unprofiled play gains nothing, but it shows how big the real target is. It also tells us what the 1.25 M/s non-3D entries are, which ideas 2 and 5 depend on.",
+     "expected_saving_ms": "0 ms in unprofiled play. In profiled runs it removes about 1.25 M/s × 15-25 ns = 19-31 ms/s, which is 0.45-0.77 ms/frame at 40.5 fps. Note that the 3D counting also costs about 3.54 M/s × 5-8 ns (CountRegisterWrite plus SampledScope bookkeeping) = 18-28 ms/s, or 0.4-0.7 ms/frame. So the unprofiled back is probably 0.8-1.3 ms/frame lighter than the 18.4/21.3 ms measured.",
+     "evidence": "In r50 at 452 s, the 'method' zone counts 4,785,374/s and '3D register writes' 3,542,589/s. Both count every 3D write and CB word the same way (CountRegisterWrite plus SampledScope entries), so the 1.24 M/s difference is full-Scope entries. Scope (nx2_profile.h:244-280) subtracts no timing overhead; SampledScope does (TimingOverheadTicks, 375).",
+     "sources": "Original. It follows the idea of upstream #1161 b964e6b40c ('profile the 3D methods on the path unprofiled runs take'), which tuned4 already has for 3D.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "None. Profile-only code behind Nx2Profile::Enabled().",
+     "how_to_measure": "Compare the back's 'method' ms/s and 'other' ms/s before and after in the same save. Read the new per-kind counts. Then run once with EDEN_NX2_GPU_PROFILE=2 (no new build needed for the fine zones). Its 'cb upload', 'cb bind', 'query report', 'counter reset', 'render enable' and 'sink' zones split the remaining 3D cost and confirm the estimates for ideas 3, 4 and 6."
+    },
+    {
+     "title": "1. Take the split ring's cache-line layout fix (upstream #1251, 5100362a6f)",
+     "zone": "other + method (every ring entry)",
+     "mechanism": "In tuned4's GpuSplit, the front writes write_position (gpu_split.h:753) in every Commit (gpu_split.h:669-670) and reads it in every Reserve (658). It sits on the same 64-byte line as the members the back reads for every entry: `ring` (750, read at gpu_split.cpp:871 `&ring[index]`), `system` (`*system` in every Execute call), `starts` (EntryTag) and `front_macros`. The layout probe (clang, libstdc++; these leading members are the same types on MSVC) gives:\n- system at offset 8, ring 32, write_position 40, last_writer_position 48, all on line 0;\n- the front's published_local/publish_every/front_engine on line 5125;\n- back_engine/back_entry_start on line 5126. The back stores back_entry_start for every entry (gpu_split.cpp:869).\n\nExecute and CallMethod are opaque calls, so the back reloads ring and system for each entry. After each front Commit, that load misses and fetches the line from the front's core. #1251 puts alignas(128) on write_position and on back_engine. That moves the front's hot positions off line 0 and gives the back's per-entry fields their own 128-byte pair. It is layout only.",
+     "expected_saving_ms": "About 0.3-1.0 ms/frame. The back runs about 4.8 M entries/s while the front commits about 4 M entries/s. If 10-25% of back entries take a ~50 ns cross-core line transfer, that is 0.48-1.2 M × 50 ns = 24-60 ms/s, or 0.6-1.5 ms/frame at 40.5 fps. I take the lower half. The PR author measured about 3% fps, which is about 0.7 ms of our 24.7 ms frames.",
+     "evidence": "The #1251 commit's docs/nx2/oot-performance-experiments.md, 'C4-01': both aligned Ocarina pan/walk runs (29.97/29.99 fps) beat both baselines (28.84/29.39). That is about 3% on an i7-11700 with an RTX 3080, a small sample; the fixed-field pair agreed but its p99 was worse. Our offsets come from compiling gpu_split.h with offsetof (probe at /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/bt-method/off.cpp). On clang-cl, re-check with the same probe or a static_assert.",
+     "sources": "upstream PR #1251 commit 5100362a6f (sheepbun, layout-only, restores upstream 886ac17e0041 / fork b22e54a24b). Not in tuned4: `git merge-base --is-ancestor` says no, and gpu_split.h:753 and 820 have no alignas.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "None: no change in ordering or behaviour. Static GpuSplit::instance grows by up to about 256 bytes.",
+     "how_to_measure": "This can't be switched live, so package two builds in one round. Run the same save, same scene, three runs each. Compare the back's 'other' and 'method' ms/s, its host_cpu_busy_ms_per_s, fps and frame_times (debug server, frame_times seconds=30). Also compare the front's 'publishes to an idle back late by' line. In unprofiled play, read DKB frame_ms / 'Frame times' p50."
+    },
+    {
+     "title": "2. Break fast draws for other engines at engine switches and on executable methods, not on every non-3D entry",
+     "zone": "other / method",
+     "mechanism": "gpu_split.cpp:741-743 and 765-767 call Nx2FastDraw::Break(OtherEngine) for every Kind::Method and Kind::Multi entry of an engine without reports_fast_draw_breaks (only Maxwell3D sets it, maxwell_3d.cpp:67). Each call is g_serial.fetch_add, a locked RMW that drains the store buffer, plus a store (nx2_fast_draw.h:89-94). That includes sunk state writes and compute plain stores (kepler_compute.cpp:513-519), and neither can change what a 3D draw resolves to.\n\nThe proposed rule:\n- break in Kind::Engine (gpu_split.cpp:685-687) when the old or the new engine doesn't report breaks;\n- keep the per-entry break only for executable methods (engine->execution_mask[method]) and for Direct writes the engine doesn't flag as plain stores;\n- skip it for sunk entries and compute native_plain_methods.\n\nBreaking on both switch directions also covers a deferred 3D draw that ConsumeSink issues while compute is selected. Keeping breaks on executable entries covers a FastDrawNeutral Defer that draws between two compute launches with no engine switch.",
+     "expected_saving_ms": "0.05-0.25 ms/frame. Each skipped Break saves about 5-8 ns, the locked xadd plus the store-buffer drain on a store-heavy thread. Up to 1.25 M/s × 5-8 ns = 6-10 ms/s if most non-3D entries are plain or sunk, or 0.15-0.25 ms/frame at 40.5 fps. If only the about 0.35 M/s compute plain writes qualify (Fritchii's counts, idea 5), it is 0.05 ms/frame. Idea 0's counter decides which.",
+     "evidence": "Code reading. The count of non-3D entries comes from r50 (4.79 M method entries/s minus 3.54 M 3D writes).",
+     "sources": "Original",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "A missed break lets a delta draw reuse bindings after other-engine work changed memory it reads: wrong textures or constants for one draw. The rule keeps a break on every executable method and on both engine switches, and plain compute stores touch no memory. Check with EDEN_NX2_FAST_DRAW_VERIFY=1 in Kokiri, the water and Castle Town.",
+     "how_to_measure": "Watch the 'Fast draw state changes per second by last break' line: the other-engine count should fall, and full/delta draw counts shouldn't move. FAST_DRAW_VERIFY mismatches must stay at 0. The back's 'other' and 'method' ms/s should drop, and idea 0's per-kind counter shows how many breaks were skipped."
+    },
+    {
+     "title": "3. Fold the later instances of instance loops on the front (upstream #1274, FoldInstance part only)",
+     "zone": "method (+ other, front)",
+     "mechanism": "The later instances of an instance loop arrive on the back as Direct draw.begin writes of the register's own value. Each one is a ring entry: Execute, CallMethod, CallMethodFast (maxwell_3d.cpp:627-636), ProcessShadowRam/ProcessDirtyRegisters, then DrawManager::DrawBegin, which only does instance_count++ (draw_manager.cpp:236-248). #1274 adds a check in FrontWrite: draw.begin, fs.instance_loop (tuned4 already tracks it, maxwell_3d.cpp:2466-2484), Subsequent, same value, !sink_pending, shadow_kept. On a match, the front counts instead of sending. GpuSplit::FoldInstance/FlushFold send the count before the next Reserve, Publish or Drain, as one FastDrawNeutral Defer of DrawManager::AddLoopInstances. Take only that part. The list-draw and list-dispatch halves (nx2_list_draw.h/nx2_list_dispatch.h) overlap our #805 Nx2ListIndirect and need their own review.",
+     "expected_saving_ms": "0.15-0.3 ms/frame on the back. r50 at 452 s has 0x586 at 384,469/s, 377,373/s of them same-value (9.3k per frame). Each costs about 15-20 ns in the handler plus about 5 ns of entry overhead: 377k × 20-25 ns = 7.5-9.5 ms/s. The folded calls cost about 1-1.5 ms/s, since loops number at most the ~85k draw.ends/s at ~15 ns each. Net about 6-8 ms/s, or 0.15-0.2 ms/frame at 40.5 fps, and about 0.25 ms in profiled runs. The front also saves about 377k Reserve/Commit/NoteWrites per second.",
+     "evidence": "The method counts are from r50 L4267 ('0x586 384469/s (377373 same)'). The PR text: '~500,000 a second in Ocarina of Time'; it gives no fps number. Its unit test src/tests/video_core/instance_fold.cpp checks that folded instances draw what the writes draw.",
+     "sources": "upstream open PR #1274 commit 57be5a6673 (DjouWish, 2026-11-10): maxwell_3d.cpp FrontWrite hunk, FlushFoldedInstances, DrawManager::AddLoopInstances, GpuSplit::FoldInstance/FlushFold.",
+     "effort": "M",
+     "risk": "low",
+     "correctness_risks": "The fold must be flushed before anything else reaches the ring: every Reserve, Publish, Drain and WaitFor, and front reads such as FrontDmaRead. Otherwise the instance count lands after a later entry: a wrong instance count, or a draw issued too late. It also has to run in a defined order with our FrontSkipsLoopWrite and #488's same-value instance stores. Ship it unconditionally once verified; EDEN_NX2_FOLD_INSTANCES stays experiment-only.",
+     "how_to_measure": "0x586 should fall from about 384k/s to the loop count in 'GPU back thread methods per second'. The back's 'method' count and ms/s should drop by about 8 ms/s, and 'Instance fold per 2 s' (#1274's diag) should appear. A/B live with EDEN_NX2_FOLD_INSTANCES=0 during the test round. For correctness, compare screenshots of crowded instanced scenes (Kokiri grass, Castle Town crowd) and run with EDEN_NX2_PERF_VERIFY=1."
+    },
+    {
+     "title": "4. Send runs of macro state writes as in-order pair blocks instead of one Direct entry each (structural)",
+     "zone": "method + other",
+     "mechanism": "Today every 3D macro state write the front doesn't drop is a Direct MacroWrite entry (FrontWrite, maxwell_3d.cpp:1672-1675; GpuSplit::MacroWrite, gpu_split.h:249-261). On the back each one runs Execute's decode, ConsumeSink and CallMethod's checks before WriteStateRegister (maxwell_3d.cpp:572-592), plus the BackLoop per-entry work (gpu_split.cpp:866-891).\n\nThe proposal: append such writes to an open block of (method, value) words, the same ring word size. The block stays open only until anything else is reserved or published, or the front waits; it never crosses the ring's end. The back applies a block in order, as ConsumeSinkImpl does: shadow RAM Track/Replay, same-value skip, ProcessDirtyRegisters while a deferred draw waits, then a tight loop that raises the two dirty tables at once (#717's ApplyFrontDelta).\n\nUse in-order blocks only, never the deferred method sink (MACRO_SINK without RING_PAIRS). In tuned4, Kind::Call bodies run without ConsumeSink: back macros (FrontRunOnBack), Nx2ListIndirect calls and FinishFrontMacro. They would read stale registers if the writes waited in the sink.\n\nCB select+data fusion (#717's FRONT_CB_ENCODE / Kind::CbWrite+CbBind) is a possible later add-on. After pair blocks it would save only about 0.1 ms/frame. Fritchii declined it because the front's macro DMA reads need each CB word's write noted at its own entry (c51c24f998 message), and our FrontDmaRead has the same constraint.",
+     "expected_saving_ms": "0.3-0.4 ms/frame unprofiled, 0.6-0.8 ms profiled. The owner's Fritchii v5.5 log (gameplay 1591-1671 s) shows 1.6-1.9 M pairs/s in 0.67-0.81 M blocks (2.3-2.4 per block), from 1.18-1.42 M/s macro state writes. Our r50 has the same stream: CB select 1.08 M/s plus 0x446/0x50d/0x50e 0.28 M/s and others. A Direct state write costs about 13-15 ns (5 ns entry, 8-10 ns dispatch); a pair in a block about 4-5 ns, plus about 5 ns per block. 1.8 M × 9 ns minus 0.77 M × 5 ns ≈ 12-15 ms/s, which is 0.3-0.37 ms/frame at 40.5 fps. Profiled runs also lose the per-write SampledScope and CountRegisterWrite cost (≈ 1.8 M × 6 ns = 11 ms/s). The front saves about 1 M Reserve/Commit per second, so it publishes sooner.",
+     "evidence": "Fritchii ships EDEN_NX2_MACRO_SINK=1 and EDEN_NX2_RING_PAIRS=1 (with COMPUTE_SINK=1) as built-in defaults from v5.5 to v5.8.2 (refs/remotes/frizti/oot-gather-fix:src/yuzu/main.cpp:187-191). The owner played those builds. The counters are in /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/fritchii-log/eden_log.txt ('GPU split batched writes per second', e.g. L5284, L6260). Upstream #717 has the same design (Kind::StateDelta), but its fps gain (31 to 46 fps) covers the whole bundle, with no figure for this part. No isolated fps number for pairs exists anywhere.",
+     "sources": "upstream open PR #717 eb3553bcb8 (Kind::StateDelta, Maxwell3D::ApplyFrontDelta with collected dirty flags; #641 4d1454a75c/2e5c8fad30). Fritchii 7853c03889 (EDEN_NX2_RING_PAIRS, 'Dr. Sergio', cherry-picked from d7dffbd85d), 516ba08ce5 (MACRO_SINK), 5c173ca274 (switches read at split start), and EXP22 c51c24f998/9638cca0ed (Fritchii's port of #641's delta onto RING_PAIRS, off by default). Port it in #717's shape with Fritchii's ordering rules.",
+     "effort": "M",
+     "risk": "medium",
+     "correctness_risks": "Ordering is the risk. A block must be closed before every other entry, Publish, Drain, WaitFor and engine switch, and before any front read that waits on positions (FrontDmaRead, acquires). Otherwise a Call or executable method runs before state written ahead of it: wrong state or a missed deferred-draw flush. The deferred-draw rule (ProcessDirtyRegisters flushes the instanced draw before the first non-loop write, maxwell_3d.h:3357-3360) must hold per pair, not per block. Don't merge rewrites of the same register within a block (EXP22's note: it changes dirty flags and deferred-draw flushes). Writes the front notes per entry (FrontNoteWrites) keep their positions, because a block's end position is where the back has run them all. Doesn't touch FSR 4, frame generation or the preparation stamp.",
+     "how_to_measure": "Port Fritchii's 'GPU split batched writes per second' counters (pairs, pair_blocks). Expect pairs of about 1.3-1.9 M/s. The back's 'method' entries/s should fall by that amount, with lower 'method' and 'other' ms/s. Verify with EDEN_NX2_PERF_VERIFY=1 and EDEN_NX2_SPLIT_VERIFY=1 (front shadow check), plus an EXP22 bit 8-style check that applies each block both ways and compares registers and dirty flags (must stay 0). Run EDEN_NX2_FAST_DRAW_VERIFY=1 in Kokiri, the water and Castle Town."
+    },
+    {
+     "title": "5. Drop same-value native compute plain writes on the front (Fritchii COMPUTE_SINK's same-value part)",
+     "zone": "method (non-3D entries) + other",
+     "mechanism": "Compute macros replay the QMD and grid fields for every dispatch. FrontRunMacro's emit (kepler_compute.cpp:2041-2052) and FrontCallMethod (1795-1806) send each as a MacroWrite or Method entry. On the back the entry pays:\n- Execute's non-fast path: the Break atomic at gpu_split.cpp:741 and, under profiling, a full Scope at 745;\n- ConsumeSink;\n- the virtual KeplerCompute::CallMethod, whose native_plain_methods path only stores the value into native_registers and regs (kepler_compute.cpp:513-519).\n\nFritchii keeps a plain_sent bitset on the front. A write to a native_plain_methods register is dropped when the front already sent that register and its copy holds the value, because then both back copies hold it.\n\nIn tuned4, every other path that changes those front copies must reset plain_sent for the register. Those paths are ListCallContext::SetRegister (kepler_compute.cpp:1640-1649), the QMD takeover (GetFrontQmd().MaybeTakeOver) and FrontApply cases. This is the stale-0xb0 class of bug Fritchii fixed in 5c173ca274.",
+     "expected_saving_ms": "0.1-0.12 ms/frame unprofiled, about 0.25 profiled. The owner's Fritchii v5.5 log counts 260-326k same-value compute writes dropped per second (compute_same) and 41-52k sunk. Each dropped entry saves about 12-15 ns on the back (entry, Break RMW, virtual call, store): 0.3 M × 13 ns ≈ 4 ms/s, or 0.1 ms/frame at 40.5 fps. Profiled runs also save the full Scope, 0.3 M × 20 ns = 6 ms/s. The front saves a similar amount.",
+     "evidence": "Measured counts in /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/fritchii-log/eden_log.txt, L5284-6863. Fritchii built-in default since v5.5 (EDEN_NX2_COMPUTE_SINK=1). Our r50 dispatch rate is similar (7.8k dispatches/s).",
+     "sources": "Fritchii 516ba08ce5 (KeplerCompute::FrontPlainWrite, plain_sent, the SPLIT_VERIFY compute check), 4ddc1a058d (own switch) and 5c173ca274 (front copy of 0xb0 after inline QMD launches). Fritchii says they were cherry-picked from 284213c695 and 71a403f8bd by 'Dr. Sergio', which are not in any upstream Lichii PR we have.",
+     "effort": "S",
+     "risk": "medium",
+     "correctness_risks": "If the front copy differs from the back's while plain_sent is set, a needed write is dropped and the dispatch runs with a stale QMD field: wrong grid, shader or CB. Possible results are flicker, missing effects or a GPU fault. Port Fritchii's EDEN_NX2_SPLIT_VERIFY compute check (compare front and back registers every 4096 macro calls) and run it before shipping. Reset plain_sent on split start and stop, on QMD takeover and on every non-emit register path.",
+     "how_to_measure": "Add Fritchii's compute_same and compute_sunk counters. Idea 0's non-3D entry count should fall by about 0.3 M/s. Watch the back's 'compute' ms/s for unchanged dispatch counts and 'method' ms/s for the drop. The SPLIT_VERIFY compute check must report 0 differences over a session through Kokiri, Hyrule Field and Castle Town."
+    },
+    {
+     "title": "6. Cache the destination page of inline CB writes on the back",
+     "zone": "method (cb upload fine zone)",
+     "mechanism": "Each of about 415k CB uploads per second pays two costs.\n- NoteFastDrawConstantData (maxwell_3d.cpp:1099-1134): the TIC/TSC range maths, two out-of-line DeviceSpans::Update calls (nx2_fast_draw.cpp:11-34), GpuToCpuAddress per 4 KiB page, two upper_bound Intersects and NoteDeviceData.\n- WriteBlockImpl (memory_manager.cpp:587-650): Nx2BackSparseWrite's range check, the generic MemoryOperation page walk, finish_reads, then GetPointer and memcpy.\n\nOcarina writes its per-draw constants to consecutive offsets of a few buffers: address_low changes 415k/s, but mostly within the same page. Keep a one-entry cache on Maxwell3D: GPU page → device address, host pointer, big-page-continuous flag, and the 'page hits no header or sampler span' result. Key it on MemoryManager::MapSerial(), the tex_header/tex_sampler address and limit registers, and the DeviceSpans' own serial. On a hit: memcpy, accumulator.Add, NoteConstantData and NoteDeviceData. Still run the g_read_downloads/ReadDownloadsMayCover check (finish_reads) and the sparse range check on every write.",
+     "expected_saving_ms": "0.25-0.35 ms/frame. A hit saves about 25-35 ns of the about 60-80 ns per upload (≈ 15 ns of span/translation work in NoteFastDrawConstantData and ≈ 15-20 ns of MemoryOperation/GetPointer). 415k × 25-35 ns = 10-15 ms/s, or 0.25-0.36 ms/frame at 40.5 fps. The ceiling is the measured 'cb upload' fine zone.",
+     "evidence": "Counts from r50 L4267 (0x8e2 address_low 414,859/s ≈ 0x8e4 data[0] 404,602/s, so one run per upload). Per-call costs are reasoned from the code. Kraibse measured a similar translation-only cache at the back thread going 13.64 to 13.25 ms/frame (Eglantine b1e650849e, via Fritchii EXP63 85a33019b). Ours is narrower and lands where most of the translation calls happen.",
+     "sources": "Original. It is related to Eglantine b1e650849e / Fritchii EXP63 85a33019b (per-thread GPU page translation cache; don't copy its per-lookup getenv).",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "A stale cached pointer after an unmap, remap or sparse mapping would write the wrong host memory or skip a texture-header break. The cache must be keyed on MapSerial (memory_manager.cpp:172, 236 bump it) and on the TIC/TSC registers, with the sparse and read-download checks kept per write. Check with EDEN_NX2_PERF_VERIFY=1 (CallConstBufferWords compares memory after the write, maxwell_3d.cpp:727-744) and EDEN_NX2_FAST_DRAW_VERIFY=1.",
+     "how_to_measure": "Run EDEN_NX2_GPU_PROFILE=2 and read the 'cb upload' zone's ms/s and calls before and after (FineScope at maxwell_3d.cpp:750 and 1137). Add a profile-only hit/miss counter. Hits should exceed about 85%, and PERF_VERIFY must log no 'constant buffer words ... differs' lines."
+    }
+   ]
+  },
+  {
+   "area": "Compute dispatch on the GPU back thread: RasterizerVulkan::DispatchCompute (vk_rasterizer.cpp:2204-2424, zone opens at 2212) and ComputePipeline::Configure (vk_compute_pipeline.cpp:434-826). Baseline from the logs: about 150 dispatches per frame (r49 5.6-8.9k/s, r50 7.0-9.5k/s, at about 48 fps), 12-26 us each, 2.3-3.4 ms per frame. Outlier windows: r50 402 s at 73 us per dispatch, 442 s at 37 us, and the loading window at 362 s at 718 us. The 402 s window lines up with 152.5 MiB/s of host-memory staging in the 405.9 s SubmitCounts line. With oot_fsr_preset=Native (both logs), can_replace is true only for the 1440p upscale pass, so the FSR 4 path runs once per frame and is left unchanged. Upstream #1246's barrier is in tuned4 (dc31ee678a) and is recorded on the Vulkan worker, so it costs the back nothing.\n\nEvidence for where the time goes: a least-squares fit over 11 r49 gameplay windows. Each window's compute ms/s was fitted against its dispatches/s and the per-window delta of the 'Native compute storage bindings ... of N bound' counter. That counter counts StorageBufferBinding cache misses, buffer_cache.h:4799-4823. Result: compute ms/s ≈ 12.2 us × dispatches/s + 5.6 us × misses/s. The correlation between misses per dispatch and us per dispatch is r = 0.67. Misses run at 1.9-8.5k/s, so 40-175 per frame. Script inline; the data is in r49log2/eden_log.txt. Repeated programs, from the DKB gpu_work lines: f8371c42621b1e57 runs 48-97 times per frame at 1x1x1, 6f9eacb79dad199c 15 times, eb1da88462fbae81 and 72edae24e28bfcf8 14 times each, 0a0bac9954d7f13e 2-6 times. So about 95-145 of the ~150 dispatches per frame come from five programs.",
+   "ideas": [
+    {
+     "title": "Measure first: compute sub-zones, binding counters and a slow-dispatch line (port Fritchii 753c422e13, plus three small counters)",
+     "zone": "compute",
+     "mechanism": "Port Fritchii 753c422e13 ('nx2 profile: compute dispatch zones, read flush zone and compute binding counters', profile-only). It adds:\n- zones 'compute lookup' (CurrentComputePipeline), 'compute pointers' (the BindComputeStorageBuffer loop, vk_compute_pipeline.cpp:455-463), 'compute views' (SynchronizeDescriptors to FillImageViews, 465-551), 'compute resolve' (UpdateComputeBuffers) and 'compute synchronize' (BindHostComputeBuffers, 693-697);\n- a per-second 'compute bindings' line: storage bytes bound, bytes SynchronizeBuffer uploaded, VirtualRangeCache::Query hits and misses, StorageBufferBinding cache hits and misses;\n- the top 8 compute programs by dispatch count.\n\nAdd three things of our own:\n- a 'compute record' FineScope around the Record calls, NoteWorkRecorded and SubmitNx2ListCopies (vk_rasterizer.cpp:2357-2411), plus a 'compute FSR' scope around TryOcarinaDlss(replace) at 2370-2374;\n- counters for the pending_download_ranges length seen by MarkWrittenBuffer (buffer_cache.h:3604), for the SubmitNx2ListCopies flushes that follow a dispatch (vk_rasterizer.cpp:2473-2474), and for the MasterSemaphore::Refresh calls made from NoteWorkRecorded(true) (buffer_cache.h:950-952);\n- a 'Slow dispatch N us' line for dispatches over 200 us. Model it on 'Slow clear' (vk_rasterizer.cpp:1971/1985): shader hash, the sub-zone times, buffers created or joined, and bytes uploaded.",
+     "expected_saving_ms": "0 directly. It decides between the items below. Their combined estimated range is 1.0-2.5 ms/frame out of the 2.3-3.4 ms; without the split, the 12.2 us per-dispatch base can't be attributed.",
+     "evidence": "The compute zone has no sub-zones today (nx2_profile.h:39-107). The regression above ties about 5.6 us to each binding-cache miss but can't say which call pays it. Fritchii added exactly these counters on 2026-11-10, before its own EXP59 compute work (7df8caa2b8).",
+     "sources": "Fritchii 753c422e13 (diagnostic only). Diagnostic tools stay in nx2 by our policy. The extra counters are original.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "None: everything sits behind EDEN_NX2_GPU_PROFILE / profile=2. Keep the extra timestamp reads FineScope so that profile=1 runs stay comparable.",
+     "how_to_measure": "One run with EDEN_NX2_GPU_PROFILE=2 in Kokiri Forest and Castle Town. Read the new zones per dispatch, Query and binding misses per dispatch, and the pending-download length. Check that 'compute' plus the new sub-zones still adds up to today's 2.3-3.4 ms/frame."
+    },
+    {
+     "title": "Skip VirtualRangeCache::Query when the binding is one device-contiguous run (upstream #717 EDEN_NX2_BUFCACHE_CONTIG, made unconditional)",
+     "zone": "compute (and graphics storage buffers)",
+     "mechanism": "UpdateComputeStorageBuffers (buffer_cache.h:3572-3582) calls ResolveMultiRangeStorage for every enabled SSBO on every dispatch (2858-2893), and graphics does the same at 3510. For read-only bindings this calls virtual_ranges.Query (virtual_range_cache.h:36). On a miss, Query walks every page with MemoryManager::GetSubmappedRange (virtual_range_cache.h:59). Since #1231 (in tuned4 as e8be28e5d6), read-only native compute and table pointers are bound to the end of their mapping, up to 1 GiB minus 64 KiB (buffer_cache.h:4768-4772). A new pointer near the start of a 130 MiB pool therefore walks about 2,000 64 KiB big pages, and a full 1 GiB reach walks 16k. StorageBufferBinding already clamps these bindings to MaxContinuousRange (4795), which answers from the device-contiguous runs kept at map time (memory_manager.cpp:728-752, merged only where the device addresses continue, 776-780). For such bindings Query can only return one segment, and the function then returns with segment_count 0. #717 tests `gpu_memory->MaxContinuousRange(binding.gpu_addr, binding.size) >= binding.size` before Query and returns early (#717 buffer_cache.h:1744-1748). Take it without the switch.",
+     "expected_saving_ms": "r49 fit: about 5.6 us per binding-cache miss, at 1.9-8.5k misses/s (mean about 4k/s, about 85 per frame at 48 fps). That is 0.22-0.98 ms/frame tied to misses, about 0.48 on average. If the page walk is 50-80% of it: 0.15-0.75 ms/frame, typically about 0.3. Back-of-envelope for the miss mix: about 16% of misses are over 8 MiB ('reach past the old 8 MiB cap' 76.8k of 471.7k in r49), at about 2,000 pages × ~8 ns ≈ 17 us; the rest are ≤ 8 MiB, at ≤ 128 pages ≈ 1 us. That averages ≈ 3.6 us per miss, consistent with the fit. Graphics table-pointer binds save extra, not counted here.",
+     "evidence": "Regression r = 0.67 between misses per dispatch and us per dispatch over 11 r49 windows. #717's comment: 'Native storage bindings are clamped to such a range, so Query only walked 8 MiB of pages for each new address'. With #1231 the clamp is now up to 1 GiB, so tuned4's walk is longer than the one #717 removed. Neither tuned4 nor Fritchii has the check (git grep finds no MaxContinuousRange(binding.gpu_addr ...)).",
+     "sources": "Upstream open PR #717 (eb3553bcb8, nx2_bufcache.h g_contig_resolve; buffer_cache.h:1744-1748 on that head). Interacts with upstream #1231 (b6489bb5c7, already in tuned4).",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "The outcome is identical when MaxContinuousRange is exact: one device run means Query would have found fewer than two segments. If the runs were stale after a remap, a multi-segment binding would bind as one range: wrong data, or a fault past a gap. The runs are rebuilt in Map/Unmap before map_serial bumps (memory_manager.cpp:170-172, 236). EDEN_NX2_PERF_VERIFY already compares MaxContinuousRange with the page walk (741-750).",
+     "how_to_measure": "A/B the same spot (Kokiri, Castle Town) on profile=1: compute ms per dispatch, and refit it against the per-window delta of the 'Native compute storage bindings ... of N bound' line. The 5.6 us/miss term should drop toward about 1-2 us. With the item-1 counters: Query misses per second fall to near 0 for compute. Run EDEN_NX2_PERF_VERIFY=1 once: no 'Nx2Perf mapping runs' errors."
+    },
+    {
+     "title": "Fast-reject the pending-download walk in MarkWrittenBuffer, ClearFenceDownloads and OutdateReadDownloads",
+     "zone": "compute (MarkWrittenBuffer per written SSBO and texel buffer; also draws and DMA)",
+     "mechanism": "Every GPU write mark loops over all of pending_download_ranges, one RangeSet per fence with downloads not yet popped, and calls Subtract on each (buffer_cache.h:3604-3606). ClearFenceDownloads does the same (1482-1490), and OutdateReadDownloads walks every read_download's clean_ranges (904-919). RangeSet is pimpl'd (range_sets.inc:34ff), so each Subtract is an out-of-line call plus a binary search, even when the set is far from the address. Keep a [lower, upper) hull next to each deque entry, from the copies at CommitAsyncFlushesHigh (2200-2207; Subtract only shrinks a set, so the hull stays conservative). Skip entries the write misses, or keep one union RangeSet of all pending ranges and test Intersects first.",
+     "expected_saving_ms": "N, the number of pending sets, ≈ fences with downloads per second × fence lifetime. r50 shows 3.8-21k download copies/s and about 12-14k fences/s. Assuming 3-8k download fences/s × 10-20 ms gives N ≈ 30-160. At 10-20 ns per Subtract that is 0.3-3 us per mark. With about 100-200 written compute bindings per frame (assumed about 1 per dispatch; item 1 counts it): 0.03-0.6 ms/frame, realistically 0.05-0.3, plus draw and DMA marks.",
+     "evidence": "Reasoned from the code and the log rates. N is not logged today, so item 1's counter is the check. It costs nothing when N is small.",
+     "sources": "Original. #717 left this loop as is (its MarkWrittenBuffer, 717 buffer_cache.h:2488-2499) and only guarded gpu_modified_ranges.Add (EDEN_NX2_BUFCACHE_MARK). That guard is a second small piece worth taking with it.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "Pure fast-reject: it skips only sets whose hull the write misses. An over-tight hull would let an old download overwrite a newer GPU result in guest memory (stale data), so build the hull from the copies actually recorded. EDEN_NX2_READ_CHECK=1 must keep 0 differing bytes.",
+     "how_to_measure": "Item 1's counter (average N per mark). Then an A/B on profile=1: the compute zone per dispatch, and the 'fence' zone (CommitAsyncFlushes also walks committed sets). EDEN_NX2_READ_CHECK=1 for 2 minutes: 'Read download check' lines show 0 bytes differing."
+    },
+    {
+     "title": "Dispatch resolve memo, a 'delta dispatch' for repeated programs (structural)",
+     "zone": "compute",
+     "mechanism": "Graphics already skips most of the resolve for delta draws (Nx2FastDraw; full 5.5-6.3 us against delta 1.0-1.2 us). Compute re-resolves everything on every dispatch:\n- the CurrentComputePipeline lookup: GpuToCpuAddress, TryGet, VerifyTrapGuards, BypassOotNetwork, ProcessGameDlss, compute_cache.try_emplace (vk_pipeline_cache.cpp:1223-1283, shader_cache.cpp:294-349);\n- per SSBO, StorageBufferBinding plus a write-extent Read<u64> (buffer_cache.h:1965-2056);\n- handle reads and GetSamplerId per texture (vk_compute_pipeline.cpp:476-546);\n- FillImageViews, then FindBuffer per binding (3554-3589) and PushImageDescriptors.\n\nMemo per pipeline. Key: the QMD fields that matter (CB enable mask, CB addresses and sizes, linked_tsc, block dims and shared size), the TIC/TSC table addresses and limits plus texture_bindings_serial, MapSerial, a buffer-cache epoch (buffer creations and deletions) and a texture-cache epoch (view and sampler deletions). It also includes a copy of the CB words that handles and SSBO pointers are read from (desc.cbuf_index/cbuf_offset, a handful of words). On a hit, reuse the pipeline pointer, the views and samplers, the SSBO Bindings and the image-descriptor payload. Still run every dispatch:\n- FlushWork, TickWork;\n- UBO streaming (the CB contents differ per object);\n- SynchronizeBuffer and MarkWrittenBuffer;\n- MarkModification of written images;\n- the descriptor push and the Record calls.\n\nPipelines with handle programs (desc.handle_program != ~0U) and byte-addressed shadows stay excluded, as graphics' ComputedHandles blocker does. Add EDEN_NX2_DISPATCH_MEMO_VERIFY to run the full path and compare.",
+     "expected_saving_ms": "The fit's per-dispatch base is 12.2 us. If the resolve that a hit skips is about 40% of it (≈ 5 us; graphics' delta path removes about 80% of prepare), and 50-70% of the ~150 dispatches per frame hit (95-145 are repeats of five programs), that is 75-105 × 5 us ≈ 0.4-0.5 ms/frame. Skipping the lookup and rebuilding the bind lambda too gives up to ≈ 8 us × 100 ≈ 0.8 ms. Range 0.4-0.8 ms/frame.",
+     "evidence": "The gpu_work lines show the repetition (f8371c42621b1e57 at 48-97 per frame, 1x1x1), and the fast-draw numbers show what skipping the resolve buys. Not measured for compute yet. First add a profile counter: 'dispatch whose memo key matches the last dispatch of the same pipeline'.",
+     "sources": "Original for compute. Modeled on upstream #805/#974's delta draws (in tuned4) and #717's EDEN_NX2_STORAGE_MEMO, which reuses unchanged storage bindings (717 buffer_cache.h:2281).",
+     "effort": "M",
+     "risk": "medium",
+     "correctness_risks": "A key that misses a dependency binds stale resources:\n- a TIC/TSC entry rewritten in place (covered only if texture_bindings_serial bumps on table content changes; SynchronizeDescriptors does, texture_cache.h:1403-1415);\n- a pointer word in a CB that the CPU or GPU rewrote (covered by comparing the words);\n- a buffer or view deleted and its id reused (the epochs).\n\nThe FSR 4 replacement pass and Nx2ListIndirect slot dispatches should bypass the memo, which keeps CheezyEmu's FSR path and the list path untouched. Verify mode: FrameDump of Kokiri water, grass and Castle Town against a memo-off run.",
+     "how_to_measure": "Profile=1: compute ms ÷ count before and after. A new profile-only 'dispatch memo hits/misses by reason' line. Run EDEN_NX2_DISPATCH_MEMO_VERIFY=1 (0 mismatches) over a 5-minute route."
+    },
+    {
+     "title": "Return NativeImageHandles by reference (upstream #1161 0593fd75f4)",
+     "zone": "method (KeplerCompute::DispatchNativeCompute, before the compute zone)",
+     "mechanism": "DispatchNativeCompute calls NativeImageHandles(regs.code_loc.Address()) for every Ocarina dispatch with CB0 enabled (kepler_compute.cpp:693, and 1274 in RememberNativeUpscaleInput). It returns std::pair<std::vector<u32>, std::vector<u32>> by value from its memo (1236-1240), which costs two vector copies, each a heap allocation and a free. Return a const reference into the unordered_map memo; references stay valid as the map grows.",
+     "expected_saving_ms": "4 heap operations at ~50-100 ns each ≈ 0.2-0.4 us per dispatch. × ~100-150 Ocarina dispatches with CB0 per frame ≈ 0.02-0.06 ms/frame.",
+     "evidence": "The commit message: 'DispatchNativeCompute asks for every Ocarina of Time dispatch with constant buffer 0 (~4,700 a second in the field): two vector copies, each a heap allocation and free, on the split back.'",
+     "sources": "Upstream open PR #1161, commit 0593fd75f4 (a cherry-pick of upstream 5edee0ccf); 7 lines in kepler_compute.cpp/.h.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "None, as long as nothing erases from the static memo while a reference is held; it is only ever inserted into.",
+     "how_to_measure": "Hard to see on its own (within noise of the method zone). Take it with the other quick wins and check that 'method' ms/s doesn't rise."
+    },
+    {
+     "title": "Compute uniform-buffer reuse: memo the CB binding, rebind identical stream bytes (upstream #717 EDEN_NX2_COMPUTE_BINDCACHE)",
+     "zone": "compute (BindHostComputeUniformBuffers / UpdateComputeUniformBuffers)",
+     "mechanism": "Every dispatch:\n- runs GpuToCpuAddress and FindBuffer for each enabled CB (buffer_cache.h:3554-3569);\n- then streams it: BindMappedUniformBuffer plus ReadBlockUnsafe of the CB's used size, then Nx2PatchComputeUniform (3149-3212).\n\n#717 memos the CB range to its Binding per slot (717 buffer_cache.h:2436-2456, ReuseGeometry/StoreGeometry). It also rebinds the previous stream allocation when the bytes are the same, via BindSmallUniformReusing with stage slot 5 (717 1945-1955). tuned4 already has that helper for graphics (uniform_stream_reuse.h:103; used at buffer_cache.h:2788), so the compute half is a small adaptation. Reuse only when Nx2PatchComputeUniform has nothing to patch, or compare after patching.",
+     "expected_saving_ms": "About 0.2-0.5 us per dispatch (an address translation, a FindBuffer and a stream allocation, or more for larger CB0s) × ~150 = 0.03-0.08 ms/frame. It is more where CB0 repeats between the 60 1x1x1 dispatches of f8371c42621b1e57.",
+     "evidence": "Graphics' version (upstream #1059 in tuned4: 27.6 to 8.9 ns for an unchanged 256 B bind). For compute, #717 gives no per-switch number (only the whole bundle: 31 to 46 fps).",
+     "sources": "Upstream open PR #717 (eb3553bcb8). The helper comes from upstream #1059, already in tuned4.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "Rebinding is only valid within the same command buffer and stream generation (BindSmallUniformReusing already checks this for graphics). A GPU-modified CB must keep taking the cached path (the IsRegionGpuModified test at 3175-3178 stays first). The Nx2 list-word patching must not be skipped.",
+     "how_to_measure": "Profile=2 'uniform rebinds' (FineCounter) rising for compute; compute ms per dispatch A/B."
+    },
+    {
+     "title": "Rate-limit the per-dispatch early-download landing check (MasterSemaphore::Refresh)",
+     "zone": "compute (NoteWorkRecorded(true))",
+     "mechanism": "After every dispatch, NoteWorkRecorded(true) (buffer_cache.h:942-956) calls RecordEarlyDownloads and, whenever pending_early_downloads != 0, runtime.IsFreeNow(front tick). That calls MasterSemaphore::Refresh, a vkGetSemaphoreCounterValue driver call (vk_master_semaphore.cpp:62-78, vk_buffer_cache.cpp:553-562), once per dispatch. Draws already check every 32nd time only. Check after a dispatch only when scheduler.CurrentTick() moved since the last check, or every 4th dispatch.",
+     "expected_saving_ms": "0.3-1 us per driver call (assumed for AMD on Windows) × up to ~150 dispatches/frame × the share with early downloads pending (preflush is on for Ocarina) ≈ 0-0.15 ms/frame.",
+     "evidence": "Code reading only. The early downloads come from our preflush and async read-back, so the item-1 counter will show how often this runs.",
+     "sources": "Original (tuned4's own preflush and async read-back code).",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "Early downloads land in guest memory a little later. A read that needs them still waits through WriteFinishedReadDownloads or a flush, so the cost is at worst a few more on-demand flushes. No stale data, because landing order is unchanged.",
+     "how_to_measure": "Item-1 Refresh counter before and after. 'Async read-back per second' and the 'GPU waits' lines must not rise. EDEN_NX2_READ_CHECK=1 stays at 0."
+    },
+    {
+     "title": "Defer the list-copy submit after a dispatch (upstream #717 DISPATCH_BATCH, ported by Fritchii as EXP27 bit 8)",
+     "zone": "compute (SubmitNx2ListCopies) and submits",
+     "mechanism": "Every dispatch whose writes reach a command-list page ends with SubmitNx2ListCopies, a full scheduler.Flush() right away (vk_rasterizer.cpp:2470-2476, called at 2331/2354/2409). #717's DISPATCH_BATCH, ported as Fritchii 6de2b2739f bit 8, submits those copies only when the front waits for them (WaitSubmittedTick asks the back), when the back goes idle, or with the next submission (Scheduler::DeferFlushUntilWanted).",
+     "expected_saving_ms": "Count unknown. r50 shows 2,200 submits/s (about 46 per frame) and 655 list-indirect dispatches/s of 0xe74. If about 5-15 flushes per frame come from here, at about 5-15 us each on the back: 0.03-0.2 ms/frame. Fewer AMD submissions also saves GPU-side time (the AMD 512-draw budget note at vk_rasterizer.cpp:4333-4336).",
+     "evidence": "Code reading. Fritchii keeps it off by default and gives no number. Needs item 1's counter (and Fritchii 753c422e13's 'Submits per second by site').",
+     "sources": "Upstream open PR #717 (EDEN_NX2_DISPATCH_BATCH); Fritchii 6de2b2739f (EXP27 & 8, off).",
+     "effort": "M",
+     "risk": "medium",
+     "correctness_risks": "If the front waits for a copy that no path submits, it waits longer ('list GPU wait' / 'list submit wait'), up to a stall until the next submit. The data stays correct (the copy is still ordered after the dispatch). Take it only if the counter shows the flushes are frequent.",
+     "how_to_measure": "The submits-by-site counter before and after. The front's 'list GPU wait' and 'list submit wait' zones and the back's 'other' (idle-hook submits) must not grow."
+    },
+    {
+     "title": "Top-level dirty bitmap in the memory tracker, so a sync over a 1 GiB read-only binding visits only dirty 4 MiB regions (structural)",
+     "zone": "compute (BindHostComputeStorageBuffers SynchronizeBuffer); also graphics table pointers",
+     "mechanism": "SynchronizeBuffer (buffer_cache.h:4230ff) uses ForEachDirtyUploadRange (memory_tracker_base.h:193-205). It calls IteratePages<true>, which visits every 4 MiB manager of the range, creates the missing ones, and asks each for DirtyWords. A #1231 read-only native binding of up to 1 GiB is 256 managers per sync per dispatch. Keep a bitset with one bit per 4 MiB region, set wherever a manager gains a CPU-dirty or untracked word, and walk its set bits with countr_zero: 4 u64 words for 1 GiB. #717's SYNC_SKIP/SKIP_REGIONS (256 KiB-region generations, 717 buffer_cache.h:2987) is a heavier form of the same idea.",
+     "expected_saving_ms": "256 managers × ~5-10 ns ≈ 1.3-2.5 us per 1 GiB binding sync, ≈ 0.2-0.4 us for a 130 MiB one. The number of long bindings per dispatch is unknown (item 1's 'storage bytes bound'). At 0.5-1 long binding per dispatch × 150: 0.1-0.4 ms/frame.",
+     "evidence": "Code reading. The long bindings exist ('reach past the old 8 MiB cap' is 16-26% of computed bindings in r49 and r50). The per-dispatch hit traffic is not logged yet.",
+     "sources": "Original. Related: #717 EDEN_NX2_SYNC_SKIP/SKIP_REGIONS (off-by-default style switches, high risk as a bundle); Fritchii EXP59 & 4 (7df8caa2b8) does the per-word version for compute only, and tuned4 already has that by default (skip_clean at 4233).",
+     "effort": "M",
+     "risk": "medium",
+     "correctness_risks": "A path that makes words dirty without setting the region bit means a missed upload, so the compute shader reads stale input. Every ChangeRegionState(CPU/Untracked, true) and CachedCpuWrite flush must set it. EDEN_NX2_PERF_VERIFY's CleanWordsHold (memory_tracker_base.h:208-217) can be extended to check the bitmap too.",
+     "how_to_measure": "Profile=2 'compute synchronize' zone per dispatch (from item 1) before and after. EDEN_NX2_PERF_VERIFY=1 shows no 'clean tracker words wrong' errors. FrameDump of the grass, fog and light-probe passes matches."
+    }
+   ]
+  },
+  {
+   "area": "Per-draw work on the GPU back thread, and the fast (delta) draw path. In r50 gameplay (window at 422-426 s, 92-97k draws/s) the per-draw zones add up to about 398 ms/s: draw 51.5, flush work 27.0, pipeline lookup 17.7, configure 29.4, sync descriptors 2.7, read handles 33.1, fill image views 20.4, update buffers 48.7, bind stage buffers 5.2, uniform buffers 71.5, bank check 36.3, storage buffers 17.5, push descriptors 9.9, render targets 7.7, configure draw 4.4, dynamic state 11.4, draw record 2.3. That is 4.1 us per draw, about 8 ms per game frame at ~2,000 draws per frame (~47 game frames/s), so it is the largest single block on the back. ReportFastDraws in the same window: 30,854 delta draws/s and about 61,800 full draws/s. Full draws: 46,855 'state changed', 5,669 'handle data written', 3,859 'pipeline takes no delta draws' (computed handles), 3,135 'after an ineligible draw', 2,234 'different kind'. Prepare time is 5.63 us for a full draw and 1.08 us for a delta draw, so each full draw converted to a delta draw saves about 4.55 us. Last breaks behind 'state changed': register 29,755/s (0x700 13,184, 0x460 3,998, 0x4da 3,583, 0x853 2,029, 0x64f 1,472, 0x466 762, 0x464 548, 0x73c 490, 0x301 442, 0x465 379, 0x201 367, 0x783 336), deferred call 14,513, delta overflow 2,335, fence release 226. Device facts from the r50 log: dyna_state is EDS2 (the default, settings.h:823-832), so EDS3 blending is off (vulkan_device.cpp:742-768). vertex_input_dynamic_state is true, and the log says 'Vertex repacking without dynamic vertex input disabled'. All estimates below convert per-second rates at 47 frames/s and assume that only part of each 'last break' converts, because an earlier break in the same gap can still force a full draw. I measured nothing; idea 2 measures that conversion rate exactly.",
+   "ideas": [
+    {
+     "title": "Port upstream #1216's last commit 9ad7c7cee: vertex stride words, render enable addresses and back-macro calls no longer end fast draws",
+     "zone": "fast-draw full path (draw, pipeline lookup, configure, read handles, fill image views, uniform buffers, bank check)",
+     "mechanism": "tuned4 already has #974's three commits (9389e4f68/974469aa5/cf811c16a); this fourth one is missing. Hunks against tuned4:\n(a) Maxwell3D::IsFastDrawVertexBuffer (maxwell_3d.cpp:414-421) accepts word 0 of a stream (stride and enable) when Nx2FastDraw::g_dynamic_strides is set. That needs a new inline atomic in nx2_fast_draw.h, set in the RasterizerVulkan constructor (~vk_rasterizer.cpp:435). Why this is safe: with extended dynamic state the pipeline key holds strides only when EDS is off (fixed_pipeline_state.cpp:247-251). The stream enable bit is not in the key. ConfigureDelta still runs UpdateGraphicsBuffers and BindHostGeometryBuffers (vk_graphics_pipeline.cpp:1181-1184). UpdateDynamicStates and UpdateVertexInput run on both paths (vk_rasterizer.cpp:1127-1130, 4533-4540).\n(b) render_enable.address_high/low become report operands (maxwell_3d.cpp:395-412).\n(c) DeferWords (gpu_split.h:281) gains Defer's flags argument. The back-macro call in FrontRunOnBack (maxwell_3d.cpp:2183-2197) passes FastDrawNeutral, so gpu_split.cpp:776-779 no longer breaks with Reason::Call. Safe because the macro's own writes go through maxwell3d.CallMethod (macro.cpp:1421-1424) and ProcessDirtyRegisters (maxwell_3d.h:3357-3366), which break for any changed non-parameter register. The native path of MacroEngine::Execute has no unconditional break; only the non-native macro_cache path at macro.cpp:1645-1647 does.\n(d) A fence-flagged short-query release ends the chain again (maxwell_3d.cpp:445-449). This tightens correctness.\nKeep our Writes::Caches argument instead of upstream's Writes::Anywhere. I would derive g_dynamic_strides from the pipeline cache's dynamic_features.has_dynamic_vertex_input (vk_pipeline_cache.cpp:827-829, which includes the setting) rather than from the device alone, so it follows the same switch the pipelines use.",
+     "expected_saving_ms": "1.2-1.9 ms/frame. Breaks targeted (r50 at 426 s): deferred call 14,513 + 0x700 13,184 + 0x73c 490 = 28,187/s, i.e. ~600 draws/frame at 47 fps. Upper bound: 600 x 4.55 us = 2.7 ms/frame. With 45-70% converting (other breaks in the same gap), that is 270-420 draws x 4.55 us = 1.2-1.9 ms.",
+     "evidence": "#1161's version of the deferred-call part (7824123e5) reports these were 'the last break before about 29,500 full draws a second' at Kokiri water. Our own log has back macros at 17.7k/s, against 12-14.5k/s 'deferred call' breaks, so nearly all deferred-call breaks are back macros.",
+     "sources": "Upstream open PR #1216, commit 9ad7c7cee (DjouWish, 2026-11-10); same idea as #1161 7824123e5.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "A missed break means the delta draw keeps a stale pipeline or binding. Stride and enable are rebound on both paths, so the remaining risk is a pipeline without dynamic vertex input that repacks vertices. Such draws are already ineligible (NoteResolvedDraw: AnyVertexRepacked, vk_rasterizer.cpp:566), and with VIDS on repacking is disabled. A back macro whose effect bypasses CallMethod would be missed; the native interpreter's emit path does not bypass it. FSR 4, frame generation and the preparation stamp are not touched.",
+     "how_to_measure": "Same spots (Kokiri water, Castle Town) with EDEN_NX2_GPU_PROFILE=1. Expect a ReportFastDraws 'delta' rate well above 30k/s, the 'deferred call' and 0x700/0x73c entries gone from 'by last break', 'prepare us per draw: all' down from 4.1 toward 3.2, and the back thread's pipeline lookup, read handles and fill image views counts down. Then a separate correctness run with EDEN_NX2_FAST_DRAW_VERIFY=1 plus EDEN_NX2_BACK_MACRO_VERIFY: the 'Fast draw verify per second' mismatch counts must be 0. Verify runs resolve every candidate in full, so they are not perf runs."
+    },
+    {
+     "title": "Cheap counter: which breaks a full draw had, not only the last one, plus a one-line log of g_dynamic_strides and VIDS",
+     "zone": "measurement for all fast-draw levers",
+     "mechanism": "ReportFastDraws counts only g_last_break (vk_rasterizer.cpp:479-485, 664-685). A gap broken by 0x4da and then 0x700 shows only 0x700, so no lever's real yield is known. Add a bitmask of break classes to nx2_fast_draw.h: OR it into a std::atomic<u32> (relaxed) in Break, and only when the profile is on.\nClasses:\n- stride word\n- attribute format (0x458-0x477)\n- blend (0x4d8-0x4df, 0x780-0x7bf)\n- program (pipelines[] 0x800-0x85f)\n- viewport/scissor\n- render target\n- other register\n- back-macro call\n- other call\n- delta overflow\n- fence\n- tick work, invalidation, map and texture headers\nIn TakeReusableDraw, on StateChanged, increment a small histogram indexed by the mask; clear the mask in NoteResolvedDraw. Log the top 12 masks every 10 s next to the existing lines. Also split 'different kind' into indexed/non-indexed, topology, indirect and inline index. For other calls, record the breaking entry's thunk pointer (entry[1], gpu_split.cpp:773-779) and log it module-relative, so the PDB can name the Defer site. Log once at boot whether EDS, VIDS and g_dynamic_strides are on (the r50 log confirms VIDS only indirectly).",
+     "expected_saving_ms": "0 by itself. It turns the 45-70% conversion guesses for ideas 1, 3, 6 and 8 into exact draws/frame: for example, draws whose mask is a subset of {stride, back-macro call} are exactly what idea 1 converts.",
+     "evidence": "In the r50 data the 'by last break' sums equal 'state changed' (29,755+14,513+2,335+226+24 = 46,853 against 46,855/s). The counter is exact for the last break and blind to the others.",
+     "sources": "Original; it extends #974's ReportFastDraws. A diagnostic, so it stays in nx2 off unless the profile is set, per AGENTS.md.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "None. Profile-only. A relaxed fetch_or on ~50k breaks/s costs about 1 ms/s, and only in profiled runs.",
+     "how_to_measure": "One EDEN_NX2_GPU_PROFILE=1 run on the current build plus this counter, before porting ideas 1 and 3. The top masks give the conversion rate per lever."
+    },
+    {
+     "title": "Port #1161 792e12a47's fast-draw half: widen instead of overflow, attribute formats as draw parameters (type classes compared), handle checks per word",
+     "zone": "fast-draw full path; breaks: delta overflow, vertex_attrib_format 0x460-0x466, 'handle data written'",
+     "mechanism": "Three parts of 792e12a47 (Lucas Borges), taken without its reports and fences half:\n(1) AppendRange (nx2_fast_draw.h:159-172) merges a range into one it overlaps. When the list is full it widens the range that grows least, instead of NoteConstantData/NoteDeviceData calling Break(Reason::DeltaOverflow) (nx2_fast_draw.h:180-200). In tuned4 a widened range only makes Delta::Reaches and UniformRangeKept (buffer_cache.h:1838-1849) more conservative, since both are overlap tests. #1161 also disables uniform keeps when ranges widen; keep that for parity. Do not just raise MaxWrites to 64, as the zone diagnosis suggests. TakeReusableDraw copies Delta three times per draw (std::exchange plus taken_delta = delta, vk_rasterizer.cpp:464-466). At 16 entries that is ~0.55 KB each; at 64 it would be ~2.1 KB each, ~6.4 KB of memcpy/memset per draw: ~0.2-0.3 us x 2,000 = 0.4-0.6 ms/frame, more than the overflows cost.\n(2) With dynamic vertex input, vertex_attrib_format writes become parameters. The delta draw then refreshes the pipeline key's attribute_types (fixed_pipeline_state.cpp:198-217) and compares it with the pipeline's; a different class takes the full path. UpdateVertexInput already resends the formats on both paths (the VertexInput dirty flag, vk_state_tracker.cpp:213).\n(3) TakeReusableDraw's handle check (vk_rasterizer.cpp:503-519, Delta::Reaches) compares only the words handles are read from (Delta::ReachesWords), not the whole constant buffer. Ocarina writes ~5 CB uploads per draw into buffers that also hold handles.",
+     "expected_saving_ms": "0.5-1.0 ms/frame. Candidates (r50 at 426 s):\n- attribute formats: 3,998+762+548+379 ≈ 5.7k/s ≈ 120 draws/frame;\n- overflow: 2,335/s ≈ 50 draws/frame;\n- handle data written: 5,669/s ≈ 120 draws/frame, false positives unknown.\nThat is ~290 candidates/frame. With 40-75% converting: 115-220 draws x 4.55 us = 0.5-1.0 ms.",
+     "evidence": "The commit text names these exact break causes at Ocarina's water, but gives no timing. Our counts are from the r50 ReportFastDraws lines (L3751-3753).",
+     "sources": "Upstream open PR #1161, commit 792e12a47 (fast-draw half only; overlaps #1216's stride part, so take #1216 first).",
+     "effort": "M",
+     "risk": "medium",
+     "correctness_risks": "(2): a format change within the same type class keeps the pipeline. That is only correct if UpdateVertexInput resends the new formats on the delta path, which needs the VertexInput dirty flag to stay set until then. (3): handle words must include the secondary (separate sampler) handle and the computed-handle inputs. A wrong word list gives wrong textures. Check with EDEN_NX2_FAST_DRAW_VERIFY=1 and EDEN_NX2_DELTA_DESCRIPTORS_VERIFY.",
+     "how_to_measure": "In ReportFastDraws: 'delta overflow' gone from 'by last break', the 0x460-0x466 entries gone, 'handle data written' down, the delta rate up, 'prepare us per draw: delta' about the same. Verify-run mismatch counts must be 0."
+    },
+    {
+     "title": "Per-draw micro trims: Delta copies, the double buffer-cache lock, Ocarina trackers",
+     "zone": "draw (0.58-0.61 us exclusive per draw), flush work (0.28-0.39 us per draw)",
+     "mechanism": "(a) Delta copies: TakeReusableDraw zero-fills and copies the whole Delta three times per draw (vk_rasterizer.cpp:464-466; struct at nx2_fast_draw.h:121-135, ~0.55 KB). Copy only the num_writes/num_device_writes used entries into taken_delta, and reset g_delta's counts and binds instead of assigning Delta{}.\n(b) Double lock: PrepareDraw's FlushWork zone calls gpu_memory->FlushCaching() (vk_rasterizer.cpp:815-818). On most draws InvalidateAll yields the inline CB ranges, and InnerInvalidation (vk_rasterizer.cpp:2790-2826) takes buffer_cache.mutex (a SpinRecursiveMutex) to run WriteMemory. About 1 us later, PrepareDraw takes buffer_cache.mutex and texture_cache.mutex together (vk_rasterizer.cpp:1035). Move FlushCaching to just after that scoped_lock and before draw_serial and draw_map_serial are read (1038-1039). The recursive spin lock then only counts, and a break FlushCaching causes (Invalidation) is still seen by DeltaStillHolds. That is one lock round trip less per draw, and one window less where the fence thread or async read-back can contend (the back waited 22.6-70 ms/s on spin mutexes in r50).\n(c) Ocarina trackers: OcarinaDlssEnabled() (vk_rasterizer.cpp:3248-3277) runs 2-3 times per draw, from TrackOcarinaCamera, TrackOcarinaActor and the final-pass check (1099-1101, 1152). Each call does a function-static guard, settings reads, call_once and an atomic. Latch the result once per render_trace_frame. Put a FineScope around the two trackers to measure them. TrackOcarinaActor copies up to sizeof(pose.bones) (~13 KB) per skinned draw (vk_rasterizer.cpp:3545-3549). Keep their behaviour; they feed FSR 4 and frame generation motion.",
+     "expected_saving_ms": "0.2-0.4 ms/frame. (a) 2,000 draws x 40-60 ns = 0.08-0.12 ms. (b) 2,000 x 30-60 ns uncontended = 0.06-0.12 ms, more when contended. (c) 2,000 x 2-3 calls x 10-15 ns = 0.04-0.09 ms, plus whatever the tracker zone shows for skinned draws.",
+     "evidence": "Reasoned from the code and the measured per-draw costs: 'draw' is 51.5 ms/s over 95k draws/s, 'flush work' is 27.0 ms/s over 97k/s, and this thread's spin contention is 764/s for 22.6 ms/s.",
+     "sources": "Original (code review of tuned4). (b) follows the zone diagnosis's lever 7.",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "(b): FlushCaching must stay before draw_serial is read, and before TakeReusableDraw's result is trusted; DeltaStillHolds already re-checks the serial under the lock. (c): a latched FSR state could be one frame late after an FSR failure, and TryOcarinaDlss checks separately. FSR 4 and frame generation are otherwise unaffected.",
+     "how_to_measure": "EDEN_NX2_GPU_PROFILE=1: the 'draw' and 'flush work' ms per call, and 'prepare us per draw' for both paths. Spin mutex contention: the 'this thread' line. EDEN_NX2_GPU_PROFILE=2 with the new tracker FineScope."
+    },
+    {
+     "title": "Structural: delta draws with a pipeline lookup after register-only breaks (same pipeline, nothing changed that resolves textures)",
+     "zone": "fast-draw full path after the 'register' breaks that remain once ideas 1 and 3 are in",
+     "mechanism": "Today any changed non-parameter register bumps g_serial (maxwell_3d.h:3361-3364). The next draw then does everything again: pipeline lookup, handle reads, image views, samplers, and no uniform keeps (BeginGraphicsUniforms(nullptr), vk_rasterizer.cpp:1057). Change it as follows.\n- Add a second serial that only breaks which can change texture or descriptor resolution bump: tex_header and tex_sampler pool registers, sampler_binding, the bindless texture CB slot, texture header data, invalidation, map, fence, tick work, and calls that are not FastDrawNeutral. Delta methods already track CB binds and handle data.\n- In TakeReusableDraw on StateChanged: if that serial is unchanged, do the normal PipelineLookup. If it returns draw.pipeline (and the bound pipeline, render pass and tick checks still hold), take the ConfigureDelta path: kept descriptors, uniform keeps, no handle reads or FillImageViews.\n- The real lookup proves the pipeline key, so no per-register whitelist is needed. The second serial proves the textures. Dynamic-only registers (viewport 0x301, scissor, depth bias, stencil refs) are covered because UpdateDynamicStates and UpdateRenderTargets run on both paths (vk_graphics_pipeline.cpp:1266-1274; vk_rasterizer.cpp:1127-1130). A render target change (0x201) still breaks the render pass check.",
+     "expected_saving_ms": "0.4-1.0 ms/frame after ideas 1 and 3. Remaining register last-breaks: 29,755/s minus stride (13.7k) minus attribute formats (5.7k) ≈ 10k/s ≈ 215 draws/frame. Program changes (0x853, ~2k/s) and blend/clip-control key changes under EDS2 (0x4da, 0x783, 0x64f, ~5.4k/s) look up a different pipeline and gain nothing. If 30-60% keep the same pipeline, 65-130 draws x ~4.2 us (4.55 minus the 0.28 us lookup kept) = 0.3-0.55 ms. Up to ~1 ms if idea 2 shows many gaps whose only breaks are dynamic-state registers.",
+     "evidence": "Reasoned. The delta path's 1.08 us against the full path's 5.63 us is measured. The same-pipeline fraction is unknown until idea 2's counter runs.",
+     "sources": "Original; generalizes the zone diagnosis's lever 3 (dynamic-state registers as parameters) without a hand list of dynamic-only registers.",
+     "effort": "L",
+     "risk": "medium",
+     "correctness_risks": "Wrong textures or samplers if a texture-relevant register is missing from the second serial: list them from the texture cache's and GraphicsPipeline::Configure's register reads. Rescaling and scale epoch are already checked (kept_scale_epoch, vk_graphics_pipeline.cpp:1194). Storage buffer bindings are redone on the delta path. EDEN_NX2_FAST_DRAW_VERIFY must cover the new case: resolve in full and compare views, samplers and kept bindings, as now.",
+     "how_to_measure": "Add a 'delta after lookup' count to ReportFastDraws. Expected: 'state changed' falls by that count, prepare us 'all' drops, and the pipeline lookup count stays about the same. Verify runs: mismatches 0. A/B at Castle Town and Kokiri water with EDEN_NX2_GPU_PROFILE=1."
+    },
+    {
+     "title": "Delta draws for pipelines with computed texture handles (#1161 e05a72847)",
+     "zone": "fast-draw 'pipeline takes no delta draws: computed handles'",
+     "mechanism": "tuned4 blocks every pipeline whose texture, image or buffer descriptors have a handle_program, with DeltaBlocker::ComputedHandles (vk_graphics_pipeline.cpp:455-485). These are our handle-table pipelines, kept out by #858's blocker. e05a72847 records each computed handle during the captured Configure. Once the caches are locked, DeltaStillHolds evaluates those handle programs again and takes the full path ('computed handle changed') when a value differs. Texture header writes and handle CB binds/writes still end reuse.",
+     "expected_saving_ms": "0.1-0.3 ms/frame. r50: 1,432-4,188/s ≈ 30-90 draws/frame. Each saves ~3.5 us (4.55 minus ~1 us to evaluate the programs again): 0.1-0.3 ms. More at the water, where #1161 counted ~31,000/s.",
+     "evidence": "From the commit: 'At Kokiri village's water they were about 31,000 full draws a second (4.0 us to prepare each, against 1.0 us for a delta draw)'.",
+     "sources": "Upstream open PR #1161, commit e05a72847 (4 files, +92/-24).",
+     "effort": "M",
+     "risk": "medium",
+     "correctness_risks": "The handle programs read CB and SSBO memory: an input the re-evaluation misses gives wrong textures. Our handle tables (#354's 64 bases) must be inside what the recorded inputs cover. Use FAST_DRAW_VERIFY and DELTA_DESCRIPTORS_VERIFY at the water and in Castle Town.",
+     "how_to_measure": "The ReportFastDraws 'pipelines without delta draws: computed handles' count should go to ~0, with a new 'computed handle changed' count. Delta rate up; verify mismatches 0."
+    },
+    {
+     "title": "Allow delta draws across an indexed/non-indexed change or a topology change within the same class",
+     "zone": "fast-draw 'different kind' (2.2-2.8k/s)",
+     "mechanism": "TakeReusableDraw takes the full path when is_indexed or the topology differs (vk_rasterizer.cpp:474-478). ConfigureDelta already takes is_indexed and rebinds the index buffer (UpdateGraphicsBuffers(is_indexed) and BindHostGeometryBuffers, vk_graphics_pipeline.cpp:1181-1184). With EDS plus EDS2 the key holds only the topology class (fixed_pipeline_state.cpp:130-134), and UpdateDynamicStates sets the topology dynamically (vk_rasterizer.cpp:4458-4486). Relax the check: allow a different is_indexed, and a different topology when the key collapses topology classes and the class representative is the same. Indirect draws and inline index draws stay full.",
+     "expected_saving_ms": "0.1-0.16 ms/frame. 2,234-2,803/s ≈ 48-60 draws/frame; with ~50-60% being the relaxable kinds, 25-36 draws x 4.55 us.",
+     "evidence": "Reasoned. The kind breakdown is unknown until idea 2 splits 'different kind'.",
+     "sources": "Original.",
+     "effort": "S",
+     "risk": "medium",
+     "correctness_risks": "Primitive restart enable depends on the topology (IsPrimitiveRestartSupported, vk_rasterizer.cpp:253-272): it must be updated on the delta path too. Point size and the polygon offset LUT depend on the topology (fixed_pipeline_state.cpp:390-394). Allow only cases where those match, or take the full path.",
+     "how_to_measure": "The 'different kind' count in ReportFastDraws, split by idea 2's counter. Verify-run mismatches 0."
+    },
+    {
+     "title": "Later option: EDS3 blending, with blend enable and clip control as draw parameters",
+     "zone": "fast-draw breaks 0x4da (3.2-5k/s), 0x783/0x786 (~0.7k/s), 0x64f (1.3-2k/s); also fewer pipelines",
+     "mechanism": "Under the owner's EDS2 setting (settings.h:823-832; vulkan_device.cpp:742-768), blend state and depth clamp are in the pipeline key (fixed_pipeline_state.cpp:256, 279). So blend.enable[2] (0x4da), blend_per_target and viewport_clip_control writes are real pipeline changes. With dyna_state EDS3, and if the RX 9070 XT driver exposes extendedDynamicState3ColorBlendEnable, ColorBlendEquation, ColorWriteMask and DepthClampEnable (vulkan_device.cpp:1689-1699), these become dynamic state. UpdateBlending (vk_rasterizer.cpp:4528-4531) then sets them on both paths, so they can be fast-draw parameters gated by g_dynamic_blend. The pipeline count also drops.",
+     "expected_saving_ms": "0.3-0.5 ms/frame. ~5.5-7.5k/s last breaks ≈ 120-160 draws/frame x 4.55 us x 50-70%.",
+     "evidence": "Reasoned. Whether the AMD Windows driver exposes these EDS3 features is not in the r50 log.",
+     "sources": "Original. Follows the zone diagnosis's lever 3, which notes blend and clip control are key fields and must keep breaking unless the key excludes them.",
+     "effort": "L",
+     "risk": "high",
+     "correctness_risks": "Changing dyna_state changes every pipeline key. The ~120k prepared pipelines were recorded with EDS2 keys, so check whether RecordedKeyForThisDevice remaps them or a full re-preparation runs; this must not break the preparation stamp. EDS3 blending on AMD drivers has a mixed history: check for wrong blending or alpha on water, the HUD and the FSR final pass. Owner decision; test only after ideas 1-3.",
+     "how_to_measure": "A boot log line for the EDS3 feature bits. Then a run with dyna_state EDS3: 0x4da, 0x783 and 0x64f leave 'by last break', the pipeline count drops, and screenshots of water, HUD and transparency match through the debug server."
+    },
+    {
+     "title": "GPU page translation cache per thread (Eglantine b1e650849e by kraibse, via Fritchii EXP63 85a33019b)",
+     "zone": "update buffers (0.5 us per draw), read handles, storage buffers, bank check (GpuToCpuAddress)",
+     "mechanism": "Every draw re-resolves index and vertex buffer, UBO, SSBO and handle addresses through MemoryManager::GpuToCpuAddress (memory_manager.cpp:318-338). A small per-thread cache of 4 KiB page translations, tagged with the manager and map_serial (already bumped on remaps, memory_manager.cpp:172, 236), answers the repeats. Read the kill switch into a static once: Fritchii's port calls std::getenv on every lookup (85a33019b, line 48 of the diff).",
+     "expected_saving_ms": "0.1-0.4 ms/frame. kraibse measured the back thread 13.64 -> 13.25 ms/frame (-0.39) in OoT Kokiri. Our lookup is already two table reads, so expect less.",
+     "evidence": "kraibse's measurement, quoted in the Fritchii commit message.",
+     "sources": "Eglantine b1e650849e (kraibse); Fritchii EXP63 85a33019b (default off there).",
+     "effort": "S",
+     "risk": "low",
+     "correctness_risks": "Every remap path must bump map_serial (PageTableOp/BigPageTableOp), or a stale translation reads the wrong memory. Cache only translations that pass our device-space check, as Fritchii does.",
+     "how_to_measure": "EDEN_NX2_GPU_PROFILE=1 A/B at Kokiri: the ms per call of update buffers, read handles, storage buffers and bank check, and 'prepare us per draw' for both paths. EDEN_NX2_READ_CHECK=1 must stay at 0 differences."
+    }
+   ]
+  },
+  {
+   "area": "Uniform/storage buffer binds and uploads, push descriptors, fences (made and skipped), and the 'other' bucket on the split's back (tuned4 cd5482ece). Three corrections to the phase-1 premises. (1) Upstream #1059 is already in tuned4 as 81ee8c090. BindSmallUniformReusing compares in place through GetSpan (uniform_stream_reuse.h:113-128), so porting it saves nothing more. (2) DevicePageFlags::Take already does a plain load before the RMW (gpu_dirty_memory_manager.h:240-250), and the bank snapshot map is already boost::unordered_node_map (buffer_cache_base.h:570-572, Fritchii 8b7bb3fab). (3) The fence counts were misread. The Fence zone's count covers every SignalFence call, skipped ones included. r50 L2549 shows 9,509 calls/s, of which 5,302 were skipped. 'Fence decisions/s' shows 3.7-5.6k fences made/s (delayed 1.3-3.0k, committed flushes 1.0-3.0k) and 5-11k skipped. So each made fence costs about 6-8 us exclusive, not 2.5 us. Example for L2549: 36.1 ms − 9,509 × ~0.3 us of CommitCacheFlushes ≈ 33 ms over 4,207 made fences = 7.9 us. Other findings from the logs: - Nearly every queue submit comes from a delayed fence. 'Scheduler per second' shows 1.9-2.7k submits/s, against 2.2-2.8k delayed fences/s. Every delayed fence ends in SubmitDeferredWork, which calls Flush (fence_manager.h:139-142). - The stream buffer is in device-local memory over OCuLink ('Stream buffer: 128 MiB in memory type 2 (device-local)'). It takes 135-188 MiB/s of uploads in gameplay. - The back waits 17-82 ms/s on spin mutexes, with 200-300 sleeps/s. The fencing thread copies downloads into guest memory while it holds buffer_cache.mutex (fence_manager.h:321, buffer_cache.h:2264-2316). - 'Uniform keeps in 600 frames' shows 1.1-1.4 M kept against 5.0-8.5 M streamed. That is ~2.2k kept and ~10k streamed small UBO binds per frame, plus ~1.4k native-bank binds; uniform buffers 62-73 ms/s works out to ~100 ns per UBO. - Push descriptors cost ~50 ns per stage call (8.7-9.0 ms/s for 167-185k calls), and delta draws already replay them (vk_graphics_pipeline.cpp:1213-1222). Descriptor reuse is not worth targeting. Per-frame figures below assume ~47 fps (r50 gameplay), so 1 ms/s ≈ 0.021 ms per frame.",
+   "ideas": [
+    {
+     "title": "Measure first: split fence, uniform and lock time with a few TEST zones and the existing EDEN_NX2_GPU_PROFILE=2",
+     "zone": "fence, fence skipped, uniform buffers, other, spin mutex contention",
+     "mechanism": "Step 1 needs no build: one run with EDEN_NX2_GPU_PROFILE=2. Its fine counters give uniform rebinds, streamed, cached and other plus uniform bytes (nx2_profile.h:204-209; counted at buffer_cache.h:2786-2805), which shows how many of the ~10k streamed binds per frame copy bytes and how many bytes. Step 2 adds profile-only TEST zones: (a) 'fence submit' around SubmitDeferredWork and the Flush calls InnerFence::Queue and FlushCommands make inside SignalFence (fence_manager.h:131-142; vk_fence_manager.cpp:22-30; vk_rasterizer.cpp:3048-3058). (b) 'fence commit' around CommitCacheFlushes (fence_manager.h:379-396), which includes its two cache-lock waits. (c) 'stream copy' plus bytes around the copies into the mapped stream: uniform_stream_reuse.h:137, buffer_cache.h:2804-2805, and the root-table memcpy at 2620-2622. (d) On the fencing thread, the hold time of the buffer_cache.mutex block at fence_manager.h:320-325, with landings/s and the time spent in PendingCpuWriteRanges (buffer_cache.h:2303). (e) InvalidateGPUCache outcomes: flag clear, gathered empty, gathered writes. (f) 'deferred call' around the Kind::Call body (gpu_split.cpp:773-780) and 'idle hook' around the in-loop hook (gpu_split.cpp:873-877), which are what make up 'other'.",
+     "expected_saving_ms": "0 by itself. It decides between items 2-8, which together claim ~1.2-2.8 ms/frame, and it rules out spending effort on push descriptors (~0.2 ms/frame in total).",
+     "evidence": "These four zones and 'other' cover ~4.5-5 ms/frame together, yet none has sub-zones. Fence 36-38 ms/s and fence skipped 12-17 ms/s (r50 L2549, L4861). Spin contention 17-82 ms/s. 'other' 109-129 ms/s. The made-fence cost of 6-8 us is derived, not measured.",
+     "sources": "Original. It reuses the fine-zone mechanism from 7dca362343 (TEST: fine profile zones, EDEN_NX2_GPU_PROFILE=2).",
+     "effort": "S",
+     "risk": "low",
+     "how_to_measure": "Run the owner's usual Kokiri/Castle Town route once with EDEN_NX2_GPU_PROFILE=2 on the current build. Then make one TEST build with the zones above and read the 'GPU back thread per second' and fine-counter lines. Profile-only code: it stays off unless the variable is set, so it can stay in nx2 as a diagnostic.",
+     "correctness_risks": "None. Profile-only. Keep the zones' clock reads out of unprofiled play (the Scope enabled flag already does this)."
+    },
+    {
+     "title": "Port upstream PR #1161's report and fence half (792e12a47) and #1099's synced-release skip (c9f775dd0 with c0b8b7b51)",
+     "zone": "fence, method (query report fine zone), spin mutex contention",
+     "mechanism": "Four parts of 792e12a47. (1) The report operation lambda shrinks to a 48-byte ReportOp so std::function holds it without allocating. Our capture at query_cache.h:318-321 is ~110 bytes, more than MSVC's 56-byte small buffer. It is also built for immediate reports and then thrown away (query_cache.h:318 before the branch at 395-431), so today every report allocates and frees once. (2) Fence operation lists are recycled through spare_operations instead of 'uncommitted_operations.reserve(64)' after each made fence (fence_manager.h:122-125). That is a 4 KiB allocation per made fence, freed on the fencing thread. (3) Free query ids move to a vector FIFO instead of std::deque<size_t> (query_stream.h:127-149). MSVC's deque allocates a block every two pushes. (4) MayBeReadBackPage: atomic first/last bounds of read_back_pages let a report skip the buffer_cache.mutex lock pair in RasterizerVulkan::NoteReportPending/FinishReport (vk_rasterizer.cpp:2630-2638) when its page can't be a read-back page. From #1099 c9f775dd0: synced payload releases are not noted as pending, which removes two lock pairs per such release. Adapt it to our report_noted at query_cache.h:316-317. Our lambda has no is_synced, so derive it. Take c0b8b7b51 with it.",
+     "expected_saving_ms": "0.15-0.3 ms/frame. Reports: ~1.2k report_semaphore.query per frame. 0x6c3/0x54c/0x556 together are 3.5k per frame, about a third each. At ~100-150 ns saved per report (one alloc/free plus half a deque block) that is 0.12-0.18 ms. Fence lists: 4.2-5.2k made fences/s × ~0.3 us = 1.3-1.6 ms/s ≈ 0.03 ms. Lock skips: ~2.5k delayed reports/s × 2 lock pairs ≈ 0.2 ms/s uncontended, more where the fencing thread holds the lock (see item 8). Total ~0.15-0.25 ms, up to 0.3 ms with avoided contention.",
+     "evidence": "Author's text: 'a report per draw (Ocarina of Time's occlusion counts) allocated one each'; 'MSVC's deque of size_t allocated every two pushes'; 'a list grew from 64 operations at most fences: ~30 a fence at Ocarina of Time's water'. #1099: NoteReportPending 'would only take the buffer cache's lock twice for each of them, about 1,700 times a second in Ocarina of Time'. No timings were given. My numbers are estimates from typical Windows LFH allocation costs.",
+     "sources": "upstream open PR #1161 commit 792e12a47 (reports/fences part only; its fast-draw part belongs to another area). upstream open PR #1099 commits c9f775dd0 and c0b8b7b51.",
+     "effort": "S",
+     "risk": "low",
+     "how_to_measure": "Compare the fence zone ms/s and, under EDEN_NX2_GPU_PROFILE=2, the 'query report' fine zone ms/s before and after. Spin mutex contention on the back should not rise. Run EDEN_NX2_READ_CHECK=1 for a few minutes: 'Read download check' must stay 0. Check that white flashes on leaves and walls are still gone in Kokiri.",
+     "correctness_risks": "Our report lambda has extra captures that #1161's ReportOp lacks: delayed_release and payload for Nx2SemaphoreWaiters::OnDelayedReleaseDone, plus the shadow/mirror state. They must fit in the 48 bytes, or be packed, without dropping the OnDelayedReleaseDone call. MayBeReadBackPage must publish its bounds under the buffer cache mutex at every insert into read_back_pages and on removal. A missed bound means a report that is not tracked against a read-back page, which brings back the stale-report white flashes. The fence-list recycle must clear the lists after running their operations."
+    },
+    {
+     "title": "Bank check: skip unflagged pages in bulk with three page bitsets (on top of our EXP9 port)",
+     "zone": "bank check",
+     "mechanism": "CheckNativeBankPagesTracked (buffer_cache.h:2940-3020) does per-page work on every page of every 64 KiB bank bind. It calls GetPointer twice: once in the mapped-size loop (2954-2957) and again per page. It calls Take twice, does a try_emplace into the node map (2978), and runs the reason chain, even though ~89% of pages end up skipped. Mode 3 skips exactly when the page is known, not collected, not written, not flagged for recheck, not CPU-dirty and not hot. Keep three back-thread-only bitsets indexed by device page, plain u64 words since only the back touches them: known (a snapshot exists), recheck (snapshot.recheck) and hot (changed_frame within NativeBankHotFrames). For a bank, load the one or two words that cover its 16 pages. Form the candidate mask: ~known | recheck | hot | collected-word | written-word, where the last two come from a relaxed load of the global DevicePageFlags words. When any_cpu_dirty is false, run the per-page path only for set bits. Do the mapped-size check in the same pass. Clear a page's hot bit lazily when its snapshot shows the window has expired. Clear known when the map is cleared at 16,384 entries (2959-2961). Skipping stays exact: same pages compared, same changes found.",
+     "expected_saving_ms": "0.25-0.4 ms/frame. Bank check is 34-35 ms/s for 78-81k binds/s (r50 L2549/L4861), i.e. 0.43 us per bind, with 626-672k pages/s skipped and 70-78k compared. Rough split: hot memcmps ~60-70k/s × ~0.15 us ≈ 10 ms/s, which stays. Mapped-size pass 80k × 16 × ~5 ns ≈ 6 ms/s, which mostly goes. Skipped-page work ≈ the remaining 15-19 ms/s, of which ~80% goes. Saved ≈ 12-18 ms/s ≈ 0.25-0.4 ms/frame. Bank check falls from 0.7-0.8 to ~0.35-0.45 ms/frame.",
+     "evidence": "'Native bank check (mode 3, 10 s)' lines from r50: 578k-871k binds and 4.7-7.0 M skipped per 10 s. Compared/changed: hot 523k-718k / 101-238, CPU-modified 34k-88k / 4.9k-10k, collected 8k-13.5k / 5.9k-9.8k, recheck 7k-12k / 0. The snapshot map is already a node map (buffer_cache_base.h:570-572), so the gain comes from skipping work, not from a faster map.",
+     "sources": "Original. Builds on Fritchii EXP9 (9e8cb73ed, 1a64fe500 as ported in 7864fd62e/78b9e52d8) and Fritchii 8b7bb3fab. Upstream #1131 (1d8e4e2db, XXH3 skip of the once-a-frame bank re-upload) does not apply: EXP9 mode 3 removed the code it patches.",
+     "effort": "M",
+     "risk": "low",
+     "how_to_measure": "For an A/B, temporarily keep the old loop behind a TEST switch. On the same route the 'Native bank check' line's binds, skipped and per-reason compared/changed counts must match the old code's rates. Run LICHII_BANK_CHECK=2 once: 'missed 0' must hold. Bank check ms/s in 'GPU back thread per second' should drop from ~34 to ~17-22 ms/s. Optional follow-up: log a histogram of frames since the previous change for hot-found changes. Hot compares are 52-72k/s for 10-24 real changes/s with NativeBankHotFrames = 120 (buffer_cache_base.h:574). If all hot-found changes come within a few frames, a shorter window would cut most of the remaining ~10 ms/s. That part carries a correctness risk and needs mode 2 to verify it.",
+     "correctness_risks": "The bitsets must mirror the snapshot state exactly. Set known on insert and clear it with the map. Keep recheck in step with the std::exchange at 2985. Set hot whenever changed_frame is set. A missed bit means a skipped compare, i.e. a stale constant-buffer page: the Ocarina white flashes EXP9 fixed. Read the global page flags before the guest page, as Take does today."
+    },
+    {
+     "title": "Batch the submits that delayed (fence-flagged report) fences force, and drop the flush after queueing (#1161 58144d258)",
+     "zone": "fence (also render pass count, Vulkan worker queue submit)",
+     "mechanism": "With delay_fence set, SignalFence ends with SubmitDeferredWork, which calls Scheduler::FlushDeferred (fence_manager.h:139-142; vk_fence_manager.cpp:76-80). That submits whatever InnerFence::Queue or FlushCommands deferred through DeferFlush (vk_scheduler.cpp:256-275), so every fence-flagged short-query release costs a full submit. Each submit does EndRenderPass, CounterClose, InvalidateState and DispatchWork on the back (vk_scheduler.cpp:919-1000). It also resets the uniform reuse slots' tick, and the next draw re-emits all dynamic state. The change: for a delayed fence whose tick was deferred, don't submit at once. The fencing thread already asks for the submit when it reaches the fence: InnerFence::Wait, then Scheduler::WaitSubmitted, then RequestIdleHook (vk_fence_manager.cpp:39-52), which the back serves after its current Execute call (gpu_split.cpp:873-877). The idle hook (840-842) and the 500 us DeferFlush interval cover the rest. So the submit happens when someone needs it, and fences that arrive while the fencing thread waits on earlier GPU work share one submission. Safer refinement: keep the immediate submit when Nx2SemaphoreWaiters has registered waiters (count != 0; nx2.h:519ff), and have a waiter that registers later call RequestIdleHook. Also take #1161's 58144d258: drop the 'if (should_flush) rasterizer.FlushCommands()' after QueueFence (fence_manager.h:132-134).",
+     "expected_saving_ms": "0.12-0.25 ms/frame on the back, plus GPU time. Submits: 1.9-2.7k/s against 1.3-3.0k delayed fences/s, so ~45-55 submits per frame are forced. If batching halves them (~1.1k/s fewer) at ~5-10 us of back time each, that saves 5.5-11 ms/s = 0.12-0.23 ms/frame. Upper bound: made fences cost ~6-8 us exclusive, so ~0.4-0.55 ms/frame of the fence zone is submit-related if the delayed half carries most of it. The GPU gains fewer render-pass breaks: 4.4-6.3k render passes/s, each with attachment store and load at 1440p. 58144d258 alone: only 4-30 empty flushes/s are measured, so its own gain is small.",
+     "evidence": "r50 'Scheduler per second: 2203 submits, 5209 render passes ... 6 flushes with nothing recorded'. 'Fence decisions/s: 5240 made (delayed fences 2817, committed flushes 2246 ...)'. Vulkan worker 'queue submit 43.9 ms (2213/s)'. DeferFlush's own note: batching fence submits within 500 us gave ~10-15% more fps in Hyrule Warriors.",
+     "sources": "Original (the batching), using upstream's DeferFlush and WaitSubmitted machinery. Upstream open PR #1161 commit 58144d258 (cherry-pick of upstream 5b6fd59ff / Citron 3a3297553) for the double flush. Fritchii keeps the immediate submit with a comment about a 24 s hang (frizti/oot-gather-fix fence_manager.h, SignalFence), so vet against it.",
+     "effort": "M",
+     "risk": "medium",
+     "how_to_measure": "Compare submits/s and render passes/s in the 'Scheduler per second' line, the fence zone ms/s (with the 'fence submit' zone from item 1), and 'finishes waiting'. Watch the frame-time 1% lows and the front's acquire and writer waits: they must not rise. Test with GPU accuracy switched to High while the game runs (Fritchii's hang case), during scene loads, and with the EDEN_NX2_SPLIT_CHECK=1 build. Watch for 'Waited N s for the GPU thread to submit tick' warnings (vk_scheduler.cpp:298ff).",
+     "correctness_risks": "No stale data. The risk is a stall: a delayed fence's operation runs only after its submit. If the back blocks inside one entry on that operation's result and never reaches the hook check, this deadlocks; Fritchii saw a 24 s wait. Also latency: a guest CPU polling the released value unregistered sees it later, but no later than the fencing thread's own request. Keep the immediate submit in WaitPendingFences (fence_manager.h:184)."
+    },
+    {
+     "title": "Stream buffer in host memory over OCuLink: extend upstream PR #1156's placement rule to a slow link",
+     "zone": "uniform buffers, update buffers, compute, texture upload (all copies into the stream buffer)",
+     "mechanism": "Every small UBO streamed (uniform_stream_reuse.h:136-137; buffer_cache.h:2804-2805) and every stream-path upload writes into the 128 MiB stream buffer. That buffer is created as MemoryUsage::Stream (DEVICE_LOCAL|HOST_VISIBLE, vk_staging_buffer_pool.cpp:117; vulkan_memory_allocator.cpp:70-73), so with ReBAR the CPU's write-combined stores cross the PCIe 4.0 x4 OCuLink link, and the back's memcpy is limited by link throughput. #1156 (3ae157d3dc, made unconditional in 30c92c28e6) moves the stream buffer to host memory (MemoryUsage::Upload) only when the BAR window is 256 MiB or less. Our card has full ReBAR, so the rule keeps video memory. Extend StreamBufferInHostMemory with a measured rule: time a 4-8 MiB memcpy into the mapped stream buffer against host memory at startup, and choose host when the device write rate is below a threshold (e.g. under 8 GB/s). A rule based on the PCIe link width would also work.",
+     "expected_saving_ms": "0.4-0.7 ms/frame on the back, if the A/B confirms the bandwidth. Stream traffic is 135-188 MiB/s in gameplay (r49/r50 'Staging traffic per second'), i.e. 2.9-4.0 MiB/frame at 47 fps. At ~4-6 GB/s for WC writes over Gen4 x4, 3.5 MiB takes 0.6-0.9 ms. Host memory at 20-28 GB/s (#1156 measured 25-28) takes 0.13-0.18 ms. Difference ≈ 0.45-0.7 ms/frame, spread over the uniform buffers, update buffers and compute zones. If the measured device write rate turns out above ~10 GB/s, the gain falls to ≤0.2 ms and the idea should be dropped.",
+     "evidence": "r49/r50 logs: 'Stream buffer: 128 MiB in memory type 2 (device-local)' at 15.2 s; stream traffic 107-188 MiB/s. #1156 on a GTX 1650 (small BAR, PCIe 3.0 x8): 255 ms/s copying into BAR memory at 0.8-1.0 GB/s against 25-28 GB/s to host; recording thread 36.7 to 22.3 ms/frame; GPU busy 26.9 to 30.3 ms/frame. Our link is faster than that window, so the gain is smaller; the 4-6 GB/s for our link is an estimate.",
+     "sources": "upstream open PR #1156 commits 3ae157d3dc, 390385c94c and 30c92c28e6 (morrocoy-labs). The OCuLink/bandwidth rule is our extension.",
+     "effort": "S",
+     "risk": "medium",
+     "how_to_measure": "First get the stream copy rate from item 1's 'stream copy' zone and bytes. Then make a candidate build with 3ae157d3dc's EDEN_NX2_STREAM_IN_HOST=1 switch (experiment only; per policy it does not merge) and A/B on the same route. Back thread uniform buffers, update buffers and compute ms/s, plus total busy per frame, should drop. GPU frame time must not rise past the 16.7 ms budget with FSR 4 and frame generation on; check the sampled GPU time from the round-8 split and the EDEN_DKB_FRAME_TRACE fence timing. The 'Stream buffer:' log line confirms the placement.",
+     "correctness_risks": "None for data: the same bytes go to a different memory type. The risk is performance. The GPU then reads UBOs, indices and storage data across the x4 link: #1156 saw GPU busy +13%, and for us GPU headroom with FSR 4, frame generation and 4K output decides whether it helps. Keep CheezyEmu's FSR 4 and frame-generation resources in their own allocations; the stream buffer does not hold them."
+    },
+    {
+     "title": "Shorten the fencing thread's buffer_cache.mutex hold during download landing",
+     "zone": "spin mutex contention on the back (shows up inside the uniform buffers, draw, fence and flush work zones)",
+     "mechanism": "ReleaseThreadFunc runs buffer_cache.PopAsyncFlushes under buffer_cache.mutex (fence_manager.h:320-325). Inside, PopAsyncBuffers (buffer_cache.h:2264-2316) writes the downloaded bytes into guest memory (WriteBlockUnsafe, 2250/2259; 30-256 MiB/s). For every landing group it also builds PendingCpuWriteRanges (2303), a gather over all 7 dirty-memory managers through std::function into a fresh RangeSet. Meanwhile the back spins and then sleeps on the same lock (SpinRecursiveMutex, spin_recursive_mutex.h:39ff). Two options. (a) Take one pending-write snapshot per fence plus a per-manager collect sequence number, so each landing re-gathers only writes collected after the snapshot instead of all of them. (b) Two phases: under the lock, compute the (device range, source pointer) list from `ranges` and do the gpu_modified_ranges.Subtract. Outside the lock, inside each DownloadLanding, do the copies, which keeps the landing protocol (rasterizer_download_area.h:56-120). Do (b) only if item 1's hold-time zone shows the copies dominate.",
+     "expected_saving_ms": "0.2-0.8 ms/frame if this thread is the main holder. The back's contention is 17-82 ms/s (r50 L2549: 843/s, 69.8 ms/s, 302 sleeps/s) = 0.35-1.7 ms/frame of in-zone waiting. Halving the fencing thread's share, assumed 50-100% of it, recovers 0.2-0.8 ms/frame. Wake latency after a sleep (200-300/s) is part of that cost.",
+     "evidence": "Measured contention and sleep counts above. Downloads are 30-40 MiB/s in normal play and 210-256 MiB/s in r50's later windows ('buffer downloads 255910 KiB in 21565 copies'), all landed under the lock on the fencing thread. The only spin mutexes are the buffer and texture cache mutexes. The share this thread holds is an inference until item 1(d) measures it.",
+     "sources": "Original. The landing protocol is upstream's/ours (DownloadLanding, #1028-era read-back work). EXP28's fence trims in Fritchii (4875a28bc) touch the same path but were reverted by Fritchii.",
+     "effort": "L",
+     "risk": "medium",
+     "how_to_measure": "Item 1(d) first: the fencing thread's buffer-lock hold in ms/s against the back's 'spin mutex contention: this thread' in the same 10 s windows. After the change, the back's contention ms/s and sleeps/s should fall, and the uniform buffers, draw and fence zones with them. Run EDEN_NX2_READ_CHECK=1 (differences must stay 0) and watch the 'held by download landings' count in the rasterizer-path writes line.",
+     "correctness_risks": "High care needed. The download landing must still see every CPU write collected before it opened, and a write collected inside it must still Await. Otherwise GPU bytes overwrite newer CPU bytes: stale data and the white-flash class of bugs. Option (b) also changes when gpu_modified_ranges stops covering the range relative to the copy: a guest read trap between them must not read pre-copy memory. Keep the trap or read-download path ordered behind the copy."
+    },
+    {
+     "title": "Skip CommitCacheFlushes' two cache locks when neither cache has anything to commit",
+     "zone": "fence (all SignalFence calls, skipped included)",
+     "mechanism": "Every SignalFence (9.5-14k/s) locks texture_cache.mutex and then buffer_cache.mutex just to ask HasUncommittedFlushes/HasAsyncFlushWork (fence_manager.h:379-396; texture_cache.h:2327-2334; buffer_cache.h:2087-2089). It does this even for the 5-9k/s fences then skipped as empty. If the fencing thread is landing downloads at that moment, the back waits behind it. Keep two std::atomic<bool> 'has uncommitted' flags, set and cleared under each cache's lock wherever uncommitted_downloads, uncommitted_async_buffers, uncommitted_gpu_modified_ranges and committed_gpu_modified_ranges change. CommitCacheFlushes reads the flags first and takes a lock only for a cache whose flag is set.",
+     "expected_saving_ms": "0.05-0.3 ms/frame. Uncontended: ~2 lock pairs × 9.5-14k/s × ~30 ns ≈ 0.6-0.8 ms/s ≈ 0.015 ms/frame. The real gain is the contended waits avoided. If fence commits account for 10-20% of the back's 17-82 ms/s spin waits, that is 2-16 ms/s ≈ 0.04-0.3 ms/frame. Item 1(b) gives the actual number.",
+     "evidence": "Fence zone 36-38 ms/s and fence skipped 12-17 ms/s (r50). Committed flushes happen on 1.0-3.0k of the 9.5-14k fences/s ('Fence decisions/s'), so most calls find nothing to commit.",
+     "sources": "Original. It follows the pattern of upstream's lock-free MustFlushRegion pre-check (vk_rasterizer.cpp:2640-2645) and #1161's MayBeReadBackPage.",
+     "effort": "S",
+     "risk": "low",
+     "how_to_measure": "Item 1(b)'s 'fence commit' zone before and after, plus the back's spin contention. 'Fence decisions/s' must keep the same proportions: no fence with committed flushes may turn into a skipped one.",
+     "correctness_risks": "A flag that misses a site that adds uncommitted work makes a fence skip its downloads, so the guest reads stale GPU-written memory. Audit every writer of the four containers, including off-back writers such as read traps and async read-back, and set the flag inside the same lock. EDEN_NX2_READ_CHECK=1 must stay at 0."
+    },
+    {
+     "title": "Small quick wins: InvalidateGPUCache early-out and hot-path function statics as plain flags",
+     "zone": "fence skipped, other, uniform buffers",
+     "mechanism": "(1) GPU::Impl::InvalidateGPUCache (gpu.cpp:117-147) always builds a std::function, takes applying_writes_mutex and gathers 7 dirty-memory managers, two std::mutex each (gpu_dirty_memory_manager.h:73-89; core.cpp:807-811). Return at once when !Core::g_writes_collected, as DmaPusher::ApplyCollectedWrites (dma_pusher.cpp:215-224) and AccelerateDMA (vk_rasterizer.cpp:4377) already do. Every Collect path sets the flag after its CAS (NoteCollected, gpu_dirty_memory_manager.h:151-156), and the flag is cleared before the gather (gpu.cpp:133), so an early return can't miss a write. (2) Function-local statics read on every UBO, buffer touch, report and flush cost a TLS epoch check each under the MSVC ABI, which clang-cl uses too. Examples: bank_check_mode (buffer_cache.h:2683), TouchBuffer's once_a_frame (buffer_cache.h:4216), CounterReport's two getenv statics (query_cache.h:251-255), and DeferFlush's interval (vk_scheduler.cpp:262). Make them plain inline globals read once, as #1059 did with g_uniform_stream_reuse (uniform_stream_reuse.h:36-50).",
+     "expected_saving_ms": "0.05-0.15 ms/frame together. (1) An empty gather costs ~0.3-0.5 us. Guest cores collect ~25-30k new page entries/s ('rasterizer-path writes by core ... collected' ≈ 250-300k per window), against 13-15k InvalidateGPUCache calls/s from fences alone. So the flag is often set, and maybe 20-40% of calls return early: ~3-6k/s × 0.4 us ≈ 1.2-2.4 ms/s ≈ 0.03-0.05 ms/frame. (2) ~2 ns × (~14k UBO binds + ~20k touches + ~1.2k reports + ~0.1k flushes) per frame ≈ 0.07 ms/frame.",
+     "evidence": "Fence skipped costs 1.9-2.2 us each (r50: 11.6 ms/5,302 and 16.8 ms/8,907), and InvalidateGPUCache is part of that. The comment in #1059 itself records the per-call cost of MSVC function statics.",
+     "sources": "(1) Original; the same guard upstream uses in DmaPusher and AccelerateDMA. (2) The pattern of upstream #1059 (81ee8c090, in tuned4) and #1095. A later, riskier step: drop InvalidateGPUCache from skipped fences entirely, since EXP35 already applies collected writes at command lists, acquires and DMA (memory.cpp:73-88). Do that only after item 1(e)'s counters show how often a skipped fence's gather finds writes.",
+     "effort": "S",
+     "risk": "low",
+     "how_to_measure": "Item 1(e)'s counters: calls with the flag clear, gathered empty, gathered with writes. Fence skipped ms/s before and after. No change in the 'Native bank check' compared/changed collected counts or in 'Uniform keeps' verify mismatches (EDEN_NX2_UBO_KEEP_VERIFY=1).",
+     "correctness_risks": "(1) None if every collector goes through CollectInPage/NoteCollected, which the grep confirms: memory.cpp:1083 is the only Collect caller. (2) A switch that moves from a function static to a global must still be read after nx2_switches.txt loads (re-read in VideoCore::CreateGPU, as ReadUniformStreamReuseSwitch does), or the user's settings file stops taking effect."
+    }
+   ]
+  }
+ ],
+ "plan": {
+  "ranked": [
+   {
+    "title": "Upstream #1216 last commit 9ad7c7cee: vertex stride words, render_enable addresses and back-macro DeferWords calls no longer end fast draws",
+    "verdict": "do-first",
+    "saving_ms": "1.0-1.8 (ceiling 2.7: ~600 targeted full draws/frame x 4.55 us; part of each gap breaks again elsewhere)",
+    "risk": "Low-medium. A missed break leaves a stale vertex binding or pipeline. Does not touch FSR 4, frame generation or the preparation stamp.",
+    "reason": "Not in tuned4 (git merge-base: 9ad7c7cee is not an ancestor of cd5482ece). tuned4's IsFastDrawVertexBuffer accepts only stream words 1-2 (maxwell_3d.cpp:414-420). Back-macro DeferWords breaks with Reason::Call (gpu_split.cpp:773-779). These are the two largest last-break causes in r50: deferred call 14.5k/s, 0x700 13.2k/s. It is upstream, so it is first under our policy. Keep our Writes::Caches argument. Derive g_dynamic_strides from the pipeline cache's has_dynamic_vertex_input (vk_pipeline_cache.cpp:827-829) rather than from the device alone, and log it once at boot. Verify with EDEN_NX2_FAST_DRAW_VERIFY=1 and EDEN_NX2_BACK_MACRO_VERIFY. The saving is an estimate: conversion depends on the other breaks in the same gap, which the break-mask counter will measure."
+   },
+   {
+    "title": "Break-mask counter for fast draws (every break class in a gap, not only the last) and a boot line for EDS, VIDS and g_dynamic_strides",
+    "verdict": "do-first",
+    "saving_ms": "0 (decides the yield of every fast-draw item)",
+    "risk": "None: profile-only",
+    "reason": "ReportFastDraws counts only g_last_break (vk_rasterizer.cpp:479-485, 664-685). In r50 the 'by last break' sums equal 'state changed' exactly, so the counter cannot tell how many draws a lever actually converts. Ship it in the same build as #1216, so the first run shows both the realised gain and the next target."
+   },
+   {
+    "title": "Fix the profile's own distortion: SampledScope for non-3D ring entries, plus per-kind entry counters. Make EDEN_DKB_FRAME_TRACE gpu_back_cpu_ms_per_frame the unprofiled metric",
+    "verdict": "do-first",
+    "saving_ms": "0 real; profiled 'method'/'other' read about 0.8-1.3 ms/frame too high",
+    "risk": "None",
+    "reason": "Under EDEN_NX2_GPU_PROFILE, CallMethod skips its WriteStateRegister shortcut (maxwell_3d.cpp:582-591, confirmed: `!VideoCommon::Nx2Profile::Enabled()` is in the condition). Non-3D entries also use a full Scope. Also, zones+other sum to wall time (nx2_profile.h:522-528). The '21.3 ms busy' figure is therefore the frame's wall time and includes split wait. At r50 452 s, 895 ms/s is non-idle at 40.5 fps, i.e. 22 ms/frame. Unprofiled DKB lines show gpu_back_cpu_ms_per_frame of 19.8-21.5 (r50) and 15.6-19.7 (r49). Judge every A/B on the unprofiled DKB number, not on profiled zone sums."
+   },
+   {
+    "title": "pin_gpu_threads=true A/B (setting only, no build)",
+    "verdict": "measure-first",
+    "saving_ms": "0-1.5 (unknown; it targets off-CPU time and cache warmth, which make up part of 'other')",
+    "risk": "Low. It is an existing setting, and guest cores get 4 P-cores plus the E-cores.",
+    "reason": "r50 places GPUBack, the front and VulkanWorker on the 6 P-cores and all six guest cores on P+E (14 processors) ('Core placement' lines). pin_gpu_threads is false (log line 151). With 6 P-cores it passes MinCoresForGpuThreadPinning=6 (core_pinning.h:26). On this power-limited 255H, nine busy threads competing for 6 P-cores is a plausible source of descheduling inside 'other' (2.1-2.6 ms). The owner can try it during the current test run. Compare the unprofiled gpu_back_cpu_ms_per_frame, fps and guest core ms/frame."
+   },
+   {
+    "title": "Upstream #1251 5100362a6f: split ring cache-line layout (alignas on write_position and back_engine)",
+    "verdict": "do-first",
+    "saving_ms": "0.2-0.7",
+    "risk": "None for correctness (layout only)",
+    "reason": "Confirmed in tuned4: gpu_split.h has system, ring and write_position as consecutive members with no alignas. Commit (gpu_split.h:665-673) writes write_position and last_entry_start on every entry. BackLoop reads `ring[index]` for each entry (gpu_split.cpp:866-871) around opaque Execute calls, so the back keeps pulling a line the front dirties. Not in tuned4 (ancestry check). The author's +3% comes from a small sample; I take the lower half of the estimate. It cannot be switched live, so judge it against the r50 baseline on the same route."
+   },
+   {
+    "title": "Trivial upstream/obvious quick wins: #1161 58144d258 (no FlushCommands after QueueFence), d5c9589d0 (memory usage reused for 50 ms), 0593fd75f (NativeImageHandles by reference), cccac7bb7 (flat TIC/TSC maps); early return from GPU::InvalidateGPUCache when !g_writes_collected",
+    "verdict": "do-first",
+    "saving_ms": "0.1-0.4 together (d5c9589d0 is the uncertain part: 0.02-0.5 depending on the AMD driver's budget query cost)",
+    "risk": "Low",
+    "reason": "None of these are in tuned4: fence_manager.h:133 still flushes after QueueFence, and gpu.cpp:117-147 always builds a std::function, locks and gathers. The InvalidateGPUCache early-out is equivalent to the existing `writes.empty()` return: the flag is cleared before the gather and set after every collect's CAS, and a concurrent caller would already have found nothing. Each item is a few lines. With only 5-30 empty flushes/s measured, 58144d258 alone is worth little. Bundle them and expect a total near noise level."
+   },
+   {
+    "title": "#717 BUFCACHE_CONTIG: test MaxContinuousRange before VirtualRangeCache::Query, unconditionally",
+    "verdict": "do-first",
+    "saving_ms": "0.15-0.5 (compute, plus graphics table pointers)",
+    "risk": "Low, if MaxContinuousRange is exact after Map/Unmap. EDEN_NX2_PERF_VERIFY already cross-checks it.",
+    "reason": "Since #1231 (in tuned4), read-only native bindings reach up to 1 GiB, so a Query miss walks thousands of pages (virtual_range_cache.h:59). Bindings are already clamped to MaxContinuousRange, so for them Query can return at most one segment, and the check gives an identical result. It is a single hunk of an open upstream PR. The r=0.67 regression is weak evidence, so ship it behind a TEST switch for one A/B and confirm it with compute sub-zones."
+   },
+   {
+    "title": "Compute sub-zones (Fritchii 753c422e13, diagnostic) plus compute record/FSR zones, pending-download length, Refresh calls and a 'Slow dispatch' line",
+    "verdict": "do-first",
+    "saving_ms": "0 (prerequisite for 1-2 ms of compute work)",
+    "risk": "None: profile-only",
+    "reason": "Compute is 2.3-3.4 ms/frame with no sub-zones (nx2_profile.h zone list). The dispatch memo, pending-download hull, dirty bitmap, Refresh rate-limit and DISPATCH_BATCH items all depend on knowing where the 12 us per-dispatch base goes. Keep the FSR 4 replacement in its own zone so it is never optimized blindly."
+   },
+   {
+    "title": "TEST zones for fence submit/commit, the idle hook, the deferred-call body, the fencing thread's buffer_cache.mutex hold, InvalidateGPUCache outcomes and the stream copy rate, plus a one-time startup probe of the write rate into the device-local stream buffer",
+    "verdict": "do-first",
+    "saving_ms": "0 (decides the fence, lock and stream-buffer items, ~1-2.5 ms claimed)",
+    "risk": "None: profile-only, apart from the one-off startup probe",
+    "reason": "Fence (made 6-8 us each), spin contention (17-82 ms/s) and 'other' (110-129 ms/s) have no sub-zones, and their claimed savings are inferences. Run EDEN_NX2_GPU_PROFILE=2 on the same build, which needs no extra code, for the cb upload, cb bind, query report, sink and draw queries split."
+   },
+   {
+    "title": "#1161 792e12a47, fast-draw half only: widen the closest range instead of overflowing, attribute formats as draw parameters with a type-class compare, handle checks on the handle words only",
+    "verdict": "do-later",
+    "saving_ms": "0.4-0.9",
+    "risk": "Medium: a wrong handle-word list means wrong textures; a format class compare missing a field means a wrong pipeline",
+    "reason": "Upstream, and not in tuned4. Take it after #1216 because their stride parts overlap. Prefer widening to raising MaxWrites to 64. Delta is ~540 B and is copied three times per draw (vk_rasterizer.cpp:464-466, nx2_fast_draw.h:121-133). At 64 entries that becomes ~6 KB of copies per draw, which costs about as much as the 2.3k/s overflows. Build B, behind a TEST switch, verified with FAST_DRAW_VERIFY and DELTA_DESCRIPTORS_VERIFY."
+   },
+   {
+    "title": "Raise Nx2FastDraw::Delta::MaxWrites from 16 to 64",
+    "verdict": "drop",
+    "saving_ms": "~0 net",
+    "risk": "Low correctness, negative performance",
+    "reason": "Overflow is only 2.3-2.8k/s (~50 draws/frame, ~0.2 ms). Quadrupling the struct that TakeReusableDraw copies three times per draw adds ~0.4-0.6 ms/frame across 2,000 draws. #1161's widen-on-full gets the gain without that cost."
+   },
+   {
+    "title": "#1274 FoldInstance part only (instance loops sent as one count)",
+    "verdict": "do-later",
+    "saving_ms": "0.15-0.3 on the back (more in profiled runs); some front relief",
+    "risk": "Low-medium: the fold must flush before every Reserve, Publish, Drain, WaitFor and FrontDmaRead, and be ordered against our FrontSkipsLoopWrite and #488 stores",
+    "reason": "Upstream, and not in tuned4. 0x586 runs at 384k/s, 377k/s of them same-value. Its handler only increments instance_count, so the saving is entry overhead, not 0.3-0.5 ms. The PR is one day old and its list-draw half overlaps our #805 Nx2ListIndirect, so take only FoldInstance. Build B, A/B with EDEN_NX2_FOLD_INSTANCES=0, verified with PERF_VERIFY and screenshots of Kokiri grass and the Castle Town crowd."
+   },
+   {
+    "title": "Bank check: skip unflagged pages in bulk with known/recheck/hot page bitsets and one mapped-size pass",
+    "verdict": "do-later",
+    "saving_ms": "0.25-0.4",
+    "risk": "Low-medium: a missed bit means a stale CB page (the EXP9 white flashes)",
+    "reason": "Correction to the earlier premise: Take already plain-loads first (gpu_dirty_memory_manager.h:240-250) and the map is already a node map. The per-page walk over ~89% skipped pages remains (buffer_cache.h:2940-3020). It is our own code on our EXP9 port, with an exact-equivalence check available (LICHII_BANK_CHECK=2, 'missed 0'). Build B, with the old loop behind a TEST switch."
+   },
+   {
+    "title": "#1161 reports/fences half (ReportOp without allocation, recycled fence op lists, vector FIFO for query ids, MayBeReadBackPage lock skip) plus #1099 c9f775dd0 with c0b8b7b51",
+    "verdict": "do-later",
+    "saving_ms": "0.15-0.3",
+    "risk": "Medium: our query_cache/fence_manager differ (fake occlusion, preflush, async read-back), and the lock skip sits next to the white-flash report path",
+    "reason": "Upstream, and not in tuned4. Our report lambda captures ~110 B, above MSVC's std::function small buffer, and fence_manager.h:125 reserves 64 operations after every made fence. Port it separately from the fast-draw half. Our extra captures (delayed_release, payload, OnDelayedReleaseDone) must survive the change. Verify with EDEN_NX2_READ_CHECK=1 and the Kokiri white-flash spots."
+   },
+   {
+    "title": "Per-draw trims: copy only the used Delta entries, run FlushCaching inside PrepareDraw's existing cache lock, latch OcarinaDlssEnabled once per frame",
+    "verdict": "do-later",
+    "saving_ms": "0.15-0.3",
+    "risk": "Low. FlushCaching must still run before draw_serial is read, and the FSR state latch may lag one frame after an FSR failure.",
+    "reason": "Own code. Confirmed: FlushCaching runs in the FlushWork scope (vk_rasterizer.cpp:815-818) before the scoped_lock on both caches, so the buffer mutex is taken twice per draw. The recursive spin lock makes nesting safe. The trackers feed FSR 4 and frame-generation motion, so their behaviour stays unchanged."
+   },
+   {
+    "title": "Eglantine b1e650849e / Fritchii EXP63: per-thread GPU page translation cache (switch read once, not getenv per lookup)",
+    "verdict": "do-later",
+    "saving_ms": "0.1-0.3 (kraibse: 0.39; ours is already two table reads, and more delta draws shrink it further)",
+    "risk": "Low-medium: every remap must bump map_serial",
+    "reason": "Fork-only, with a measured but small benefit. It overlaps the fast-draw gains: delta draws skip most translations. A/B it in build B only if it costs nothing else to add."
+   },
+   {
+    "title": "#1161 e05a72847: delta draws for pipelines with computed handles",
+    "verdict": "measure-first",
+    "saving_ms": "0.1-0.3 (more at the water)",
+    "risk": "Medium: handle programs whose inputs the re-evaluation misses give wrong textures",
+    "reason": "Upstream. tuned4 still blocks these pipelines (DeltaBlocker::ComputedHandles, vk_graphics_pipeline.cpp:455-485). Our count is only 1.4-4.1k/s, against #1161's 31k/s at the water. Take it if the break-mask run at Kokiri water shows a large count."
+   },
+   {
+    "title": "In-order pair blocks for macro state writes (#717 StateDelta shape, Fritchii RING_PAIRS ordering rules) plus the front-side drop of same-value compute plain writes (Fritchii COMPUTE_SINK)",
+    "verdict": "measure-first",
+    "saving_ms": "0.3-0.5 together unprofiled",
+    "risk": "Medium: ordering against Calls, FrontDmaRead and deferred-draw flushes; stale QMD fields if plain_sent is not reset on every front path",
+    "reason": "The structural option behind most of the 'method' and 'other' entry overhead. Fritchii has shipped it on by default since v5.5 and the owner played those builds, which lowers the risk somewhat. Fritchii's 10% slower steady play shows no fps benefit from it, though. Do it in build C only if profile=2's 'sink' zone and the per-kind counters show state-write entries cost what is estimated. Use only in-order blocks, never the deferred sink."
+   },
+   {
+    "title": "Fuse each CB select+data run into one front entry",
+    "verdict": "drop",
+    "saving_ms": "~0.1 after pair blocks (0.3-0.5 standalone)",
+    "risk": "Medium: FrontDmaRead needs each CB word noted at its own entry (Fritchii declined it for this reason)",
+    "reason": "The CB write work itself remains, and pair blocks take most of the entry savings with less risk."
+   },
+   {
+    "title": "One-entry destination-page cache for inline CB writes on the back",
+    "verdict": "measure-first",
+    "saving_ms": "0.2-0.35 (bounded by the 'cb upload' fine zone)",
+    "risk": "Low-medium: must key on MapSerial and the TIC/TSC registers, and keep the sparse and read-download checks per write",
+    "reason": "Own design. The estimate rests on reasoned per-call costs. Read the 'cb upload' zone under EDEN_NX2_GPU_PROFILE=2 first. If it is under ~0.5 ms/frame, drop it."
+   },
+   {
+    "title": "Compute dispatch resolve memo (a delta dispatch for repeated programs)",
+    "verdict": "measure-first",
+    "saving_ms": "0.4-0.8",
+    "risk": "Medium: stale bindings if the key misses a dependency. The FSR 4 replacement and Nx2ListIndirect dispatches must bypass it.",
+    "reason": "No upstream equivalent. The biggest compute lever: five programs make 95-145 of ~150 dispatches. Size it from the compute sub-zones (resolve vs record) and a 'memo key matches' counter first. Build C, with EDEN_NX2_DISPATCH_MEMO_VERIFY."
+   },
+   {
+    "title": "Pending-download hull fast-reject in MarkWrittenBuffer, ClearFenceDownloads and OutdateReadDownloads",
+    "verdict": "measure-first",
+    "saving_ms": "0.05-0.3",
+    "risk": "Low, if the hull is built from the copies actually recorded",
+    "reason": "N (pending sets per mark) is not logged. Build A's counter decides. Skip it if N is under ~20."
+   },
+   {
+    "title": "Compute UBO reuse (#717 COMPUTE_BINDCACHE) and rate-limited MasterSemaphore::Refresh after dispatches",
+    "verdict": "do-later",
+    "saving_ms": "0.03-0.2 together",
+    "risk": "Low",
+    "reason": "Small. Worth it only alongside other compute work once the sub-zones show the CB stream and Refresh costs."
+   },
+   {
+    "title": "Defer the list-copy submit after a dispatch (#717 DISPATCH_BATCH / Fritchii EXP27 bit 8) and the top-level dirty bitmap for 1 GiB read-only syncs",
+    "verdict": "measure-first",
+    "saving_ms": "0.03-0.4",
+    "risk": "Medium (front waits or stalls; a missed upload)",
+    "reason": "Fritchii keeps DISPATCH_BATCH off. Both depend on build A's submit-site and 'storage bytes bound' counters."
+   },
+   {
+    "title": "Batch submits forced by delayed (fence-flagged report) fences",
+    "verdict": "measure-first",
+    "saving_ms": "0.12-0.25 back, plus GPU render-pass savings",
+    "risk": "Medium: stall or deadlock if the back blocks inside an entry on a delayed operation. Fritchii keeps the immediate submit after a 24 s hang.",
+    "reason": "Plausible, since ~2.2k submits/s track ~2.8k delayed fences/s. Take it only if the 'fence submit' zone shows the submits are a large share of the fence zone, and test the GPU accuracy switch and scene loads."
+   },
+   {
+    "title": "Skip CommitCacheFlushes' cache locks via atomic 'has uncommitted' flags; shorten the fencing thread's buffer_cache.mutex hold during download landing",
+    "verdict": "measure-first",
+    "saving_ms": "0.05-0.3 (flags); 0.2-0.8 (landing hold)",
+    "risk": "Flags: low-medium (a missed writer site means stale reads). Landing restructure: high (white-flash class).",
+    "reason": "The back's spin contention is 0.35-1.7 ms/frame, but who holds the lock is an inference. Build A's lock-hold zone decides. Do the flags first. Do the landing restructure only if the fencing thread dominates contention."
+   },
+   {
+    "title": "Stream buffer in host memory over OCuLink (extend upstream #1156's placement rule with a measured write-rate test)",
+    "verdict": "measure-first",
+    "saving_ms": "0.4-0.7 if WC writes over Gen4 x4 are ~4-6 GB/s; ≤0.2 if above ~10 GB/s",
+    "risk": "Performance on the GPU side: UBOs and indices are read across the x4 link, and #1156 saw GPU busy rise 13%, which could push the GPU frame time with FSR 4 at 4K and frame generation over budget. No data risk.",
+    "reason": "Upstream base (#1156). The startup probe and the 'stream copy' zone in build A decide. A/B GPU frame time and back time together in build C."
+   },
+   {
+    "title": "Break fast draws for other engines only at engine switches and on executable methods",
+    "verdict": "measure-first",
+    "saving_ms": "0.05-0.25",
+    "risk": "Low-medium: a missed break means one wrong draw",
+    "reason": "Its value depends on how many of the 1.25 M/s non-3D entries are plain or sunk stores. The per-kind counter in build A answers that."
+   },
+   {
+    "title": "Delta draws after a real pipeline lookup for register-only breaks (second serial for texture-relevant state)",
+    "verdict": "measure-first",
+    "saving_ms": "0.3-1.0 after #1216/#1161",
+    "risk": "Medium: wrong textures if the second serial misses a texture-relevant register",
+    "reason": "Original and L effort. The break-mask histogram in build A shows how many gaps have only register breaks with the same pipeline. Consider it for build C only if that is ≥ ~100 draws/frame."
+   },
+   {
+    "title": "Allow delta draws across indexed/non-indexed or same-class topology changes",
+    "verdict": "measure-first",
+    "saving_ms": "0.1-0.16",
+    "risk": "Medium: primitive restart, point size and polygon offset depend on topology",
+    "reason": "Small. Needs the 'different kind' split from the break-mask counter."
+   },
+   {
+    "title": "Publish earlier when the back is idle (turn part of split wait into overlap)",
+    "verdict": "measure-first",
+    "saving_ms": "0.5-1.0 of wall time (the back does no less work)",
+    "risk": "Low-medium: more publishes cost the front",
+    "reason": "'publishes to an idle back late by 50 ms/s' (~1.3 ms/frame). The back is ~90% non-idle, so the remaining split wait lies directly on the frame's critical path. Revisit after #1251 and FoldInstance change the front's commit pattern."
+   },
+   {
+    "title": "Texture collector Finish at texture_cache.h:219 (upstream #1306/#1311, Fritchii EXP57)",
+    "verdict": "do-later",
+    "saving_ms": "~0.3 average; large for 1% lows",
+    "risk": "Low-medium",
+    "reason": "It does not move the average frame time much, but a consistent 60 fps needs the 4-7 ms hitches gone. Prefer the upstream PRs."
+   },
+   {
+    "title": "Function-local statics in hot paths turned into plain globals read once",
+    "verdict": "do-later",
+    "saving_ms": "~0.05-0.07",
+    "risk": "Low: switches must still be read after nx2_switches.txt loads",
+    "reason": "The #1059 pattern. A good small add-on to any build that touches those files."
+   },
+   {
+    "title": "Windows Segment Heap manifest (upstream #1242)",
+    "verdict": "do-later",
+    "saving_ms": "unknown (could be negative)",
+    "risk": "Performance only",
+    "reason": "No measured gain is available, and Segment Heap can be slower than LFH for small-allocation churn. Do one A/B in a build that already changes other things."
+   },
+   {
+    "title": "EDS3 blending (blend enable, clip control as draw parameters)",
+    "verdict": "drop",
+    "saving_ms": "0.3-0.5",
+    "risk": "High: changes every pipeline key, threatens the ~120k prepared pipelines and the preparation stamp, and AMD EDS3 blending has a mixed history (water, HUD, FSR final pass)",
+    "reason": "This conflicts with the 'prepare once and persist' work the owner prioritized. Revisit only on an explicit owner decision."
+   },
+   {
+    "title": "Eglantine f27522bfb9 / Fritchii EXP48 hot pages",
+    "verdict": "drop",
+    "saving_ms": "0.3-0.7",
+    "risk": "One-frame-stale CPU writes, by design",
+    "reason": "It violates our no-stale-data rule. Fritchii keeps it off."
+   },
+   {
+    "title": "#717 as a bundle, Fritchii EXP26/EXP28 fence and bank trims, EXP53, EXP61, #1131",
+    "verdict": "drop",
+    "saving_ms": "n/a",
+    "risk": "High or moot",
+    "reason": "Fritchii reverted EXP26 and EXP28 the same day. #1131's code no longer exists in tuned4. EXP61 is moot: only 5-30 empty flushes/s. EXP53 moves work onto the back. Take only the single #717 pieces listed above."
+   }
+  ],
+  "plan": [
+   "Now, during the owner's current test (no build): run one session on r50 with pin_gpu_threads=true against the usual setting, on the same route (Kokiri, Kokiri water, Castle Town, Hyrule Field). Use EDEN_DKB_FRAME_TRACE=1 without the GPU profile. Read gpu_back_cpu_ms_per_frame, fps, the guest_core_N_host_cpu_ms_per_frame values and the debug server's frame_times (seconds=30). If convenient, also do one 2-minute EDEN_NX2_GPU_PROFILE=2 run. Read the fine 'cb upload', 'cb bind', 'query report', 'sink', 'draw queries' and 'tick work' zones and the uniform counters ('GPU back thread per second'). These size the CB page cache and pair-block items.",
+   "Build A (r51), measurement plus low-risk upstream. Contents: #1216 9ad7c7cee behind a TEST switch (e.g. EDEN_NX2_TEST_1216=0 restores tuned4 behaviour), with a boot line for EDS/VIDS/g_dynamic_strides. The break-mask histogram and the 'different kind' split in ReportFastDraws. #1251 layout. Quick wins: 58144d258, d5c9589d0, 0593fd75f, cccac7bb7, and the InvalidateGPUCache early-out. #717 CONTIG behind EDEN_NX2_TEST_CONTIG=0. Profile fixes: SampledScope for non-3D entries and per-kind entry counters. Compute sub-zones (Fritchii 753c422e13) plus record/FSR zones, pending-download N, Refresh and submit-site counters, and a 'Slow dispatch' line. TEST zones: fence submit, fence commit, idle hook, deferred call, the fencing thread's lock hold, InvalidateGPUCache outcomes, stream copy bytes/ms, and a one-time stream-buffer write-rate log. Measure: (1) Unprofiled DKB run, TEST switches on vs off, live, same spots. gpu_back_cpu_ms_per_frame must fall versus r50 on the same route, with #1251 judged only against the r50 baseline. (2) Profiled run (EDEN_NX2_GPU_PROFILE=1): 'Fast draw per second' delta rate well above ~31k/s, 'deferred call' and 0x700/0x73c gone from 'by last break', 'prepare us per draw: all' below ~4.1. Read the new mask histogram, the compute sub-zones and the lock-hold and fence zones. (3) Correctness run: EDEN_NX2_FAST_DRAW_VERIFY=1 with EDEN_NX2_BACK_MACRO_VERIFY ('Fast draw verify per second' mismatches 0), plus EDEN_NX2_PERF_VERIFY=1 (no 'Nx2Perf mapping runs' errors). Check screenshots of water, the HUD and the FSR 4 final image through the debug server. Confirm that frame generation still presents and the preparation stamp is not re-run.",
+   "Build B (r52), the next fast-draw and per-draw tier, each behind a TEST switch for live A/B. Contents: #1161 792e12a47's fast-draw half (widen-on-full, attribute formats with a type-class compare, handle-word checks). #1274 FoldInstance only (EDEN_NX2_FOLD_INSTANCES=0). Bank-check bitsets, with the old loop behind a TEST switch. #1161's reports/fences half plus #1099 c9f775dd0+c0b8b7b51. Per-draw trims (Delta partial copy, FlushCaching under PrepareDraw's lock, the OcarinaDlssEnabled latch). EXP63 translation cache with its switch read once. e05a72847 only if build A's mask run shows ≥ ~2k/s computed-handle full draws at the water. Measure: the unprofiled DKB back ms/frame and fps per switch. Profiled: 'delta overflow' and 0x460-0x466 gone from 'by last break'; 'Instance fold per 2 s' present and 0x586 near the loop count in 'GPU back thread methods per second'; bank check ms/s about halved with identical 'Native bank check (mode 3, 10 s)' compared/changed rates; 'query report' fine zone and fence ms/s down. Correctness: LICHII_BANK_CHECK=2 'missed 0'; EDEN_NX2_READ_CHECK=1 'Read download check' 0 bytes differ; FAST_DRAW_VERIFY and DELTA_DESCRIPTORS_VERIFY mismatches 0; EDEN_NX2_UBO_KEEP_VERIFY=1 clean; the Kokiri white-flash spots and the crowded instanced scenes look correct.",
+   "Build C (r53), structural work chosen by the A/B data. Candidates, each taken only if its number from A/B qualifies. Pair blocks plus the compute same-value drop: if 'sink' plus state-write entries exceed ~0.5 ms/frame unprofiled; verify with SPLIT_VERIFY (compute check) and PERF_VERIFY. Dispatch memo: if compute resolve is ≥40% of a dispatch and the memo-key match rate is ≥50%; verify with EDEN_NX2_DISPATCH_MEMO_VERIFY, with FSR 4 and list dispatches bypassed. Delta-after-lookup: if the mask shows ≥ ~100 same-pipeline register-only gaps per frame. Stream buffer in host memory: if the probe shows a device write rate below ~8 GB/s; A/B both GPU frame time with FSR 4 and frame generation and the back's ms. Fence submit batching: if 'fence submit' is a large share of the fence zone. CommitCacheFlushes flags or the landing restructure: if the fencing thread's hold dominates the back's spin contention. The collector-Finish fix (#1306/#1311) for 1% lows. Proven switches then become unconditional, and the TEST switches never merge to nx2."
+  ],
+  "reachable": "Partly. The ~15 ms/frame target looks reachable in lighter gameplay, but not yet in the heaviest areas.\n\nWhat the back actually spends per frame:\n- The '18.4 / 21.3 ms busy' figures are wall time per game frame. Zones plus 'other' add up to wall time (nx2_profile.h:522-528), and split wait is included.\n- Unprofiled CPU (DKB gpu_back_cpu_ms_per_frame) is about 15.6-19.7 ms in r49 and 19.8-21.5 ms in r50 at 38-46 fps. Unprofiled play is also about 1 ms lighter than the profiled zones suggest.\n- Hitting 15 ms therefore means cutting about 1-4 ms in r49-type scenes and about 5-6.5 ms in r50's heavy windows (Castle Town, water).\n\nWhat the ranked items can deliver:\n- Builds A+B (do-first and do-later): about 3-5 ms after overlap. The fast-draw items overlap each other, and delta draws also shrink the uniform, bank-check and translation costs.\n- About 1-1.8 ms of that rests on #1216 converting as estimated, which build A's break-mask counter will confirm or refute.\n- That likely gets r49-type gameplay to about 13-15 ms. Heavy windows end up around 15-17 ms: close to 60 fps, but not a locked 60.\n\nWhat the heavy windows would need beyond that:\n- Closing them needs about 1-2 ms more from build C's structural items: pair blocks, the dispatch memo, delta-after-lookup and possibly the host-memory stream buffer. Each of those is unmeasured and medium risk.\n- The pin_gpu_threads A/B could also help, at no cost.\n\nEven if the back reaches 15 ms, a consistent 60 fps also requires:\n- the 4-7 ms collector Finish hitches to go (1% lows);\n- the GPU frame time with FSR 4 at 4K plus frame generation to fit in 16.7 ms;\n- the front's writer waits to shrink as the back speeds up, which they should.\n\nMy expectation: two builds give a clear step up, from about 45-50 to about 52-58 fps in typical play. A locked 60 everywhere is plausible only if build A's measurements show the conversion and lock-contention gains at the upper end of the estimates. Treat it as uncertain until then."
+ }
+}
