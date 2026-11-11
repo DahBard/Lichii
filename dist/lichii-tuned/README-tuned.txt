@@ -208,6 +208,19 @@ below), plus:
      the chain images left behind are freed after 4 frames, timed by a render-frame clock
      (Fritchii measured about +3 fps in Castle Town).
    verify-r20 checks these shortcuts against the slow way while you play.
+ * r50:
+   - The zero-page passes (#961: guest pages holding only zeros leave RAM) cost less. A page
+     check stops at its first non-zero bytes, a pass that finds little lets the next one wait
+     up to 5 minutes instead of 1, and every pass over 100 ms is logged with where its time
+     went ("Zero-page pass" lines). In r49 each pass took about 1.35 s and lined up with 1-2 s
+     of 25-30 ms frames. From Fritchii; ab-25 turns the passes off for comparison.
+   - Ocarina's water ripples keep running when a frame isn't a whole 1/60 s, with FPS Unlock
+     or Dynamic FPS (upstream Lichii's open pull request #1180). At 43-58 fps they ran at
+     72-97% speed; in frames shorter than 1/60 s they stopped, and the water's edge around
+     Link went jagged.
+   - perf-trace's "Scheduler per second" line also counts the GPU submissions with nothing
+     new in them, to see whether skipping them (Fritchii's EXP61) would help here.
+   - The first build optimized with your recorded Ocarina PGO profile.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -267,6 +280,10 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (EDEN_NX2_EXP43=0, EDEN_NX2_TC_COLD_FRAMES=0; the render-frame
                               clock stays on for the asynchronous shaders), logged like
                               perf-trace.bat
+ ab-25-no-zero-trim.bat       no zero-page passes (EDEN_NX2_ZERO_TRIM=0): pages holding only
+                              zeros stay in RAM (about 7 GB more in Ocarina), logged like
+                              perf-trace.bat: compare the frames around perf-trace's
+                              "Zero-page pass" lines and the 1% lows
  verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
                               verify ... differ", tombstone hits and the bank check's "without
                               the frame check (mode 3)" should stay 0); slower
@@ -306,8 +323,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
 
 Each start replaces the log, so copy it after every run you want to compare.
 
-The CachyOS (Linux) download of the same run has a .sh twin of each launcher and its own
-README-cachyos.md (no AMD FSR or AMD frame generation there: AMD's runtime is Windows-only).
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
 "Core placement:" line per thread, so you can check what each launcher did.
 
@@ -328,4 +343,9 @@ This build records which code your game runs, so the next "pgo" build can be opt
 It runs slower than the others; that is expected. Run lichii.exe from it, play Ocarina through
 a few typical areas for 10-15 minutes, then stop the game and close the emulator normally. It
 leaves lichii-pgo-<number>.profraw files next to lichii.exe (it also saves them every 30 s).
-Zip them and upload the zip to lichii-tuned/pgo in the fork; the next builds use them.
+Zip them and attach the zip to a new pre-release in the fork whose tag starts with "pgo-"
+(for example pgo-r49): GitHub > Releases > Draft a new release, target the tuned branch, and
+tick "Set as a pre-release". Zips over 25 MB are fine there; release files can be up to 2 GB.
+The next builds download every pgo-* release's zip and merge it with Lichii's own profile,
+weighted 4:1 toward the recorded game. If the compiler can't read an old profile, the build
+carries on with Lichii's own.
