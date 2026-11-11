@@ -230,12 +230,14 @@ below), plus:
    - Small upstream speedups: no second flush after each fence, the driver's memory budget asked
      at most every 50 ms, flat texture lookup tables, no copies of compute image handles; and
      no cache gather at fences when the CPU wrote nothing. ab-28 turns the switchable ones off.
-   - Upstream #717's check: compute bindings in one piece skip a page walk of up to 1 GiB.
+   - Upstream #717's check: storage bindings in one piece skip a page walk of up to 1 GiB.
      ab-27 turns it off.
    - More logging with perf-trace: which kinds of state change end repeat draws, compute
      dispatch steps and slow dispatches, fence and lock times, and a one-time "Stream buffer
      write rate" line. perf-trace-noprofile logs the frame trace alone, for the frame rate you
      actually get; verify-r51 checks the repeat draws and back macros against the slow way.
+     In profiled logs the back macros' 3D writes now count under "deferred call", not
+     "method", so compare those two zones with r50 only through the unprofiled frame times.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -302,7 +304,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-26-no-1216.bat            repeat draws end at stride words, render enable addresses and
                               back macro calls as in r50 (EDEN_NX2_TEST_1216=0); unprofiled:
                               compare with perf-trace-noprofile.bat
- ab-27-no-contig.bat          compute bindings in one piece walk the page tables again
+ ab-27-no-contig.bat          storage bindings in one piece walk the page tables again
                               (EDEN_NX2_TEST_CONTIG=0); unprofiled, compare with
                               perf-trace-noprofile.bat
  ab-28-no-quick-wins.bat      r51's switchable small speedups off (EDEN_NX2_TEST_QUICK=0);

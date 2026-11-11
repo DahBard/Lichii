@@ -5,6 +5,7 @@
 
 #include <glad/glad.h>
 
+#include "video_core/nx2_test_switches.h"
 #include "video_core/renderer_opengl/gl_buffer_cache.h"
 #include "video_core/renderer_opengl/gl_fence_manager.h"
 
@@ -50,7 +51,10 @@ Fence FenceManagerOpenGL::CreateFence(bool is_stubbed) {
 void FenceManagerOpenGL::QueueFence(Fence& fence) {
     fence->Queue();
     // Vulkan's fences submit when queued; here the commands before the fence are flushed.
-    rasterizer.FlushCommands();
+    // TEST: with EDEN_NX2_TEST_QUICK=0 the fence manager flushes after the fence instead.
+    if (VideoCommon::Nx2Test::QuickWins()) {
+        rasterizer.FlushCommands();
+    }
 }
 
 bool FenceManagerOpenGL::IsFenceSignaled(Fence& fence) const {

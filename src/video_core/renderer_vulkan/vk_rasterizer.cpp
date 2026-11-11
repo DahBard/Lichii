@@ -559,32 +559,32 @@ void RasterizerVulkan::InitFastDrawBreakClasses() {
             FastDraw::g_register_class[method] = value;
         }
     };
-    using enum FastDraw::BreakClass;
+    using Class = FastDraw::BreakClass;
     set(MAXWELL3D_REG_INDEX(vertex_attrib_format), sizeof(Regs::vertex_attrib_format),
-        AttributeFormat);
-    set(MAXWELL3D_REG_INDEX(blend), sizeof(Regs::blend), Blend);
-    set(MAXWELL3D_REG_INDEX(blend_per_target), sizeof(Regs::blend_per_target), Blend);
+        Class::AttributeFormat);
+    set(MAXWELL3D_REG_INDEX(blend), sizeof(Regs::blend), Class::Blend);
+    set(MAXWELL3D_REG_INDEX(blend_per_target), sizeof(Regs::blend_per_target), Class::Blend);
     set(MAXWELL3D_REG_INDEX(blend_per_target_enabled), sizeof(Regs::blend_per_target_enabled),
-        Blend);
-    set(MAXWELL3D_REG_INDEX(blend_color), sizeof(Regs::blend_color), Blend);
-    set(MAXWELL3D_REG_INDEX(color_mask), sizeof(Regs::color_mask), Blend);
-    set(MAXWELL3D_REG_INDEX(color_mask_common), sizeof(Regs::color_mask_common), Blend);
-    set(MAXWELL3D_REG_INDEX(pipelines), sizeof(Regs::pipelines), Program);
+        Class::Blend);
+    set(MAXWELL3D_REG_INDEX(blend_color), sizeof(Regs::blend_color), Class::Blend);
+    set(MAXWELL3D_REG_INDEX(color_mask), sizeof(Regs::color_mask), Class::Blend);
+    set(MAXWELL3D_REG_INDEX(color_mask_common), sizeof(Regs::color_mask_common), Class::Blend);
+    set(MAXWELL3D_REG_INDEX(pipelines), sizeof(Regs::pipelines), Class::Program);
     set(MAXWELL3D_REG_INDEX(viewport_transform), sizeof(Regs::viewport_transform),
-        ViewportScissor);
-    set(MAXWELL3D_REG_INDEX(viewports), sizeof(Regs::viewports), ViewportScissor);
-    set(MAXWELL3D_REG_INDEX(scissor_test), sizeof(Regs::scissor_test), ViewportScissor);
+        Class::ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(viewports), sizeof(Regs::viewports), Class::ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(scissor_test), sizeof(Regs::scissor_test), Class::ViewportScissor);
     set(MAXWELL3D_REG_INDEX(viewport_clip_control), sizeof(Regs::viewport_clip_control),
-        ViewportScissor);
-    set(MAXWELL3D_REG_INDEX(rt), sizeof(Regs::rt), RenderTarget);
-    set(MAXWELL3D_REG_INDEX(rt_control), sizeof(Regs::rt_control), RenderTarget);
-    set(MAXWELL3D_REG_INDEX(zeta), sizeof(Regs::zeta), RenderTarget);
-    set(MAXWELL3D_REG_INDEX(zeta_size), sizeof(Regs::zeta_size), RenderTarget);
-    set(MAXWELL3D_REG_INDEX(zeta_enable), sizeof(Regs::zeta_enable), RenderTarget);
-    set(MAXWELL3D_REG_INDEX(surface_clip), sizeof(Regs::surface_clip), RenderTarget);
+        Class::ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(rt), sizeof(Regs::rt), Class::RenderTarget);
+    set(MAXWELL3D_REG_INDEX(rt_control), sizeof(Regs::rt_control), Class::RenderTarget);
+    set(MAXWELL3D_REG_INDEX(zeta), sizeof(Regs::zeta), Class::RenderTarget);
+    set(MAXWELL3D_REG_INDEX(zeta_size), sizeof(Regs::zeta_size), Class::RenderTarget);
+    set(MAXWELL3D_REG_INDEX(zeta_enable), sizeof(Regs::zeta_enable), Class::RenderTarget);
+    set(MAXWELL3D_REG_INDEX(surface_clip), sizeof(Regs::surface_clip), Class::RenderTarget);
     constexpr u32 stream_words = sizeof(Regs::VertexStream) / sizeof(u32);
     for (u32 stream = 0; stream < Regs::NumVertexArrays; ++stream) {
-        classes[MAXWELL3D_REG_INDEX(vertex_streams) + stream * stream_words] = Stride;
+        classes[MAXWELL3D_REG_INDEX(vertex_streams) + stream * stream_words] = Class::Stride;
     }
     FastDraw::g_break_masks.store(VideoCommon::Nx2Profile::Enabled(), std::memory_order_relaxed);
 }
