@@ -266,16 +266,19 @@ below), plus:
    - r52's per-draw trims and per-thread GPU page translations are off: neither gained anything
      in r53 and r54, so ab-33 and ab-34 are gone and the code goes next round. Until then
      EDEN_NX2_TEST_DRAW_TRIMS=1 or EDEN_NX2_TEST_XLATE_CACHE=1 turns one back on.
-   - The log names every TEST switch and whether it is on ("TEST switches in effect:", when the
-     GPU starts), so a launcher whose switch did not take effect shows there.
+   - The log names every TEST switch, and the A/B launchers' other switches (instance folding,
+     zero-page passes, kernel spinning), and whether each is on ("TEST switches in effect:", when
+     the GPU starts), so a launcher whose switch did not take effect shows there.
    - Draws no longer read the clock for a time only perf-trace and the verify launchers log
      (two reads a draw, about 4,000 a frame).
    - Heap trace: in the second area after a load the same build runs 24-44 fps from session to
      session, because the game's 550-715 memory maps and unmaps a second cost the host 143-342
-     microseconds each. perf-trace, perf-trace-fine, perf-trace-noprofile, ab-26, ab-36 and
-     ab-37 now log where that time goes every 10 s ("MapPhysicalMemory per second" and
-     "UnmapPhysicalMemory per second" lines: the lock wait, zero fill, page table and Windows
-     mapping times, page faults, and the RAM free and commit charge; EDEN_NX2_HEAP_TRACE=1).
+     microseconds each. perf-trace, perf-trace-fine, perf-trace-noprofile and the unprofiled A/B
+     launchers (ab-26 to ab-37) now log where that time goes every 10 s ("MapPhysicalMemory per
+     second" and "UnmapPhysicalMemory per second" lines: the lock wait, allocation (with the
+     memory it committed), zero fill, page table and Windows mapping times (with the regions
+     mapped per call), the freeing of unmapped pages, page faults, the RAM free and commit
+     charge, and what the trace itself costs; EDEN_NX2_HEAP_TRACE=1).
    - perf-trace splits its "publishes to an idle back late by" time by why the words waited.
    - verify-r55 checks the repeat draws while they run; ab-37 is ab-20 (no kernel spinning)
      without the profile, for the laptop's power limit.
@@ -413,10 +416,10 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (LICHII_TRACE_DRAWS_EVERY=4)
  perf-trace-fine.bat          perf-trace.bat plus the fine zones and counters
                               (EDEN_NX2_GPU_PROFILE=2): slower, for where the time goes
- perf-trace-noprofile.bat     default settings with only the frame trace (EDEN_DKB_FRAME_TRACE=1):
-                              gpu_back_cpu_ms_per_frame and frame times without the zones'
-                              cost; the baseline for ab-26 to ab-37. Since r55 with the heap
-                              trace (EDEN_NX2_HEAP_TRACE=1), as ab-26, ab-36 and ab-37
+ perf-trace-noprofile.bat     default settings with only the frame and heap traces
+                              (EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_HEAP_TRACE=1; the heap trace
+                              since r55): gpu_back_cpu_ms_per_frame and frame times without the
+                              zones' cost; the baseline for ab-26 to ab-37, which log the same
  frame-times.bat              default settings with only each frame's time logged
                               (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
