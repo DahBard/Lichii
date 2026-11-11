@@ -512,12 +512,16 @@ inline void CountRegisterWrite(u32 method, bool same) {
 }
 
 /// Compute dispatches on this thread by program (shader hash); the most frequent are logged
-/// with the zones.
-inline thread_local std::unordered_map<u64, u64> t_compute_programs;
+/// with the zones. Function-local: MinGW's ThinLTO link drops the initialization routine an
+/// inline thread_local map needs.
+[[nodiscard]] inline std::unordered_map<u64, u64>& ComputePrograms() {
+    thread_local std::unordered_map<u64, u64> programs;
+    return programs;
+}
 
 inline void CountComputeProgram(u64 shader_hash) {
     if (Enabled()) {
-        ++t_compute_programs[shader_hash];
+        ++ComputePrograms()[shader_hash];
     }
 }
 
@@ -808,10 +812,10 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
                  rate(Counter::LandingChecksDispatch), rate(Counter::LandingChecksDraw),
                  rate(Counter::ListCopySubmits));
     }
-    if (!t_compute_programs.empty()) {
+    if (auto& program_counts = ComputePrograms(); !program_counts.empty()) {
         std::vector<std::pair<u64, u64>> programs; // count, shader hash
-        programs.reserve(t_compute_programs.size());
-        for (const auto& [hash, count] : t_compute_programs) {
+        programs.reserve(program_counts.size());
+        for (const auto& [hash, count] : program_counts) {
             programs.emplace_back(count, hash);
         }
         const size_t top = (std::min<size_t>)(programs.size(), 8);
@@ -825,7 +829,7 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
         text.pop_back();
         LOG_INFO(HW_GPU, "{} compute programs per second ({} programs, top {}):{}", thread_name,
                  programs.size(), top, text);
-        t_compute_programs.clear();
+        program_counts.clear();
     }
     t_method_count = {};
     t_method_same = {};
