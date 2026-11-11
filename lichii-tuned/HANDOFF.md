@@ -1318,6 +1318,7 @@ Own changes:
     device budget bounds the thresholds', #1210); #1236 refreshed a reused range at an area
     load; #1231's compute bindings past 8 MiB.
   - No device loss and no new errors: the nx2:gsv 903 and prepo:u 10500 stubs were in r48 too.
+  - Owner: no ocarina crackle, no white patches after area changes, nothing wrong noticed.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
