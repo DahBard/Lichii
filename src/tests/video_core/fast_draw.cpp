@@ -514,10 +514,14 @@ TEST_CASE("Fast draw breaks on a release that signals a fence", "[fast_draw]") {
     u64 serial = FastDraw::Serial();
     f.Write(query, 0); // long release: recorded as a memory write
     CHECK(FastDraw::Serial() == serial);
+    // Apart from the release's 16 bytes: #1161's list merges a range that overlaps another.
+    f.Write(MAXWELL3D_REG_INDEX(report_semaphore.address_low), 0x30100);
     f.Write(query, short_query | report_only); // a short report signals nothing
     CHECK(FastDraw::Serial() == serial);
     REQUIRE(FastDraw::g_delta.num_writes == 2);
-    CHECK(FastDraw::g_delta.write_end[1] == 0x30004);
+    CHECK(FastDraw::g_delta.write_end[0] == 0x30010);
+    CHECK(FastDraw::g_delta.write_begin[1] == 0x30100);
+    CHECK(FastDraw::g_delta.write_end[1] == 0x30104);
     f.Write(query, short_query); // short release: a fence
     CHECK(FastDraw::Serial() != serial);
 }

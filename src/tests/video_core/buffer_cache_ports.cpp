@@ -1036,8 +1036,11 @@ TEST_CASE("Native uniform banks mark only changed pages and keep GPU-owned bytes
     Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
     REQUIRE(f.runtime.uploads == uploads);
     REQUIRE(Access::CpuMarks(*f.cache) == 16);
-    // A write the tracker missed is found on the next bind, and only its page is marked.
+    // A write the tracker missed is found on the next bind, and only its page is marked. Such
+    // writes are collected by the dirty memory managers, which flag the page (mode 3, the
+    // default, compares only pages a reason applies to).
     std::memset(f.bytes + 0x13000, 0x77, 0x1000);
+    Core::g_collected_write_pages.Mark(0x23000, 0x1000);
     Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
     REQUIRE(Access::CpuMarks(*f.cache) == 17);
     REQUIRE(f.runtime.upload_bytes == 0x11000);
