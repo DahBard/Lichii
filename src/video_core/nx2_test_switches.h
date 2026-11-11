@@ -21,4 +21,11 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_CONTIG=0 restores tuned4's VirtualRangeCache::Query for storage bindings
+/// that lie in one device range (BufferCache::ResolveMultiRangeStorage).
+[[nodiscard]] inline bool ContiguousResolve() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_CONTIG");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test

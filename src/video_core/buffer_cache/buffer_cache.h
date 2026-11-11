@@ -34,6 +34,7 @@
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_test_switches.h"
 #include "video_core/oot_network.h"
 #include "video_core/rasterizer_download_area.h"
 #include "video_core/texture_cache/util.h"
@@ -2864,6 +2865,13 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
             return;
         }
         if (is_written && !runtime.PrefersSparseSources()) {
+            return;
+        }
+        // One device range (the mapping runs, no page walk) is one segment: nothing to gather.
+        // Since #1231 read-only native bindings reach up to 1 GiB, and a Query miss walks every
+        // page of them (upstream #717's EDEN_NX2_BUFCACHE_CONTIG).
+        if (VideoCommon::Nx2Test::ContiguousResolve() &&
+            gpu_memory->MaxContinuousRange(binding.gpu_addr, binding.size) >= binding.size) {
             return;
         }
         const VirtualSegments* found =
