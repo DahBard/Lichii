@@ -273,12 +273,13 @@ below), plus:
      (two reads a draw, about 4,000 a frame).
    - Heap trace: in the second area after a load the same build runs 24-44 fps from session to
      session, because the game's 550-715 memory maps and unmaps a second cost the host 143-342
-     microseconds each. perf-trace, perf-trace-fine, perf-trace-noprofile and the unprofiled A/B
-     launchers (ab-26 to ab-37) now log where that time goes every 10 s ("MapPhysicalMemory per
-     second" and "UnmapPhysicalMemory per second" lines: the lock wait, allocation (with the
-     memory it committed), zero fill, page table and Windows mapping times (with the regions
-     mapped per call), the freeing of unmapped pages, page faults, the RAM free and commit
-     charge, and what the trace itself costs; EDEN_NX2_HEAP_TRACE=1).
+     microseconds each. perf-trace, perf-trace-fine, perf-trace-noprofile, the unprofiled A/B
+     launchers (ab-26 to ab-37) and ab-25 (no zero-page passes, one suspect) now log where that
+     time goes every 10 s ("MapPhysicalMemory per second" and "UnmapPhysicalMemory per second"
+     lines: the lock wait, allocation (with the memory it committed), zero fill, page table and
+     Windows mapping times (with the regions mapped per call), the freeing of unmapped pages,
+     page faults, the RAM free and commit charge, and what the trace itself costs;
+     EDEN_NX2_HEAP_TRACE=1).
    - perf-trace splits its "publishes to an idle back late by" time by why the words waited.
    - verify-r55 checks the repeat draws while they run; ab-37 is ab-20 (no kernel spinning)
      without the profile, for the laptop's power limit.
@@ -344,7 +345,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-25-no-zero-trim.bat       no zero-page passes (EDEN_NX2_ZERO_TRIM=0): pages holding only
                               zeros stay in RAM (about 7 GB more in Ocarina), logged like
                               perf-trace.bat: compare the frames around perf-trace's
-                              "Zero-page pass" lines and the 1% lows
+                              "Zero-page pass" lines, the 1% lows and the heap trace's lines
  ab-26-no-1216.bat            repeat draws end at stride words, render enable addresses and
                               back macro calls as in r50 (EDEN_NX2_TEST_1216=0); unprofiled:
                               compare with perf-trace-noprofile.bat
