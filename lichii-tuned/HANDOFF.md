@@ -1737,6 +1737,39 @@ Own changes:
        - the .dmp is again 0 bytes (r53 still had the old flags).
        It looks like one texture the game places at the top of guest memory at a scene load.
        r54 has the fix.
+   - Build B logs (r53: ab29-ab35, perf-trace, verify-r52; r54: noprofile, fine). Workflow
+     `w2kwfrehr` with a skeptic; the follow-up with the r54 baseline is `wr7fp8z10`.
+     - Correct. verify-r52 found:
+       - bank: 1,669,120 binds, 0 missed, 0 bitsets missed;
+       - read downloads: 127, 0 bytes differ;
+       - fast draw: 720,136 draws, 0 mismatches;
+       - texture memo and geometry: 0.
+       - The delta-descriptor and UBO-keep verifies were vacuous: FAST_DRAW_VERIFY leaves no
+         delta draws.
+       - No device loss or faults, memory traces, rejections or image failures.
+       - New only in ab35: 16 'Read64 of unmapped GPU address' lines at one load (two addresses),
+         probably content.
+     - Not faster than build A: B-A +0.26..+0.46 ms/frame of back CPU (fits and pairs; profiled
+       +0.07..+0.24), inside the 0.2-0.6 ms that separates A's own sessions. The r54 all-on run
+       (15.99 ms at 2000 draws/frame, 20.28 at 3000) matches the one-off consensus.
+     - Every switch's back interval includes 0 (|effect| < ~0.5 ms):
+       - #1161 draws: attribute-format and overflow breaks went to 0; delta share 37% -> 46%;
+         state-changed full draws 662 -> 428 per frame at 2000 draws. But full draws cost
+         6.48 -> 7.42 us and delta draws +0.13-0.28 us.
+       - Bank bitsets: the bank check zone -0.21 ms/frame (CI -0.30..-0.10), the only clear back
+         saving.
+       - FoldInstance: front -0.3 ms (weak evidence).
+       - Trims: moved 0.31 ms from flush work into draw, net 0.
+       - Reports, translation cache: noise.
+       - #1306: 'halves Finish waits' is unsupported.
+     - Lesson: 'full draws converted x (full - delta cost)' over-predicts by >1 ms, because
+       fast-draw gains reappear as dearer full draws. The 1-1.5 ms estimated for #16 is
+       unsupported.
+     - 60 fps needs back <= ~13 ms. It runs 13.7 ms in steady medium play (1670 draws/frame),
+       16.0 at 2000 and 20.3 at 3000.
+     - Build C: #28 fails (13-43 register-only gaps per frame against 100); #20 stays rejected;
+       #26 qualifies only by the literal probe rule (the fine profile's stream copy is ~2 ms/s:
+       see the follow-up).
    - ab-25 (EDEN_NX2_ZERO_TRIM=0, r54, profiled, 223 s): the zero-page trim does not cause
      hitches. Keep it on.
      - In runs with trims, frames within 2 s of a pass look worse (r53 perf-trace: 14% over
