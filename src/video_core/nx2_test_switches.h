@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include <cstdlib>
+
+namespace VideoCommon::Nx2Test {
+
+/// TEST: on unless the variable is "0". Read on first use and kept: the frontend has applied
+/// nx2_switches.txt by then.
+[[nodiscard]] inline bool SwitchOn(const char* name) {
+    const char* const value = std::getenv(name);
+    return value == nullptr || value[0] != '0';
+}
+
+/// TEST: EDEN_NX2_TEST_QUICK=0 restores tuned4's flush after queueing a fence, its device
+/// memory usage query on every call and InvalidateGPUCache's gather with nothing collected.
+[[nodiscard]] inline bool QuickWins() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_QUICK");
+    return on;
+}
+
+} // namespace VideoCommon::Nx2Test

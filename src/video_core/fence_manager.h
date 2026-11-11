@@ -31,6 +31,7 @@
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_frame_fence.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_test_switches.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace VideoCommon {
@@ -130,6 +131,9 @@ public:
             func();
         }
         fences.push(std::move(new_fence));
+        if (should_flush && !VideoCommon::Nx2Test::QuickWins()) {
+            rasterizer.FlushCommands(); // TEST: EDEN_NX2_TEST_QUICK=0
+        }
         if constexpr (can_async_check) {
             guard.unlock();
             cv.notify_all();

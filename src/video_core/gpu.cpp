@@ -32,6 +32,7 @@
 #include "video_core/engines/kepler_memory.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/nx2_test_switches.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
 #include "video_core/pending_maps.h"
@@ -115,6 +116,13 @@ struct GPU::Impl {
 
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache() {
+        // Nothing collected since the last gather began: every collect sets the flag after its
+        // write is recorded, and the gather clears it before it reads them (as
+        // DmaPusher::ApplyCollectedWrites checks it).
+        if (!Core::g_writes_collected.load(std::memory_order_acquire) &&
+            VideoCommon::Nx2Test::QuickWins()) {
+            return;
+        }
         // Gathered first so the rasterizer takes each cache's lock once, not once per range: the
         // CPU's write traps hold them too.
         std::vector<std::pair<DAddr, u64>> writes;

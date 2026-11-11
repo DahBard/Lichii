@@ -135,6 +135,7 @@ add_library(video_core STATIC
     nx2_entry_check.h
     nx2_fast_draw.cpp
     nx2_fast_draw.h
+    nx2_test_switches.h
     nx2_frame_fence.h
     nx2_list_indirect.h
     nx2_list_indirect_stats.h
