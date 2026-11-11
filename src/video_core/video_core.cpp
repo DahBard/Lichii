@@ -16,6 +16,9 @@
 #include "core/device_memory.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/hle/kernel/k_address_arbiter.h"
+#include "core/hle/kernel/k_spin_lock.h"
+#include "core/hle/kernel/kernel.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -61,12 +64,13 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
     }
 }
 
-/// Every TEST switch as the code applies it, once the renderer latched its own: a launcher whose
-/// switch did not take effect shows here, not as a null A/B result.
+/// Every TEST switch, and the other switches the A/B launchers set, as the code applies them, once
+/// the renderer latched its own: a launcher whose switch did not take effect shows here, not as a
+/// null A/B result.
 void LogTestSwitches(const Core::System& system) {
     namespace Test = VideoCommon::Nx2Test;
     namespace FastDraw = VideoCommon::Nx2FastDraw;
-    const std::array<std::pair<const char*, bool>, 12> switches{{
+    const std::array<std::pair<const char*, bool>, 14> switches{{
         {"EDEN_NX2_TEST_QUICK", Test::QuickWins()},
         {"EDEN_NX2_TEST_CONTIG", Test::ContiguousResolve()},
         {"EDEN_NX2_TEST_1161_DRAWS", FastDraw::g_test_1161_draws.load(std::memory_order_relaxed)},
@@ -79,6 +83,9 @@ void LogTestSwitches(const Core::System& system) {
         {"EDEN_NX2_TEST_1216", FastDraw::g_test_1216.load(std::memory_order_relaxed)},
         {"EDEN_NX2_FOLD_INSTANCES", Tegra::Engines::Maxwell3D::FoldInstancesEnabled()},
         {"EDEN_NX2_ZERO_TRIM", system.DeviceMemory().ZeroTrimRunning()},
+        {"EDEN_NX2_KSPIN", Kernel::Nx2Wait::Enabled()},
+        {"EDEN_NX2_ARB_SPIN",
+         Kernel::ArbSpinMicroseconds() != 0 && system.Kernel().IsMulticore()},
     }};
     std::string line;
     for (const auto& [name, on] : switches) {

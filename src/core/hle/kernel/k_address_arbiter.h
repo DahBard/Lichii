@@ -21,6 +21,10 @@ namespace Kernel {
 
 class KernelCore;
 
+/// EDEN_NX2_ARB_SPIN: microseconds a thread about to wait on an address first watches the word
+/// (default 8; 0 turns it off).
+s64 ArbSpinMicroseconds();
+
 class KAddressArbiter {
 public:
     using ThreadTree = KConditionVariable::ThreadTree;

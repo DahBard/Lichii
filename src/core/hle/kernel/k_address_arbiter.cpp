@@ -33,6 +33,17 @@ KAddressArbiter::KAddressArbiter(Core::System& system_)
 {}
 KAddressArbiter::~KAddressArbiter() = default;
 
+s64 ArbSpinMicroseconds() {
+    static const s64 microseconds = [] {
+        const char* value = std::getenv("EDEN_NX2_ARB_SPIN");
+        if (value == nullptr || value[0] == '\0') {
+            return s64{8};
+        }
+        return (std::max)(s64{0}, static_cast<s64>(std::strtoll(value, nullptr, 10)));
+    }();
+    return microseconds;
+}
+
 namespace {
 
 bool ReadFromUser(KernelCore& kernel, s32* out, KProcessAddress address) {
@@ -131,19 +142,6 @@ bool UpdateIfEqual(KernelCore& kernel, s32* out, KProcessAddress address, s32 va
     // We're done.
     *out = current_value;
     return true;
-}
-
-/// EDEN_NX2_ARB_SPIN: microseconds a thread about to wait on an address first watches the word
-/// (default 8; 0 turns it off).
-s64 ArbSpinMicroseconds() {
-    static const s64 microseconds = [] {
-        const char* value = std::getenv("EDEN_NX2_ARB_SPIN");
-        if (value == nullptr || value[0] == '\0') {
-            return s64{8};
-        }
-        return (std::max)(s64{0}, static_cast<s64>(std::strtoll(value, nullptr, 10)));
-    }();
-    return microseconds;
 }
 
 /// Guest job systems hand work between threads through these waits many times a frame, and the
