@@ -1727,6 +1727,17 @@ Own changes:
        walking the placeholders. cbe51e88a drops that flag, falls back to a plain dump, logs the
        memory layout at boot, and adds a unit test.
      - These ship as r54 (build B + fix).
+     - Run #54 passed (15:19 UTC): `lichii-tuned-r54-pgo-lto`, `-pgo` and `-pgo-train`. Unit
+       tests run 5: all 1225 test cases pass, including the new host-split GetSpan and unswizzle
+       test.
+     - The owner tests r54 instead of r53. The plan, with r53's launchers:
+       - perf-trace-noprofile;
+       - ab-29;
+       - ab-30;
+       - perf-trace;
+       - a perf-trace-fine.bat the owner creates (EDEN_NX2_GPU_PROFILE=2, to decide #17, #19
+         and #26);
+       - verify-r52.
    - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
      preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
      EXP26/28/53/61, #1131.
