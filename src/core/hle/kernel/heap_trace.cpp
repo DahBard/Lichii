@@ -12,6 +12,8 @@
 
 #include "common/host_memory.h"
 #include "common/logging.h"
+#include "core/core.h"
+#include "core/device_memory.h"
 #include "core/hle/kernel/heap_trace.h"
 #include "core/hle/kernel/k_thread.h"
 
@@ -59,8 +61,11 @@ struct Totals {
     u64 total_ns{};
     u64 lock_ns{};
     std::array<u64, PhaseCount> phase_ns{};
+    u64 host_regions{};
     u64 faults{};
     u64 zero_filled{};
+    u64 committed{};
+    u64 trace_ns{};
     std::vector<u64> call_ns;
 };
 
@@ -90,6 +95,10 @@ void LogTotals(Direction direction, Totals& totals, double seconds, const std::s
     const auto phase = [&totals](Phase which) {
         return totals.phase_ns[static_cast<size_t>(which)];
     };
+    const auto per_call = [&totals](u64 count) {
+        return totals.calls == 0 ? 0.0
+                                 : static_cast<double>(count) / static_cast<double>(totals.calls);
+    };
     u64 p50 = 0;
     u64 p99 = 0;
     u64 longest = 0;
@@ -105,23 +114,28 @@ void LogTotals(Direction direction, Totals& totals, double seconds, const std::s
     std::string parts = fmt::format("lock wait {:.1f} ms", ms(totals.lock_ns));
     if (map) {
         const u64 zero_ns = phase(Phase::ZeroFill);
-        parts += fmt::format(", allocation {:.1f} ms, zero fill {:.1f} ms ({:.1f} MiB at {:.2f} "
-                             "GB/s)",
-                             ms(phase(Phase::Allocate)), ms(zero_ns),
+        parts += fmt::format(", allocation {:.1f} ms", ms(phase(Phase::Allocate)));
+#ifdef _WIN32
+        // EDEN_NX2_SEC_RESERVE commits guest memory the first time the heap hands it out.
+        parts += fmt::format(" ({:.1f} MiB committed)", MiB(totals.committed) / seconds);
+#endif
+        parts += fmt::format(", zero fill {:.1f} ms ({:.1f} MiB at {:.2f} GB/s)", ms(zero_ns),
                              MiB(totals.zero_filled) / seconds,
                              zero_ns == 0 ? 0.0
                                           : static_cast<double>(totals.zero_filled) /
                                                 static_cast<double>(zero_ns));
     }
-    parts += fmt::format(", page table {:.1f} ms, host {} {:.1f} ms, other {:.1f} ms",
+    parts += fmt::format(", page table {:.1f} ms, host {} {:.1f} ms ({:.1f} regions per call)",
                          ms(phase(Phase::PageTable)), map ? "map" : "unmap",
-                         ms(phase(Phase::Host)), ms(other));
+                         ms(phase(Phase::Host)), per_call(totals.host_regions));
+    if (!map || phase(Phase::Free) != 0) {
+        parts += fmt::format(", free {:.1f} ms", ms(phase(Phase::Free)));
+    }
+    parts += fmt::format(", other {:.1f} ms; trace overhead {:.2f} ms", ms(other),
+                         ms(totals.trace_ns));
 #ifdef _WIN32
     parts += fmt::format(" | page faults during calls {:.1f} per call, {:.0f}/s",
-                         totals.calls == 0 ? 0.0
-                                           : static_cast<double>(totals.faults) /
-                                                 static_cast<double>(totals.calls),
-                         static_cast<double>(totals.faults) / seconds);
+                         per_call(totals.faults), static_cast<double>(totals.faults) / seconds);
 #endif
     LOG_INFO(HW_Memory,
              "{} per second (EDEN_NX2_HEAP_TRACE, {:.1f} s): {:.0f} calls for {:.1f} MiB ({:.1f} "
@@ -192,24 +206,30 @@ void Call::Begin(KernelCore& kernel, Direction direction, u64 bytes, const size_
     mapped_size = &mapped;
     mapped_before = mapped;
     call_direction = direction;
+    host_regions = 0;
     call_bytes = bytes;
     phase_ns = {};
     thread = GetCurrentThreadPointer(kernel);
     if (thread->m_nx2_heap_trace_call == nullptr) {
         thread->m_nx2_heap_trace_call = this;
     }
+    host_memory = &kernel.System().DeviceMemory().buffer;
     faults_before = ReadProcessCounters().faults;
     zero_filled_before = Common::HostMemory::ZeroFilledBytes();
+    committed_before = host_memory->GetCommitStats().committed_bytes;
+    trace_ns = NowNs() - locked_ns;
 }
 
 void Call::End() {
     const u64 end_ns = NowNs();
     const ProcessCounters counters = ReadProcessCounters();
     const u64 zero_filled = Common::HostMemory::ZeroFilledBytes() - zero_filled_before;
+    const u64 committed = host_memory->GetCommitStats().committed_bytes - committed_before;
     const u64 mapped_after = *mapped_size;
     if (thread->m_nx2_heap_trace_call == this) {
         thread->m_nx2_heap_trace_call = nullptr;
     }
+    const u64 call_ns = end_ns - start_ns - trace_ns;
     std::scoped_lock lock{g_window.mutex};
     if (g_window.start_ns == 0) {
         g_window.start_ns = start_ns;
@@ -223,14 +243,18 @@ void Call::End() {
     totals.bytes += call_bytes;
     totals.changed += mapped_after > mapped_before ? mapped_after - mapped_before
                                                    : mapped_before - mapped_after;
-    totals.total_ns += end_ns - start_ns;
+    totals.total_ns += call_ns;
     totals.lock_ns += locked_ns - start_ns;
     for (size_t phase = 0; phase < PhaseCount; ++phase) {
         totals.phase_ns[phase] += phase_ns[phase];
     }
+    totals.host_regions += host_regions;
     totals.faults += static_cast<u32>(counters.faults - faults_before);
     totals.zero_filled += zero_filled;
-    totals.call_ns.push_back(end_ns - start_ns);
+    totals.committed += committed;
+    totals.call_ns.push_back(call_ns);
+    // Begin's reads, then this function's and its wait for the lock.
+    totals.trace_ns += trace_ns + (NowNs() - end_ns);
     if (end_ns >= g_window.start_ns + WindowNs) {
         LogWindow(end_ns, counters);
     }
@@ -246,6 +270,9 @@ void Phases::Begin(KernelCore& kernel) {
 void Phases::EndSlow(Phase phase) {
     const u64 now = NowNs();
     call->phase_ns[static_cast<size_t>(phase)] += now - since;
+    if (phase == Phase::Host) {
+        ++call->host_regions;
+    }
     since = now;
 }
 

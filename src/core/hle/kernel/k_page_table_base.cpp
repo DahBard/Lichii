@@ -5750,7 +5750,10 @@ Result KPageTableBase::Operate(PageLinkedList* page_list, KProcessAddress virt_a
         // Ensure that any pages we track are closed on exit.
         KPageGroup pages_to_close(m_system.Kernel(), this->GetBlockInfoManager());
         SCOPE_EXIT {
+            // EDEN_NX2_HEAP_TRACE: for a traced UnmapPhysicalMemory.
+            HeapTrace::Phases trace{m_system.Kernel()};
             pages_to_close.CloseAndReset(m_system.Kernel());
+            trace.End(HeapTrace::Phase::Free);
         };
 
         // Make a page group representing the region to unmap.

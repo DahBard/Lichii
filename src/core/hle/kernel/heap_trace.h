@@ -8,6 +8,10 @@
 
 #include "common/common_types.h"
 
+namespace Common {
+class HostMemory;
+}
+
 namespace Kernel {
 
 class KernelCore;
@@ -23,12 +27,13 @@ namespace HeapTrace {
 enum class Direction : u8 { Map, Unmap };
 
 /// Parts of a call, timed in the functions that do them; the line has the lock wait and the rest
-/// (block bookkeeping, the trace's own counter reads) too.
+/// (block bookkeeping) too. The trace's own counter reads are timed apart and left out.
 enum class Phase : u8 {
     Allocate,  ///< KMemoryManager::AllocateForProcess: pages taken from the heap (and committed)
     ZeroFill,  ///< KMemoryManager::AllocateForProcess: pages that may hold data cleared
     PageTable, ///< Memory: the emulated page table's entries
-    Host,      ///< Memory: the pages' fastmem view mapped or unmapped (HostMemory)
+    Host,      ///< Memory: the pages' fastmem view mapped or unmapped (HostMemory), per region
+    Free,      ///< KPageTableBase::Operate: unmapped pages' references closed (and pages freed)
     Count,
 };
 
@@ -75,13 +80,17 @@ private:
     const size_t* mapped_size{}; ///< Set while traced
     // Set by Begin, so that an untraced call stores nothing else.
     KThread* thread; ///< The guest thread making the call
+    const Common::HostMemory* host_memory;
     Direction call_direction;
+    u32 host_regions; ///< Host maps or unmaps (Phase::Host)
     u64 call_bytes;
     u64 mapped_before;
     u64 start_ns;
     u64 locked_ns;
+    u64 trace_ns; ///< Begin's own reads, left out of the call's time
     u32 faults_before;
     u64 zero_filled_before;
+    u64 committed_before;
     std::array<u64, static_cast<size_t>(Phase::Count)> phase_ns;
 };
 
