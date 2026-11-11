@@ -405,10 +405,11 @@ bool Maxwell3D::IsFastDrawReportOperand(u32 method) {
     case MAXWELL3D_REG_INDEX(report_semaphore.address_high):
     case MAXWELL3D_REG_INDEX(report_semaphore.address_low):
     case MAXWELL3D_REG_INDEX(report_semaphore.payload):
+        return true;
     // Only the render_enable.mode method reads them.
     case MAXWELL3D_REG_INDEX(render_enable.address_high):
     case MAXWELL3D_REG_INDEX(render_enable.address_low):
-        return true;
+        return VideoCommon::Nx2FastDraw::g_test_1216.load(std::memory_order_relaxed);
     default:
         return false;
     }
@@ -456,7 +457,8 @@ void Maxwell3D::ProcessMethodCall(u32 method, u32 argument, u32 nonshadow_argume
         // A fence-flagged release signals a fence: never neutral for the fast draw path.
         const bool neutral =
             IsFastDrawNeutralMethod(method) &&
-            !(method == MAXWELL3D_REG_INDEX(report_semaphore.query) &&
+            !(VideoCommon::Nx2FastDraw::g_test_1216.load(std::memory_order_relaxed) &&
+              method == MAXWELL3D_REG_INDEX(report_semaphore.query) &&
               regs.report_semaphore.query.operation == Regs::ReportSemaphore::Operation::Release &&
               regs.report_semaphore.query.short_query != 0);
         if (!neutral) {
@@ -2213,7 +2215,9 @@ bool Maxwell3D::FrontRunOnBack(Core::System& system, VideoCommon::GpuSplit& spli
         // or not, as any method does. Its writes (BackWritable) touch registers and the caches,
         // not guest memory.
         fs.parameters, VideoCommon::GpuSplit::Writes::Caches,
-        VideoCommon::GpuSplit::FastDrawNeutral);
+        VideoCommon::Nx2FastDraw::g_test_1216.load(std::memory_order_relaxed)
+            ? VideoCommon::GpuSplit::FastDrawNeutral
+            : 0);
     fs.sink_pending = false; // The back macro consumes the sink before it runs.
     const u64 position = split.Position();
     fs.back_last = position;

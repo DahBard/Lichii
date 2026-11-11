@@ -150,6 +150,10 @@ public:
 
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
 
+    [[nodiscard]] const DynamicFeatures& GetDynamicFeatures() const noexcept {
+        return dynamic_features;
+    }
+
     /// EDEN_NX2_ASYNC_TRANSLATE: joins the translation threads and retires what they made. For
     /// the emulation's shutdown once the GPU threads stopped (GPU::NotifyShutdown), before the
     /// guest's GPU address spaces the translations read are destroyed.

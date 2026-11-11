@@ -444,10 +444,22 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       frame_dump(device, memory_allocator, scheduler) {
     scheduler.SetQueryCache(query_cache);
-    VideoCommon::Nx2FastDraw::g_dynamic_strides.store(
-        device.IsExtExtendedDynamicStateSupported() &&
-            device.IsExtVertexInputDynamicStateSupported(),
-        std::memory_order_relaxed);
+    {
+        // The pipelines' own features: has_dynamic_vertex_input includes the setting.
+        const DynamicFeatures& features = pipeline_cache.GetDynamicFeatures();
+        const char* const test_1216 = std::getenv("EDEN_NX2_TEST_1216");
+        const bool test = test_1216 == nullptr || test_1216[0] != '0';
+        const bool dynamic_strides =
+            test && features.has_extended_dynamic_state && features.has_dynamic_vertex_input;
+        VideoCommon::Nx2FastDraw::g_test_1216.store(test, std::memory_order_relaxed);
+        VideoCommon::Nx2FastDraw::g_dynamic_strides.store(dynamic_strides,
+                                                          std::memory_order_relaxed);
+        LOG_INFO(Render_Vulkan,
+                 "Fast draws: extended dynamic state {}, dynamic vertex input {}, dynamic strides "
+                 "{} (EDEN_NX2_TEST_1216 {})",
+                 features.has_extended_dynamic_state, features.has_dynamic_vertex_input,
+                 dynamic_strides, test ? "on" : "off");
+    }
     buffer_cache.SetPendingCpuWrites(
         [this](const std::function<void(DAddr, size_t)>& callback) {
             gpu.ForEachPendingCpuWrite(callback);

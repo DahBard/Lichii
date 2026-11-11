@@ -72,6 +72,10 @@ inline std::atomic<bool> g_enabled{true};
 /// stride change then leaves the pipeline as it is.
 inline std::atomic<bool> g_dynamic_strides{false};
 
+/// TEST: EDEN_NX2_TEST_1216=0 (read by the renderer) keeps the breaks from before upstream
+/// #1216's stride, render enable and back macro call changes.
+inline std::atomic<bool> g_test_1216{true};
+
 /// Tests only.
 inline void SetEnabledForTest(bool on) {
     g_enabled.store(on, std::memory_order_relaxed);
