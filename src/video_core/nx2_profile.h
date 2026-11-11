@@ -83,6 +83,20 @@ enum class Zone : u32 {
     ComputeSync,     ///< Buffers synchronized and bound (BindHostComputeBuffers)
     ComputeRecord,   ///< The dispatch recorded, early downloads, list copies submitted
     ComputeFsr,      ///< The Ocarina upscaler replacement (TryOcarinaDlss: FSR 4)
+    // Of compute synchronize (BindHostComputeBuffers): what its time is made of.
+    ComputeSyncUniforms, ///< Its uniform buffers (streamed or synchronized)
+    ComputeSyncStorage,  ///< Its storage buffers
+    ComputeSyncTexels,   ///< Its texture and image buffers
+    ComputeSyncUpload,   ///< TEST fine: of those, buffers synchronized (SynchronizeBuffer)
+    ComputeWriteMarks,   ///< TEST fine: of those, written ranges marked (MarkWrittenBuffer)
+    // Of compute FSR (TryOcarinaDlss): what its time is made of.
+    FsrDepth,    ///< The scene depth found and the upscale's images checked
+    FsrActors,   ///< Link's and the moving objects' poses read (ReadOcarinaActors)
+    FsrOverlays, ///< The actors' motion overlays prepared (pose uploads, descriptor sets)
+    FsrPasses,   ///< The motion and colour input passes recorded
+    FsrUpscale,  ///< FSR 4's evaluation recorded (the FidelityFX upscaler)
+    FsrFrameGen, ///< AMD frame generation's inputs (HUD passes, AmdFrameGen::Prepare)
+    FsrOutput,   ///< The output pass into the game's image
     // TEST: of fence and other, what their time is made of.
     FenceSubmit,  ///< Of fence: queueing the fence and the deferred submit (QueueFence, Flush)
     FenceCommit,  ///< Of fence and fence skipped: CommitCacheFlushes with its two cache locks
@@ -127,6 +141,10 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "writer wait", "list submit wait", "list GPU wait", "acquire poll", "resnapshot",
     "compute lookup", "compute pointers", "compute views", "compute resolve",
     "compute synchronize", "compute record", "compute FSR",
+    "compute sync uniforms", "compute sync storage", "compute sync texels",
+    "compute sync upload", "compute write marks",
+    "FSR depth", "FSR actors", "FSR overlays", "FSR passes", "FSR upscale", "FSR frame gen",
+    "FSR output",
     "fence submit", "fence commit", "idle hook", "deferred call",
     "cb bind", "cb upload", "query report", "counter reset", "render enable", "sink",
     "macro end", "draw setup", "draw queries", "tick work", "geometry buffers",

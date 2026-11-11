@@ -103,7 +103,22 @@ namespace {
 struct DispatchProbe {
     static constexpr size_t FirstZone = static_cast<size_t>(VideoCommon::Nx2Profile::Zone::ComputeLookup);
     static constexpr size_t Zones =
+        static_cast<size_t>(VideoCommon::Nx2Profile::Zone::FsrOutput) + 1 - FirstZone;
+    /// The line's columns: the compute zones up to FSR, with the zones that split synchronize
+    /// and FSR counted in theirs.
+    static constexpr size_t Columns =
         static_cast<size_t>(VideoCommon::Nx2Profile::Zone::ComputeFsr) + 1 - FirstZone;
+    static constexpr size_t Column(size_t zone) {
+        using VideoCommon::Nx2Profile::Zone;
+        const size_t index = FirstZone + zone;
+        if (index >= static_cast<size_t>(Zone::FsrDepth)) {
+            return static_cast<size_t>(Zone::ComputeFsr) - FirstZone;
+        }
+        if (index >= static_cast<size_t>(Zone::ComputeSyncUniforms)) {
+            return static_cast<size_t>(Zone::ComputeSync) - FirstZone;
+        }
+        return zone;
+    }
 
     static DispatchProbe Take() {
         namespace Profile = VideoCommon::Nx2Profile;
@@ -151,11 +166,13 @@ void ReportSlowDispatch(const DispatchProbe& start, u64 shader_hash) {
     // The zones count time stamp ticks: converted with this dispatch's own ticks per ns.
     const double us_per_tick = static_cast<double>(elapsed_ns) / 1e3 /
                                static_cast<double>((std::max<u64>)(end.ticks - start.ticks, 1));
-    std::array<double, DispatchProbe::Zones> us{};
+    std::array<double, DispatchProbe::Columns> us{};
     double zoned{};
-    for (size_t zone = 0; zone < us.size(); ++zone) {
-        us[zone] = static_cast<double>(end.zones[zone] - start.zones[zone]) * us_per_tick;
-        zoned += us[zone];
+    for (size_t zone = 0; zone < DispatchProbe::Zones; ++zone) {
+        const double zone_us =
+            static_cast<double>(end.zones[zone] - start.zones[zone]) * us_per_tick;
+        us[DispatchProbe::Column(zone)] += zone_us;
+        zoned += zone_us;
     }
     const double total_us = static_cast<double>(elapsed_ns) / 1e3;
     LOG_INFO(Render_Vulkan,
@@ -4086,6 +4103,9 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
         }
         return false;
     };
+    // EDEN_NX2_GPU_PROFILE: of compute FSR, finding the depth and checking the images.
+    std::optional<VideoCommon::Nx2Profile::Scope> depth_scope;
+    depth_scope.emplace(VideoCommon::Nx2Profile::Zone::FsrDepth);
     if (oot_camera_sample_frame != render_trace_frame) {
         return fail("no scene camera this frame");
     }
@@ -4190,9 +4210,13 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
         MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, true, target.format).format != output_format) {
         return fail("unsupported storage format");
     }
+    depth_scope.reset();
     // Without Link's pose the mesh stays empty and the motion comes from the camera alone.
     std::vector<OcarinaActorMesh> meshes;
-    ReadOcarinaActors(meshes);
+    {
+        const VideoCommon::Nx2Profile::Scope actors_scope{VideoCommon::Nx2Profile::Zone::FsrActors};
+        ReadOcarinaActors(meshes);
+    }
     try {
         const auto target_view =
             target.StorageView(Shader::TextureType::Color2D, Shader::ImageFormat::Typeless, false);

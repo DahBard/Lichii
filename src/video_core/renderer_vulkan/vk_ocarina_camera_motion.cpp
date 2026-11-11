@@ -20,6 +20,7 @@
 #include "video_core/host_shaders/ocarina_hud_mask_comp_spv.h"
 #include "video_core/host_shaders/ocarina_hud_motion_comp_spv.h"
 #include "video_core/host_shaders/ocarina_hud_depth_comp_spv.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
@@ -947,6 +948,10 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
     // camera alone.
     ActorDraws overlays;
     ++state.actor_frame;
+    // EDEN_NX2_GPU_PROFILE: of compute FSR, the steps below.
+    namespace Profile = VideoCommon::Nx2Profile;
+    std::optional<Profile::Scope> step_scope;
+    step_scope.emplace(Profile::Zone::FsrOverlays);
     if (!meshes.empty()) {
         constexpr u32 MaxDraws = 128; // 64 characters and 64 moving objects
         if (!state.actor_renderer) {
@@ -1069,6 +1074,7 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
         });
     }
 
+    step_scope.emplace(Profile::Zone::FsrPasses);
     state.scheduler.RequestOutsideRenderPassOperationContext();
     state.queue.Acquire(state.scheduler, 2);
     state.queue.AddSampledImage(depth, sampler);
@@ -1084,6 +1090,7 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
     const bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
                        !std::ranges::equal(previous, state.last_view_projection,
                                            [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    step_scope.emplace(Profile::Zone::FsrUpscale);
     if (!state.upscaler->Upscale({
             .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,
                       VK_IMAGE_ASPECT_COLOR_BIT},
@@ -1103,6 +1110,7 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
     }
     // AMD frame generation reads the same depth and motion for the frame it generates, without
     // motion where the HUD sits (FSR 4 above needed the scene's motion there).
+    step_scope.emplace(Profile::Zone::FsrFrameGen);
     bool hud_depth = false;
     if (AmdFrameGen::SwapchainActive()) {
         // The mask is at the output size, the motion and depth at the scene's (smaller when the
@@ -1152,6 +1160,7 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
     });
     // A resize can submit the inputs before recording evaluation, so keep the later tick.
     resources.tick = state.scheduler.CurrentTick();
+    step_scope.emplace(Profile::Zone::FsrOutput);
     if (target) {
         state.queue.Acquire(state.scheduler, 2);
         const bool same_size = output_extent.width == target_extent.width &&

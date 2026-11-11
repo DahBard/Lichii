@@ -1782,11 +1782,16 @@ void BufferCache<P>::BindHostStageBuffers(size_t stage) {
 
 template <class P>
 void BufferCache<P>::BindHostComputeBuffers() {
-    BindHostComputeUniformBuffers();
+    {
+        const Nx2Profile::Scope uniforms_scope{Nx2Profile::Zone::ComputeSyncUniforms};
+        BindHostComputeUniformBuffers();
+    }
     if (channel_state->enabled_compute_storage_buffers != 0) {
+        const Nx2Profile::Scope storage_scope{Nx2Profile::Zone::ComputeSyncStorage};
         BindHostComputeStorageBuffers();
     }
     if (channel_state->enabled_compute_texture_buffers != 0) {
+        const Nx2Profile::Scope texels_scope{Nx2Profile::Zone::ComputeSyncTexels};
         BindHostComputeTextureBuffers();
     }
     if (any_buffer_uploaded) {
@@ -3378,7 +3383,10 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
             }
         }
 
-        SynchronizeBuffer(buffer, binding.device_addr, size);
+        {
+            const Nx2Profile::FineScope upload_scope{Nx2Profile::Zone::ComputeSyncUpload}; // TEST
+            SynchronizeBuffer(buffer, binding.device_addr, size);
+        }
 
         buffer.MarkUsage(offset, size);
         if constexpr (!IS_OPENGL) {
@@ -3427,7 +3435,10 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
         Buffer& buffer = slot_buffers[binding.buffer_id];
         TouchBuffer(buffer, binding.buffer_id);
         const u32 size = binding.size;
-        SynchronizeBuffer(buffer, binding.device_addr, size);
+        {
+            const Nx2Profile::FineScope upload_scope{Nx2Profile::Zone::ComputeSyncUpload}; // TEST
+            SynchronizeBuffer(buffer, binding.device_addr, size);
+        }
 
         const u32 offset = buffer.Offset(binding.device_addr);
         buffer.MarkUsage(offset, size);
@@ -3435,6 +3446,7 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
         const u32 mark =
             is_written ? static_cast<u32>(std::min<u64>(size, write_mark_limit)) : 0;
         if (mark != 0) {
+            const Nx2Profile::FineScope marks_scope{Nx2Profile::Zone::ComputeWriteMarks}; // TEST
             MarkWrittenBuffer(binding.buffer_id, binding.device_addr, mark, true,
                               GpuWaitStats::WriteSite::ComputeStorage);
         }
@@ -3454,11 +3466,15 @@ void BufferCache<P>::BindHostComputeTextureBuffers() {
         const TextureBufferBinding& binding = channel_state->compute_texture_buffers[index];
         Buffer& buffer = slot_buffers[binding.buffer_id];
         const u32 size = binding.size;
-        SynchronizeBuffer(buffer, binding.device_addr, size);
+        {
+            const Nx2Profile::FineScope upload_scope{Nx2Profile::Zone::ComputeSyncUpload}; // TEST
+            SynchronizeBuffer(buffer, binding.device_addr, size);
+        }
 
         const bool is_written =
             ((channel_state->written_compute_texture_buffers >> index) & 1) != 0;
         if (is_written) {
+            const Nx2Profile::FineScope marks_scope{Nx2Profile::Zone::ComputeWriteMarks}; // TEST
             MarkWrittenBuffer(binding.buffer_id, binding.device_addr, size, false,
                               GpuWaitStats::WriteSite::ComputeTexel);
         }
