@@ -242,11 +242,18 @@ void WriteDump(EXCEPTION_POINTERS* pointers, const wchar_t* path) {
         return;
     }
     const ExceptionInformation information{GetCurrentThreadId(), pointers, FALSE};
-    // Unloaded modules, thread times and start addresses, thread info and the memory map; not
-    // MiniDumpWithIndirectlyReferencedMemory, which failed on Eden's address space.
-    constexpr int flags = 0x20 | 0x100 | 0x800 | 0x1000;
-    write(GetCurrentProcess(), GetCurrentProcessId(), file, flags,
-          pointers != nullptr ? &information : nullptr, nullptr, nullptr);
+    const void* const exception = pointers != nullptr ? &information : nullptr;
+    // Unloaded modules, thread times and start addresses and thread info. Not
+    // MiniDumpWithIndirectlyReferencedMemory, which failed on Eden's address space, nor
+    // MiniDumpWithFullMemoryInfo: walking the reserved placeholders stopped every thread for
+    // ~15 s and still wrote nothing (r52). A plain dump (all threads' stacks) if this fails.
+    constexpr int flags = 0x20 | 0x100 | 0x1000;
+    if (!write(GetCurrentProcess(), GetCurrentProcessId(), file, flags, exception, nullptr,
+               nullptr)) {
+        SetFilePointer(file, 0, nullptr, FILE_BEGIN);
+        SetEndOfFile(file);
+        write(GetCurrentProcess(), GetCurrentProcessId(), file, 0, exception, nullptr, nullptr);
+    }
     CloseHandle(file);
 }
 

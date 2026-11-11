@@ -32,6 +32,10 @@
 #include "video_core/native_qmd.h"
 #include "video_core/nx2.h"
 #include "video_core/renderer_null/null_rasterizer.h"
+#include "video_core/surface.h"
+#include "video_core/texture_cache/image_info.h"
+#include "video_core/texture_cache/util.h"
+#include "video_core/textures/decoders.h"
 
 namespace VideoCommon {
 
@@ -458,6 +462,79 @@ TEST_CASE("GpuSplit CB batching respects device remaps within GPU big pages",
         REQUIRE(engine->regs.const_buffer.offset == 8);
     }
     f.Compare();
+}
+
+TEST_CASE("GPU spans stop where device pages leave contiguous host memory",
+          "[video_core][maxwell_fast_method][memory_manager]") {
+    // A range contiguous in device memory but split in host memory (the r52 crash: the in-place
+    // unswizzle read such a range from its first page's pointer). GetSpan must refuse it.
+    Fixture f;
+    f.system.Initialize();
+    Kernel::KProcess process{f.system.Kernel()};
+    SCOPE_EXIT { f.system.Kernel().UnregisterKernelObject(&process); };
+    auto& table = process.GetPageTable().GetImpl();
+    table.Resize(20, 12);
+    auto* backing = f.physical.GetPointerFromRaw<u8>(0x10000);
+    auto* replacement = f.physical.GetPointerFromRaw<u8>(0x30000);
+    for (u64 page = 0; page < 16; ++page) {
+        table.entries.GetAndFault(4 + page)
+            .Store(false, Common::PageType::Memory, 1,
+                   reinterpret_cast<uintptr_t>(backing) - 0x4000);
+    }
+    table.entries.GetAndFault(0x20).Store(false, Common::PageType::Memory, 1,
+                                        reinterpret_cast<uintptr_t>(replacement) - 0x20000);
+    process.GetMemory().SetCurrentPageTable(process);
+    const auto asid = f.device_memory.RegisterProcess(&process.GetMemory());
+    f.device_memory.BindInterface(&f.rasterizer);
+    SCOPE_EXIT {
+        f.device_memory.Unmap(0x10000, 0x10000);
+        f.device_memory.UnregisterProcess(asid);
+    };
+    f.device_memory.Map(0x10000, 0x4000, 0x10000, asid, true);
+    f.memory.BindRasterizer(&f.rasterizer);
+    f.memory.Map(0x100000, 0x10000, 0x10000, Tegra::PTEKind::PITCH, true);
+    REQUIRE(f.memory.GetSpan(0x100000, 0x3000) == backing);
+
+    f.device_memory.Unmap(0x11000, 0x1000);
+    f.device_memory.Map(0x11000, 0x20000, 0x1000, asid, true);
+    REQUIRE(f.memory.IsContinuousRange(0x100000, 0x3000));
+    REQUIRE(f.memory.GetPointer(0x101000) == replacement);
+    CHECK(f.memory.GetSpan(0x100000, 0x3000) == nullptr);
+    CHECK(f.memory.GetSpan(0x100000, 0x1000) == backing);
+    CHECK(f.memory.GetSpan(0x101000, 0x1000) == replacement);
+    CHECK(f.memory.GetSpan(0x102000, 0x2000) == backing + 0x2000);
+
+    // A texture whose first band of blocks (8 KiB) runs across the moved page: its upload reads
+    // the moved page, not the memory after the first page.
+    for (u32 i = 0; i < 0x10000; ++i) {
+        backing[i] = static_cast<u8>(i * 7 + 1);
+    }
+    for (u32 i = 0; i < 0x1000; ++i) {
+        replacement[i] = static_cast<u8>(i * 13 + 5);
+    }
+    VideoCommon::ImageInfo info;
+    info.type = VideoCommon::ImageType::e2D;
+    info.format = VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM;
+    info.size = {256, 16, 1};
+    info.block = {0, 0, 0};
+    info.resources = {1, 1};
+    const std::array range{std::pair<u64, u64>{0, 0x4000}};
+    const auto plan = VideoCommon::PlanUnswizzleImageRows(0x100000, info, range);
+    REQUIRE(plan.layout_valid);
+    REQUIRE(!plan.runs.empty());
+    std::vector<u8> expected(plan.total_host_bytes);
+    std::vector<u8> actual(plan.total_host_bytes);
+    std::vector<u8> guest;
+    for (const auto& run : plan.runs) {
+        guest.resize(run.guest_bytes);
+        f.memory.ReadBlockUnsafe(run.src_addr, guest.data(), run.guest_bytes);
+        const auto out = std::span{expected}.subspan(run.host_offset, run.host_bytes);
+        Tegra::Texture::UnswizzleTexture(out, guest, 1U << plan.bpp_log2, run.run_tiles,
+                                         run.tile_rows, 1, run.block.height, run.block.depth,
+                                         run.run_alignment, f.memory.UsesNativeTiling());
+    }
+    VideoCommon::ExecuteUnswizzlePlan(f.memory, plan, actual);
+    CHECK(actual == expected);
 }
 
 TEST_CASE("GpuSplit dispatch preserves mapped uploads and macro boundaries",

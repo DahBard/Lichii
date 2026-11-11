@@ -310,6 +310,10 @@ public:
                      "kernel hands it out",
                      backing_size >> 20);
         }
+        // So that a crash address can be placed: in guest memory, past its end, or in fastmem.
+        LOG_INFO(HW_Memory, "Guest memory at {} ({} MiB), fastmem view at {} ({} GiB)",
+                 static_cast<const void*>(backing_base), backing_size >> 20,
+                 static_cast<const void*>(virtual_base), virtual_size >> 30);
         return true;
     }
 
