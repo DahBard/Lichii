@@ -1668,7 +1668,46 @@ Own changes:
        Profiled: r52 19.9 (median 17.2) vs r50 21.0 (median 19.0).
      - Dynamic strides are on (EDS and VIDS). The stream buffer takes 5.6-5.7 GB/s over OCuLink,
        against 33-37 GB/s into host memory.
-     - The full analysis is workflow `wb5xmbo0v`.
+     - Full analysis: workflow `wb5xmbo0v` (four analysts, a synthesis and a skeptic who
+       recomputed every number; scripts in the session scratchpad).
+       - Correct: verify-r51 resolved 510,316 delta draws in full with 0 mismatches. 0 device loss,
+         faults, memory traces or shader rejections in all five logs. BACK_MACRO_VERIFY=64 only
+         covered the 64 title-screen calls of macro 0x142.
+       - #1216 is neutral: +0.14-0.2 ms/frame of back CPU (95% interval includes 0), front
+         +0.27 ms. It removed the breaks it targeted: deferred-call breaks went from 3-16k/s to
+         47-128/s and 0x700 to 0. But those gaps now end at:
+         - attribute formats (0x458-0x47f): 12-20k/s, against r50's ~4.5k;
+         - computed-handle pipelines: 11.3k/s, against 2.8k.
+         Delta draws rose 16% (683 vs 590 per frame), and 'prepare us per draw' is unchanged at
+         4.5. Build B's ab-29 (attribute formats) targets the first of these.
+       - Build A vs r50, both profiled: -0.9 to -1.15 ms/frame at 2000 draws (low-medium
+         confidence). The profile costs 0.8-1.05 us/draw (1.6-3.2 ms/frame), not ~1 ms. There is
+         no unprofiled r50 run, so the real gain is between ~0 and ~2 ms. Against r49: no gain.
+       - 60 fps holds where back CPU is at most ~13 ms (windows at 1836-2129 draws/frame held it
+         with 10.7-15.1 ms). Content matters more than draw count. The idle gap waiting for the
+         front's publishes is 3.5-3.8 ms. Heavy scenes: back 19.6 ms, frame 24.1 ms.
+       - Next limits:
+         - busiest guest core 12-14.6 ms with spin;
+         - front 8.9-9.8 ms;
+         - Vulkan worker 5.1-5.5 ms;
+         - GPU submission sum 11.3-12.0 ms median, which may exclude frame generation.
+       - 1% lows come from scene loads (1-2.6 s frames) and Finish spikes.
+       - Build C evidence (the skeptic's corrections included):
+         - #16 e05a72847 (computed-handle delta draws): mean 11.3k/s, peaks 17-26k/s. Plausible
+           to take (upstream, and the largest remaining fast-draw lever). The 0.4-1.2 ms is a
+           profiled ceiling, and the handle-data checks come after the counter.
+         - #26 stream buffer in host memory: qualifies by the literal rule (5.53-5.70 GB/s < 8).
+           The saving is unmeasured: the probe times 8 MiB bursts, while real writes are ~400 B
+           copies (108-202k/s). Its host figure of 83,886 GB/s is a probe bug: the optimizer
+           removed the copy.
+         - FSR 4's dispatch on the back thread (shader 6bd913e1f34e83eb, ~0.9 ms): 0.55-1.2
+           ms/frame in the 'compute FSR' zone. Sub-zone it first; the plan keeps the FSR path
+           unchanged.
+         - #23b dirty bitmap: 'compute synchronize' is 0.7-1.2 ms/frame. Sub-zone it first.
+         - #17 and #19 need an EDEN_NX2_GPU_PROFILE=2 run. #28 and #30 are decided on r54 (ab-29,
+           FoldInstance).
+         - Rejected by their numbers: #20 (resolve is 1-4% of a dispatch), #21, #23a, #24, #27,
+           #29.
    - The crash (perf-trace-noprofile 1, Hyrule Field to Kokiri Forest), from
      %APPDATA%\lichii\crash_dumps\lichii-crash-19116.txt and a 0-byte .dmp:
      - An access violation on the GPU back thread: draw, ConfigureImpl, texture upload,
