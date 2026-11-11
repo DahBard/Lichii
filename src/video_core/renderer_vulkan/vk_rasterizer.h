@@ -12,6 +12,7 @@
 #include <utility>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 
 #include <boost/container/static_vector.hpp>
 
@@ -505,6 +506,11 @@ private:
         /// StateChanged draws by the reason of the last break, and by its 3D method.
         std::array<u64, static_cast<size_t>(VideoCommon::Nx2FastDraw::Reason::Count)> breaks{};
         std::array<u32, Maxwell::NUM_REGS> break_methods{};
+        /// Profile only: StateChanged draws by the BreakClass bits of their gap's breaks, by the
+        /// deferred call that broke last (its thunk), and Kind draws by what differed.
+        std::unordered_map<u32, u64> break_masks;
+        std::unordered_map<u64, u64> call_thunks;
+        std::array<u64, 6> kinds{};
         u64 window_start{};
     };
     /// The pipeline the draw can take the delta path with, or null for a full resolve. Clears
@@ -516,6 +522,8 @@ private:
     void NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed, bool is_indirect, u64 serial,
                           u64 map_serial);
     void ReportFastDraws();
+    /// The profile's break classes of the 3D registers (Nx2FastDraw::g_register_class).
+    void InitFastDrawBreakClasses();
     ReusableDraw reusable_draw;
     ReusableDraw taken_draw; ///< The draw TakeReusableDraw last returned the pipeline of
     /// Device memory of the constant buffers TakeReusableDraw checks for texture handle writes.

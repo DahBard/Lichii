@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -427,6 +428,21 @@ std::string Sample(const char* names, double seconds, const std::string& out) {
     return SampleThreads(SplitNames(names), seconds, out);
 }
 
+std::string CodeAddress(const void* address) {
+    HMODULE module{};
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(address), &module)) {
+        char path[MAX_PATH] = "?";
+        GetModuleFileNameA(module, path, sizeof(path));
+        const char* base = std::strrchr(path, '\\');
+        return fmt::format("{}+{:#x}", base != nullptr ? base + 1 : path,
+                           reinterpret_cast<uintptr_t>(address) -
+                               reinterpret_cast<uintptr_t>(module));
+    }
+    return fmt::format("{}", address);
+}
+
 void StartFromEnvironment() {
     const char* names = std::getenv("EDEN_NX2_SAMPLE");
     if (names == nullptr || *names == '\0') {
@@ -445,10 +461,15 @@ void StartFromEnvironment() {
 
 #else
 
+#include <fmt/format.h>
+
 namespace Nx2Sampler {
 void StartFromEnvironment() {}
 std::string Sample(const char*, double, const std::string&) {
     return "the sampler is Windows only";
+}
+std::string CodeAddress(const void* address) {
+    return fmt::format("{}", address);
 }
 } // namespace Nx2Sampler
 

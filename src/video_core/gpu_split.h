@@ -284,7 +284,7 @@ public:
         constexpr size_t function_words = (sizeof(Func) + sizeof(u64) - 1) / sizeof(u64);
         const size_t payload = function_words + 1 + (words.size() + 1) / 2;
         u64* const entry = Reserve(2 + payload);
-        entry[0] = static_cast<u64>(Kind::Call) | flags | (u64{payload} << 8);
+        entry[0] = static_cast<u64>(Kind::Call) | WordsCall | flags | (u64{payload} << 8);
         entry[1] = reinterpret_cast<u64>(&CallWordsThunk<Func>);
         std::memcpy(entry + 2, &func, sizeof(Func));
         entry[2 + function_words] = words.size();
@@ -583,6 +583,8 @@ private:
     static constexpr u64 IsLast = 1 << 4;
     static constexpr u64 HasSegment = 1 << 5;
     static constexpr u64 Direct = 1 << 6; ///< Method: call it even if not executable (macros)
+    /// Call: made by DeferWords (the back macros), for the fast draw break counts
+    static constexpr u64 WordsCall = 1 << 6;
 
     static constexpr size_t RingWords = size_t{1} << 20; // 8 MiB
     static constexpr size_t RingMask = RingWords - 1;

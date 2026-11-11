@@ -34,6 +34,7 @@
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
 #include "common/nx2_experiment.h"
+#include "common/nx2_sampler.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/gpu_dirty_memory_manager.h"
@@ -459,6 +460,7 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
                  "{} (EDEN_NX2_TEST_1216 {})",
                  features.has_extended_dynamic_state, features.has_dynamic_vertex_input,
                  dynamic_strides, test ? "on" : "off");
+        InitFastDrawBreakClasses();
     }
     buffer_cache.SetPendingCpuWrites(
         [this](const std::function<void(DAddr, size_t)>& callback) {
@@ -475,6 +477,48 @@ RasterizerVulkan::~RasterizerVulkan() {
     scheduler.Finish();
 }
 
+void RasterizerVulkan::InitFastDrawBreakClasses() {
+    namespace FastDraw = VideoCommon::Nx2FastDraw;
+    using Tegra::Engines::Maxwell3D;
+    using Regs = Maxwell3D::Regs;
+    static_assert(Maxwell::NUM_REGS <= FastDraw::g_register_class.size());
+    auto& classes = FastDraw::g_register_class;
+    classes.fill(FastDraw::BreakClass::OtherRegister);
+    const auto set = [](u32 first, size_t bytes, FastDraw::BreakClass value) {
+        for (u32 method = first; method < first + bytes / sizeof(u32); ++method) {
+            FastDraw::g_register_class[method] = value;
+        }
+    };
+    using enum FastDraw::BreakClass;
+    set(MAXWELL3D_REG_INDEX(vertex_attrib_format), sizeof(Regs::vertex_attrib_format),
+        AttributeFormat);
+    set(MAXWELL3D_REG_INDEX(blend), sizeof(Regs::blend), Blend);
+    set(MAXWELL3D_REG_INDEX(blend_per_target), sizeof(Regs::blend_per_target), Blend);
+    set(MAXWELL3D_REG_INDEX(blend_per_target_enabled), sizeof(Regs::blend_per_target_enabled),
+        Blend);
+    set(MAXWELL3D_REG_INDEX(blend_color), sizeof(Regs::blend_color), Blend);
+    set(MAXWELL3D_REG_INDEX(color_mask), sizeof(Regs::color_mask), Blend);
+    set(MAXWELL3D_REG_INDEX(color_mask_common), sizeof(Regs::color_mask_common), Blend);
+    set(MAXWELL3D_REG_INDEX(pipelines), sizeof(Regs::pipelines), Program);
+    set(MAXWELL3D_REG_INDEX(viewport_transform), sizeof(Regs::viewport_transform),
+        ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(viewports), sizeof(Regs::viewports), ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(scissor_test), sizeof(Regs::scissor_test), ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(viewport_clip_control), sizeof(Regs::viewport_clip_control),
+        ViewportScissor);
+    set(MAXWELL3D_REG_INDEX(rt), sizeof(Regs::rt), RenderTarget);
+    set(MAXWELL3D_REG_INDEX(rt_control), sizeof(Regs::rt_control), RenderTarget);
+    set(MAXWELL3D_REG_INDEX(zeta), sizeof(Regs::zeta), RenderTarget);
+    set(MAXWELL3D_REG_INDEX(zeta_size), sizeof(Regs::zeta_size), RenderTarget);
+    set(MAXWELL3D_REG_INDEX(zeta_enable), sizeof(Regs::zeta_enable), RenderTarget);
+    set(MAXWELL3D_REG_INDEX(surface_clip), sizeof(Regs::surface_clip), RenderTarget);
+    constexpr u32 stream_words = sizeof(Regs::VertexStream) / sizeof(u32);
+    for (u32 stream = 0; stream < Regs::NumVertexArrays; ++stream) {
+        classes[MAXWELL3D_REG_INDEX(vertex_streams) + stream * stream_words] = Stride;
+    }
+    FastDraw::g_break_masks.store(VideoCommon::Nx2Profile::Enabled(), std::memory_order_relaxed);
+}
+
 GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_indirect) {
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
@@ -488,16 +532,31 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
         return full(FullDraw::NoCandidate);
     }
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    if (is_indirect || draw.is_indexed != is_indexed || draw.maxwell3d != maxwell3d ||
-        draw.topology != draw_state.topology || !draw_state.inline_index_draw_indexes.empty() ||
-        frame_dump.Capturing()) {
+    const int kind = is_indirect                                    ? 0
+                     : draw.is_indexed != is_indexed                ? 1
+                     : draw.maxwell3d != maxwell3d                  ? 2
+                     : draw.topology != draw_state.topology         ? 3
+                     : !draw_state.inline_index_draw_indexes.empty() ? 4
+                     : frame_dump.Capturing()                       ? 5
+                                                                    : -1;
+    if (kind >= 0) {
+        ++fast_draw_stats.kinds[static_cast<size_t>(kind)];
         return full(FullDraw::Kind);
     }
     if (draw.serial != FastDraw::Serial()) {
         const u32 last_break = FastDraw::g_last_break.load(std::memory_order_relaxed);
+        const auto reason = static_cast<FastDraw::Reason>(last_break & 0xff);
         ++fast_draw_stats.breaks[last_break & 0xff];
-        if (const u32 method = last_break >> 8; method < Maxwell::NUM_REGS) {
+        if (const u32 method = last_break >> 8;
+            (reason == FastDraw::Reason::Register || reason == FastDraw::Reason::Method) &&
+            method < Maxwell::NUM_REGS) {
             ++fast_draw_stats.break_methods[method];
+        }
+        if (FastDraw::g_break_masks.load(std::memory_order_relaxed)) [[unlikely]] {
+            ++fast_draw_stats.break_masks[FastDraw::g_break_mask.load(std::memory_order_relaxed)];
+            if (reason == FastDraw::Reason::Call) {
+                ++fast_draw_stats.call_thunks[FastDraw::g_last_call.load(std::memory_order_relaxed)];
+            }
         }
         return full(FullDraw::StateChanged);
     }
@@ -699,6 +758,62 @@ void RasterizerVulkan::ReportFastDraws() {
     }
     LOG_INFO(Render_Vulkan, "Fast draw state changes per second by last break:{} | by method:{}",
              breaks, top);
+    if (!stats.break_masks.empty()) {
+        std::vector<std::pair<u64, u32>> masks;
+        masks.reserve(stats.break_masks.size());
+        for (const auto& [mask, count] : stats.break_masks) {
+            masks.emplace_back(count, mask);
+        }
+        const size_t shown_masks = std::min<size_t>(masks.size(), 12);
+        std::partial_sort(masks.begin(), masks.begin() + shown_masks, masks.end(),
+                          std::greater{});
+        std::string text;
+        for (size_t i = 0; i < shown_masks; ++i) {
+            std::string names;
+            for (u32 bits = masks[i].second; bits != 0; bits &= bits - 1) {
+                const size_t index = static_cast<size_t>(std::countr_zero(bits));
+                names += names.empty() ? "" : "+";
+                names += index < VideoCommon::Nx2FastDraw::break_class_names.size()
+                             ? VideoCommon::Nx2FastDraw::break_class_names[index]
+                             : "?";
+            }
+            text += fmt::format(" {}:{:.0f}", names.empty() ? "none" : names,
+                                static_cast<double>(masks[i].first) / seconds);
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Fast draw state changes per second by every break class in the gap ({} masks):{}",
+                 masks.size(), text);
+    }
+    static constexpr std::array<const char*, 6> kind_names{
+        "indirect", "indexed/non-indexed", "other 3D engine", "topology", "inline index",
+        "frame dump"};
+    std::string kinds;
+    for (size_t kind = 0; kind < stats.kinds.size(); ++kind) {
+        if (stats.kinds[kind] != 0) {
+            kinds += fmt::format(" {} {:.0f}", kind_names[kind],
+                                 static_cast<double>(stats.kinds[kind]) / seconds);
+        }
+    }
+    if (!kinds.empty()) {
+        LOG_INFO(Render_Vulkan, "Fast draw different kind per second:{}", kinds);
+    }
+    if (!stats.call_thunks.empty()) {
+        std::vector<std::pair<u64, u64>> calls;
+        for (const auto& [thunk, count] : stats.call_thunks) {
+            calls.emplace_back(count, thunk);
+        }
+        const size_t shown_calls = std::min<size_t>(calls.size(), 6);
+        std::partial_sort(calls.begin(), calls.begin() + shown_calls, calls.end(),
+                          std::greater{});
+        std::string text;
+        for (size_t i = 0; i < shown_calls; ++i) {
+            text += fmt::format(" {}:{:.0f}",
+                                Nx2Sampler::CodeAddress(reinterpret_cast<const void*>(
+                                    static_cast<uintptr_t>(calls[i].second))),
+                                static_cast<double>(calls[i].first) / seconds);
+        }
+        LOG_INFO(Render_Vulkan, "Fast draw deferred call breaks per second by thunk:{}", text);
+    }
     stats = FastDrawStats{.window_start = now};
 }
 
@@ -1053,6 +1168,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     // break from here on, this draw's own resolve included, ends the delta chain.
     const u64 draw_serial = FastDraw::Serial();
     const u64 draw_map_serial = gpu_memory->MapSerial();
+    if (FastDraw::g_break_masks.load(std::memory_order_relaxed)) [[unlikely]] {
+        FastDraw::g_break_mask.store(0, std::memory_order_relaxed);
+    }
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
     const u32 repack_dirty = buffer_cache_runtime.SetVertexRepackLayout(

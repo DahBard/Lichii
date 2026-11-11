@@ -90,14 +90,79 @@ inline void SetEnabledForTest(bool on) {
     return verify;
 }
 
+/// The kinds of break the profile's break-mask histogram tells apart (ReportFastDraws): every
+/// kind a gap between two draws had, not only the last break's.
+enum class BreakClass : u8 {
+    Stride,          ///< A vertex stream's stride and enable word
+    AttributeFormat, ///< vertex_attrib_format
+    Blend,           ///< Blend state, blend color and color masks
+    Program,         ///< pipelines[]
+    ViewportScissor, ///< Viewports, their transforms, scissors and clip control
+    RenderTarget,    ///< Render target, depth and surface clip registers
+    OtherRegister,
+    Method,
+    BackMacroCall, ///< A back macro's call (GpuSplit::DeferWords)
+    OtherCall,
+    DeltaOverflow,
+    Fence,
+    OtherEngine,
+    MemoryWrite, ///< Constant buffer or inline data reaching handles, texture header data
+    CacheOrMap,  ///< Tick work, invalidations, memory maps, indirect resets, frames
+    Count,
+};
+
+inline constexpr std::array<const char*, static_cast<size_t>(BreakClass::Count)> break_class_names{
+    "stride",       "attribute format", "blend",          "program",    "viewport/scissor",
+    "render target", "other register",  "method",         "back macro call", "other call",
+    "delta overflow", "fence",          "other engine",   "memory write", "cache/map",
+};
+
+/// Profile only (set by the renderer): Break also collects g_break_mask and g_last_call.
+inline std::atomic<bool> g_break_masks{false};
+/// The BreakClass bits of the breaks since the last draw read the serial.
+inline std::atomic<u32> g_break_mask{};
+/// The thunk of the last deferred call that broke (GpuSplit::Execute).
+inline std::atomic<u64> g_last_call{};
+/// The BreakClass of each 3D register (filled by the renderer; OtherRegister past the end).
+inline std::array<BreakClass, 0x1000> g_register_class{};
+
+[[nodiscard]] inline BreakClass ClassOf(Reason reason, u32 method) {
+    switch (reason) {
+    case Reason::Register:
+        return method < g_register_class.size() ? g_register_class[method]
+                                                : BreakClass::OtherRegister;
+    case Reason::Method:
+        return BreakClass::Method;
+    case Reason::Call:
+        return method != 0 ? BreakClass::BackMacroCall : BreakClass::OtherCall;
+    case Reason::DeltaOverflow:
+        return BreakClass::DeltaOverflow;
+    case Reason::Fence:
+        return BreakClass::Fence;
+    case Reason::OtherEngine:
+        return BreakClass::OtherEngine;
+    case Reason::ConstantData:
+    case Reason::InlineData:
+    case Reason::TextureHeaders:
+        return BreakClass::MemoryWrite;
+    default:
+        return BreakClass::CacheOrMap;
+    }
+}
+
 inline std::atomic<u64> g_serial{1};
-/// The last break's reason and, for Register and Method, its 3D method (diagnostics).
+/// The last break's reason and, for Register and Method, its 3D method (diagnostics). For Call,
+/// 1 marks a back macro's call.
 inline std::atomic<u32> g_last_break{};
 
 inline void Break(Reason reason, u32 method = 0) {
     if (Enabled()) {
         g_serial.fetch_add(1, std::memory_order_relaxed);
         g_last_break.store(static_cast<u32>(reason) | (method << 8), std::memory_order_relaxed);
+        if (g_break_masks.load(std::memory_order_relaxed)) [[unlikely]] {
+            g_break_mask.fetch_or(1U << static_cast<u32>(ClassOf(reason, method)),
+                                  std::memory_order_relaxed);
+        }
     }
 }
 

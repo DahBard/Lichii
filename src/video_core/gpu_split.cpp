@@ -776,7 +776,10 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
     }
     case Kind::Call: {
         if ((head & FastDrawNeutral) == 0) {
-            Nx2FastDraw::Break(Nx2FastDraw::Reason::Call);
+            Nx2FastDraw::Break(Nx2FastDraw::Reason::Call, (head & WordsCall) != 0 ? 1 : 0);
+            if (Nx2FastDraw::g_break_masks.load(std::memory_order_relaxed)) [[unlikely]] {
+                Nx2FastDraw::g_last_call.store(entry[1], std::memory_order_relaxed);
+            }
         }
         const size_t payload = static_cast<size_t>((head >> 8) & 0xffffff);
         reinterpret_cast<void (*)(const u64*)>(entry[1])(entry + 2);

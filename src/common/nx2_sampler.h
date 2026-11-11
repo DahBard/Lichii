@@ -19,4 +19,8 @@ void StartFromEnvironment();
 /// the folded stacks to `out`.folded) and returns the report.
 std::string Sample(const char* names, double seconds, const std::string& out);
 
+/// A code address as module+offset (lichii.exe+0x1234, for llvm-symbolizer --relative-address),
+/// or as the plain address where the module is unknown or off Windows.
+std::string CodeAddress(const void* address);
+
 } // namespace Nx2Sampler
