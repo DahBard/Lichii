@@ -1803,6 +1803,56 @@ Own changes:
    - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
      preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
      EXP26/28/53/61, #1131.
+   - Same-route r49 and r50 perf traces (owner, 2026-11-11), compared with r52-r54. Workflow
+     `we21ul2p8` (route, back, zone and PGO analysts, skeptics, synthesis).
+     - Builds A and B run 0.15-0.45 ms/frame of back CPU faster than r50 at 2000 draws/frame
+       (profiled; central ~0.3), not the planned 1.5-3 ms. B is not faster than A.
+     - r50 - r49 (-1.1 ms) is mostly r49's slow session (a cold driver cache, vkQueueSubmit
+       +10%). The build's share is -0.5 +/- 0.6 ms.
+     - Unprofiled back CPU in ms/frame at 1500/2000/3000 draws per frame:
+       - r50: ~13.9 / 16.1-16.2 / 20.5-20.7;
+       - A: 13.43 / 15.71 / 20.28;
+       - B: 13.91 / 16.06 / 20.37.
+     - Why the plan fell short:
+       - the fast-draw conversions were small net: chained breaks, conversions on pipelines
+         that take no delta draws, and delta draws got dearer (1.05 -> 1.36 us);
+       - work moved between zones instead of going away (the trims moved 0.34 ms; B's method
+         zone grew 0.17-0.23);
+       - the recorded PGO profile's staleness costs 0-0.4 ms.
+     - The profile's own cost: EDEN_NX2_GPU_PROFILE=1 costs 1.9-2.3 ms/frame at 2000
+       draws/frame (2.5-4.7 fps), =2 costs 2.4-2.7. That is why the noprofile runs look faster;
+       time builds with unprofiled runs.
+     - MapPhysicalMemory runs at similar rates in every session (549-715 calls/s), but its host
+       cost per call varies 143-342 us between sessions and 16-1141 us between 10 s windows.
+       That drives the 23-44 fps spread after loads (S2a) between sessions of one build. r55's
+       heap trace measures it.
+     - 60 fps outlook:
+
+       | Play | Draws/frame | Result |
+       |---|---|---|
+       | Light | 1000-1400 | 59 fps |
+       | Steady medium | ~1700 | 55-57 fps, 0.5-1.4 ms short |
+       | Heavier | 2000 | 2.5-2.9 ms short |
+       | Third area | ~2300 | ~5 ms short, 41-44 fps |
+       | Heaviest areas | 3250-3500 | 6.5-7 ms short, 40-44 fps |
+
+       Build C realistically saves 1-1.5 ms (range 0.5-3). After the back, the limits are the
+       busiest guest core (11.6-14.7 ms) and the front (7.8-10.9).
+     - Build B's switches:
+       - Unconditional in r56 (no performance claim): #1161 draws (after a clean verify-r55),
+         bank bitsets, #1306/#1311, QUICK, CONTIG and FoldInstance.
+       - #1161 reports stay unless a fine A/B shows they cost >= 0.1 ms.
+       - The trims and the translation cache go (off by default since r55).
+       - Decided by r55's arms: #1216 is dropped if ab-26 minus the baseline is <= -0.2 ms;
+         #16 becomes unconditional if ab-36 shows >= 0.3 ms saved and verify-r55 is clean.
+       - The zero-page trim stays.
+   - Owner decisions (2026-11-11):
+     - First option 3: more clock for the back thread on the power-limited CPU (less spinning,
+       pinning, the power mode).
+     - Then option 1: the per-draw cost from ~4.3 to ~1.9 us (pre-decoded state, Ocarina macro
+       HLE, delta draws nearly everywhere).
+     - Frame generation stays AMD FSR 2x. The adaptive target rate (frame_gen_target_rate)
+       drives only Lichii's own frame generation.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
