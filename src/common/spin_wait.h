@@ -14,6 +14,9 @@ namespace SpinWait {
 /// Lake and later), its TSC rate is known, and LICHII_WAITPKG_SPIN is not 0.
 bool UsesWaitpkg();
 
+/// LICHII_UMWAIT_C02=1 (TEST, read once): WaitUntil asks for C0.2 instead of C0.1.
+bool UsesC02();
+
 /// TSC ticks a PAUSE instruction takes on this CPU (measured once).
 u64 PauseTicks();
 
@@ -26,8 +29,8 @@ void Pause();
 /// Arms the address monitor on `address`'s cache line (UMONITOR). Requires UsesWaitpkg().
 void Monitor(const void* address);
 
-/// Idles the core in C0.1 until `deadline` (TSC), a write to the monitored line or an
-/// interrupt (UMWAIT). Requires UsesWaitpkg().
+/// Idles the core in C0.1 (C0.2 with UsesC02()) until `deadline` (TSC), a write to the monitored
+/// line or an interrupt (UMWAIT). Requires UsesWaitpkg().
 void WaitUntil(u64 deadline);
 
 template <typename Ready>

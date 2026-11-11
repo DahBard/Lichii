@@ -17,6 +17,14 @@
 
 namespace Common::SpinWait {
 
+bool UsesC02() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_UMWAIT_C02");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
 #ifdef ARCHITECTURE_x86_64
 
 u64 Now() {
@@ -81,6 +89,12 @@ __attribute__((target("waitpkg"))) void Monitor(const void* address) {
 }
 
 __attribute__((target("waitpkg"))) void WaitUntil(u64 deadline) {
+    if (UsesC02()) [[unlikely]] {
+        // TEST: control bit 0 clear, C0.2, which saves more and wakes slower. Windows may
+        // disallow C0.2 (IA32_UMWAIT_CONTROL bit 0); the core then waits in C0.1 all the same.
+        _umwait(0, deadline);
+        return;
+    }
     // Control bit 0 set: C0.1, the state with the faster wakeup.
     _umwait(1, deadline);
 }
