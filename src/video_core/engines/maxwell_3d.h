@@ -3323,6 +3323,8 @@ public:
     /// Registers only a report, the render enable condition or a macro memory read takes as
     /// operands.
     static bool IsFastDrawReportOperand(u32 method);
+    /// A vertex attribute format, when vertex input is dynamic state.
+    static bool IsFastDrawVertexFormat(u32 method);
     void NoteFastDrawConstantData(GPUVAddr begin, GPUVAddr end);
 
     /// Handles a write to the CB_DATA[i] register.

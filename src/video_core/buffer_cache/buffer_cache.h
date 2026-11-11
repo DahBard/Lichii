@@ -1819,7 +1819,7 @@ void BufferCache<P>::BeginGraphicsUniforms(const Nx2FastDraw::Delta* delta) {
     keep.candidates = {};
     keep.writes.clear();
     const std::array<u32, NUM_STAGES> streamed = std::exchange(keep.streamed, {});
-    const bool usable = delta != nullptr && unwritten;
+    const bool usable = delta != nullptr && unwritten && !delta->no_uniform_keeps;
     if (usable) {
         keep.writes.insert(keep.writes.end(), keep.memory_writes.begin(),
                            keep.memory_writes.end());

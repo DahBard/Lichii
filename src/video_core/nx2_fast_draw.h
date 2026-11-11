@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -75,6 +77,15 @@ inline std::atomic<bool> g_dynamic_strides{false};
 /// TEST: EDEN_NX2_TEST_1216=0 (read by the renderer) keeps the breaks from before upstream
 /// #1216's stride, render enable and back macro call changes.
 inline std::atomic<bool> g_test_1216{true};
+
+/// Whether vertex attribute formats are draw parameters (set by the renderer, with extended
+/// dynamic state and dynamic vertex input): only each attribute's type class is in the pipeline
+/// key then, which TakeReusableDraw compares.
+inline std::atomic<bool> g_vertex_streams_dynamic{false};
+
+/// TEST: EDEN_NX2_TEST_1161_DRAWS=0 (read by the renderer) keeps tuned4's delta overflow break,
+/// handle checks over whole constant buffers and attribute format breaks (upstream #1161).
+inline std::atomic<bool> g_test_1161_draws{true};
 
 /// Tests only.
 inline void SetEnabledForTest(bool on) {
@@ -181,11 +192,26 @@ public:
     /// Whether [begin, end) of device memory overlaps the range's.
     [[nodiscard]] bool Intersects(DAddr begin, DAddr end) const;
 
+    /// The GPU address the range starts at.
+    [[nodiscard]] GPUVAddr Address() const noexcept {
+        return address;
+    }
+
+    /// Whether the range maps to one run of device memory in GPU order, starting at LinearBase.
+    [[nodiscard]] bool IsLinear() const noexcept {
+        return linear;
+    }
+    [[nodiscard]] DAddr LinearBase() const noexcept {
+        return linear_base;
+    }
+
 private:
     const Tegra::MemoryManager* memory{};
     GPUVAddr address{};
     u64 size{};
     u64 map_serial{};
+    bool linear{};
+    DAddr linear_base{};
     std::vector<std::pair<DAddr, DAddr>> spans; ///< Sorted, disjoint [begin, end) pairs
 };
 
@@ -203,6 +229,9 @@ struct Delta {
     std::array<DAddr, MaxWrites> device_begin{};
     std::array<DAddr, MaxWrites> device_end{};
     u32 num_device_writes{};
+    /// Set when the ranges were widened (AppendRange) or reached a buffer of texture handles
+    /// between its handles: the draw keeps no uniforms, as when such writes ended draw reuse.
+    bool no_uniform_keeps{};
 
     [[nodiscard]] bool Empty() const {
         return num_writes == 0 && (binds[0] | binds[1] | binds[2] | binds[3] | binds[4]) == 0;
@@ -223,14 +252,82 @@ struct Delta {
         }
         return false;
     }
+
+    /// Reaches for only the bytes [base + first, base + second) of each of words, all inside the
+    /// range spans was updated with. Device writes are compared word by word when that range maps
+    /// linearly, else with the whole range.
+    [[nodiscard]] bool ReachesWords(GPUVAddr base, std::span<const std::pair<u32, u32>> words,
+                                    const DeviceSpans& spans) const {
+        for (u32 write = 0; write < num_writes; ++write) {
+            for (const auto& [first, second] : words) {
+                if (write_begin[write] < base + second && base + first < write_end[write]) {
+                    return true;
+                }
+            }
+        }
+        for (u32 write = 0; write < num_device_writes; ++write) {
+            if (!spans.Intersects(device_begin[write], device_end[write])) {
+                continue;
+            }
+            if (!spans.IsLinear()) {
+                return true;
+            }
+            for (const auto& [first, second] : words) {
+                const DAddr begin = spans.LinearBase() + (base + first - spans.Address());
+                const DAddr end = begin + (second - first);
+                if (device_begin[write] < end && begin < device_end[write]) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 };
 
 inline Delta g_delta;
 
-/// Appends [begin, end) to a delta's range list, or extends its last range when that ends at
-/// begin. False when the list is full.
+/// Adds [begin, end) to a delta's range list: extends a range it touches or overlaps, else
+/// appends it. A full list widens the range that grows least instead (true then), which only
+/// makes Reaches more conservative.
 inline bool AppendRange(std::array<u64, Delta::MaxWrites>& begins,
                         std::array<u64, Delta::MaxWrites>& ends, u32& count, u64 begin, u64 end) {
+    if (count != 0 && ends[count - 1] == begin) {
+        ends[count - 1] = end;
+        return false;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        if (begin <= ends[i] && begins[i] <= end) {
+            begins[i] = (std::min)(begins[i], begin);
+            ends[i] = (std::max)(ends[i], end);
+            return false;
+        }
+    }
+    if (count < Delta::MaxWrites) {
+        begins[count] = begin;
+        ends[count] = end;
+        ++count;
+        return false;
+    }
+    u32 best = 0;
+    u64 best_growth = ~u64{0};
+    for (u32 i = 0; i < count; ++i) {
+        const u64 growth = ((std::max)(ends[i], end) - (std::min)(begins[i], begin)) -
+                           (ends[i] - begins[i]);
+        if (growth < best_growth) {
+            best = i;
+            best_growth = growth;
+        }
+    }
+    begins[best] = (std::min)(begins[best], begin);
+    ends[best] = (std::max)(ends[best], end);
+    return true;
+}
+
+/// TEST (EDEN_NX2_TEST_1161_DRAWS=0): tuned4's list, which only extends its last range. False
+/// when the list is full.
+inline bool AppendRangeOrOverflow(std::array<u64, Delta::MaxWrites>& begins,
+                                  std::array<u64, Delta::MaxWrites>& ends, u32& count, u64 begin,
+                                  u64 end) {
     if (count != 0 && ends[count - 1] == begin) {
         ends[count - 1] = end;
         return true;
@@ -242,6 +339,16 @@ inline bool AppendRange(std::array<u64, Delta::MaxWrites>& begins,
     ends[count] = end;
     ++count;
     return true;
+}
+
+/// Adds [begin, end) to one of the delta's lists (Reason::DeltaOverflow with the TEST switch off).
+inline void NoteRange(Delta& delta, std::array<u64, Delta::MaxWrites>& begins,
+                      std::array<u64, Delta::MaxWrites>& ends, u32& count, u64 begin, u64 end) {
+    if (g_test_1161_draws.load(std::memory_order_relaxed)) [[likely]] {
+        delta.no_uniform_keeps |= AppendRange(begins, ends, count, begin, end);
+    } else if (!AppendRangeOrOverflow(begins, ends, count, begin, end)) {
+        Break(Reason::DeltaOverflow);
+    }
 }
 
 inline void NoteBind(size_t stage, u32 slot) {
@@ -256,9 +363,7 @@ inline void NoteConstantData(GPUVAddr begin, GPUVAddr end) {
         return;
     }
     Delta& delta = g_delta;
-    if (!AppendRange(delta.write_begin, delta.write_end, delta.num_writes, begin, end)) {
-        Break(Reason::DeltaOverflow);
-    }
+    NoteRange(delta, delta.write_begin, delta.write_end, delta.num_writes, begin, end);
 }
 
 /// The device addresses [begin, end) that inline constant buffer data landed on.
@@ -267,9 +372,7 @@ inline void NoteDeviceData(DAddr begin, DAddr end) {
         return;
     }
     Delta& delta = g_delta;
-    if (!AppendRange(delta.device_begin, delta.device_end, delta.num_device_writes, begin, end)) {
-        Break(Reason::DeltaOverflow);
-    }
+    NoteRange(delta, delta.device_begin, delta.device_end, delta.num_device_writes, begin, end);
 }
 
 } // namespace VideoCommon::Nx2FastDraw

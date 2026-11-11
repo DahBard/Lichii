@@ -28,4 +28,12 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_1161_DRAWS=0 restores tuned4's delta overflow break, handle checks over
+/// whole constant buffers and attribute format breaks (upstream #1161's fast-draw half; the
+/// renderer copies it into Nx2FastDraw::g_test_1161_draws).
+[[nodiscard]] inline bool Draws1161() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_1161_DRAWS");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test
