@@ -1660,6 +1660,34 @@ Own changes:
          download.
      - Not taken yet: e05a72847 (computed-handle delta draws). It waits for build A's mask run at
        the Kokiri water.
+   - Owner's build A logs (r52, 2026-11-11):
+     - Runs: perf-trace-noprofile x2 (the first crashed), ab-26, perf-trace, verify-r51. No
+       visual glitches; verify-r51 is very slow, as expected.
+     - First look over whole runs: back thread 14.7 ms/frame unprofiled (median 14.6), 52.0 fps
+       in gameplay windows, 1% low 22.3. ab-26: 16.1 (median 14.5), 49.9 fps, 1% low 18.0.
+       Profiled: r52 19.9 (median 17.2) vs r50 21.0 (median 19.0).
+     - Dynamic strides are on (EDS and VIDS). The stream buffer takes 5.6-5.7 GB/s over OCuLink,
+       against 33-37 GB/s into host memory.
+     - The full analysis is workflow `wb5xmbo0v`.
+   - The crash (perf-trace-noprofile 1, Hyrule Field to Kokiri Forest), from
+     %APPDATA%\lichii\crash_dumps\lichii-crash-19116.txt and a 0-byte .dmp:
+     - An access violation on the GPU back thread: draw, ConfigureImpl, texture upload,
+       ExecuteUnswizzlePlan, SwizzleImpl's GOB loop. The read was at input + 0xaa000 in a 3 MiB
+       run (384 blocks of 8 KiB, line 0, block 85), and the page was the first byte past the
+       14 GiB guest memory backing.
+     - Cause: 43321b8db (round 16, from tomk134/lichii-custom e8e50e797) read a run in place
+       after IsContinuousRange, which checks only device contiguity, and then read the whole run
+       from the first page's host pointer. The SMMU maps device pages to guest memory page by
+       page, so the read took other guest memory (garbled textures, silently) and crashed at the
+       end of guest memory.
+     - Fix d3251a67c: MemoryManager::GetSpan, which also checks the continuity_tracker. Workflow
+       `wgxv9g29t` confirmed it two ways:
+       - a refuter traced every alternative;
+       - an ASan harness ran 145k plan geometries with no read past guest_bytes.
+     - The ~15 s freeze before the crash was MiniDumpWriteDump with MiniDumpWithFullMemoryInfo
+       walking the placeholders. cbe51e88a drops that flag, falls back to a plain dump, logs the
+       memory layout at boot, and adds a unit test.
+     - These ship as r54 (build B + fix).
    - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
      preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
      EXP26/28/53/61, #1131.

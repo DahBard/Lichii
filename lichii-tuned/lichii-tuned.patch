@@ -3145,7 +3145,7 @@ index d3f7131a68..1a36e412fb 100644
              throw std::runtime_error("Migration source changed to a link or special file");
          }
 diff --git a/src/common/host_memory.cpp b/src/common/host_memory.cpp
-index 746a921e33..8197dceeea 100644
+index 746a921e33..9cb4fe4fbe 100644
 --- a/src/common/host_memory.cpp
 +++ b/src/common/host_memory.cpp
 @@ -55,11 +55,15 @@
@@ -3260,7 +3260,7 @@ index 746a921e33..8197dceeea 100644
              if (backing_handle) {
                  if (attempt > 1) {
                      LOG_INFO(HW_Memory, "Allocated {} MiB of backing memory on attempt {}", backing_size >> 20, attempt);
-@@ -212,6 +295,21 @@ public:
+@@ -212,6 +295,25 @@ public:
              LOG_CRITICAL(HW_Memory, "Failed to reserve {} GiB of virtual memory", virtual_size >> 30);
              return false;
          }
@@ -3279,10 +3279,14 @@ index 746a921e33..8197dceeea 100644
 +                     "kernel hands it out",
 +                     backing_size >> 20);
 +        }
++        // So that a crash address can be placed: in guest memory, past its end, or in fastmem.
++        LOG_INFO(HW_Memory, "Guest memory at {} ({} MiB), fastmem view at {} ({} GiB)",
++                 static_cast<const void*>(backing_base), backing_size >> 20,
++                 static_cast<const void*>(virtual_base), virtual_size >> 30);
          return true;
      }
  
-@@ -219,6 +317,23 @@ public:
+@@ -219,6 +321,23 @@ public:
          Release();
      }
  
@@ -3306,7 +3310,7 @@ index 746a921e33..8197dceeea 100644
      void* Allocate(size_t size) {
          if (allocation_test_control) {
              ++allocation_test_control->fallback_attempts;
-@@ -265,17 +380,33 @@ public:
+@@ -265,17 +384,33 @@ public:
          }
          const size_t virtual_end = virtual_offset + length;
  
@@ -3349,7 +3353,7 @@ index 746a921e33..8197dceeea 100644
      }
  
      /// Backing offset the view page at virtual_offset maps, or nullopt when it is not mapped.
-@@ -302,10 +433,33 @@ public:
+@@ -302,10 +437,33 @@ public:
  
      u8* backing_base{};
      u8* virtual_base{};
@@ -3383,7 +3387,7 @@ index 746a921e33..8197dceeea 100644
          if (!placeholders.empty()) {
              for (const auto& placeholder : placeholders) {
                  if (!pfn_UnmapViewOfFile2(process, virtual_base + placeholder.lower(),
-@@ -462,7 +616,7 @@ private:
+@@ -462,7 +620,7 @@ private:
      PFN_MapViewOfFile3 pfn_MapViewOfFile3{};
      PFN_UnmapViewOfFile2 pfn_UnmapViewOfFile2{};
  
@@ -3392,7 +3396,7 @@ index 746a921e33..8197dceeea 100644
      boost::icl::separate_interval_set<size_t> placeholders;       ///< Mapped placeholders
      ::Common::unordered_map<size_t, size_t> placeholder_host_pointers; ///< Placeholder backing offset
  };
-@@ -1003,6 +1157,9 @@ HostMemory::HostMemory(size_t backing_size_, size_t virtual_size_)
+@@ -1003,6 +1161,9 @@ HostMemory::HostMemory(size_t backing_size_, size_t virtual_size_)
      if (impl->Init()) {
          backing_base = impl->backing_base;
          virtual_base = impl->virtual_base;
@@ -3402,7 +3406,7 @@ index 746a921e33..8197dceeea 100644
          if (virtual_base) {
              // Ensure the virtual base is aligned to the L2 block size.
              virtual_base = reinterpret_cast<u8*>(Common::AlignUp(uintptr_t(virtual_base), HugePageSize));
-@@ -1052,6 +1209,7 @@ void HostMemory::Swap(HostMemory& other) noexcept {
+@@ -1052,6 +1213,7 @@ void HostMemory::Swap(HostMemory& other) noexcept {
      std::swap(granules, other.granules);
      std::swap(num_granules, other.num_granules);
      std::swap(fallback_buffer, other.fallback_buffer);
@@ -3410,7 +3414,7 @@ index 746a921e33..8197dceeea 100644
  }
  
  void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length, MemoryPermission perms, bool separate_heap) {
-@@ -1064,6 +1222,10 @@ void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length, M
+@@ -1064,6 +1226,10 @@ void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length, M
      if (length == 0 || !virtual_base || !impl) {
          return;
      }
@@ -3421,7 +3425,7 @@ index 746a921e33..8197dceeea 100644
      impl->Map(virtual_offset + virtual_base_offset, host_offset, length, perms);
  #endif
  }
-@@ -1122,12 +1284,20 @@ namespace {
+@@ -1122,12 +1288,20 @@ namespace {
  std::atomic<u64> g_zero_filled_bytes{};
  
  [[maybe_unused]] bool IsZeroPage(const u8* page) {
@@ -3446,7 +3450,7 @@ index 746a921e33..8197dceeea 100644
  }
  } // namespace
  
-@@ -1135,11 +1305,18 @@ u64 HostMemory::ZeroFilledBytes() noexcept {
+@@ -1135,11 +1309,18 @@ u64 HostMemory::ZeroFilledBytes() noexcept {
      return g_zero_filled_bytes.load(std::memory_order_relaxed);
  }
  
@@ -3466,7 +3470,7 @@ index 746a921e33..8197dceeea 100644
      std::vector<ULONG_PTR> entries(size_t{1} << 22);
      for (int attempt = 0;; ++attempt) {
          if (K32QueryWorkingSet(GetCurrentProcess(), entries.data(),
-@@ -1151,6 +1328,8 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+@@ -1151,6 +1332,8 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
          }
          entries.assign((std::max)(entries.size() * 2, size_t{entries[0]} + (size_t{1} << 18)), 0);
      }
@@ -3475,7 +3479,7 @@ index 746a921e33..8197dceeea 100644
      const size_t count = (std::min)(size_t{entries[0]}, entries.size() - 1);
      const auto backing_begin = reinterpret_cast<uintptr_t>(backing_base);
      const auto view_begin = reinterpret_cast<uintptr_t>(impl ? impl->virtual_base : nullptr);
-@@ -1194,6 +1373,8 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+@@ -1194,6 +1377,8 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
      }
      std::sort(trim.begin(), trim.end());
      trim.erase(std::unique(trim.begin(), trim.end()), trim.end());
@@ -3484,7 +3488,7 @@ index 746a921e33..8197dceeea 100644
      // A run can span two views, which VirtualUnlock refuses as a whole: then page by page.
      const auto unlock = [](uintptr_t begin, uintptr_t end) {
          if (VirtualUnlock(reinterpret_cast<void*>(begin), end - begin) ||
-@@ -1209,11 +1390,19 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+@@ -1209,11 +1394,19 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
          while (j < trim.size() && trim[j] == trim[j - 1] + PageAlignment) {
              ++j;
          }
@@ -3504,7 +3508,7 @@ index 746a921e33..8197dceeea 100644
      return {0, 0};
  #endif
  }
-@@ -1266,6 +1455,9 @@ void HostMemory::MarkUsed(size_t physical_offset, size_t length) {
+@@ -1266,6 +1459,9 @@ void HostMemory::MarkUsed(size_t physical_offset, size_t length) {
      if (length == 0) {
          return;
      }
@@ -3514,7 +3518,7 @@ index 746a921e33..8197dceeea 100644
      const size_t last = (physical_offset + length - 1) >> GranuleShift;
      for (size_t index = physical_offset >> GranuleShift; index <= last; ++index) {
          if ((granules[index].load(std::memory_order_relaxed) & GranuleUsed) == 0) {
-@@ -1292,6 +1484,79 @@ void HostMemory::ForgetContents() {
+@@ -1292,6 +1488,79 @@ void HostMemory::ForgetContents() {
      }
  }
  
@@ -14587,7 +14591,7 @@ index 3cd5660291..358e424659 100644
 +    CHECK(ranges[0].second == 0x30);
 +}
 diff --git a/src/tests/video_core/maxwell_fast_method.cpp b/src/tests/video_core/maxwell_fast_method.cpp
-index 65d17759fc..3e42f98600 100644
+index 65d17759fc..a0dbe635ab 100644
 --- a/src/tests/video_core/maxwell_fast_method.cpp
 +++ b/src/tests/video_core/maxwell_fast_method.cpp
 @@ -3,6 +3,7 @@
@@ -14598,7 +14602,7 @@ index 65d17759fc..3e42f98600 100644
  #include <chrono>
  #include <cstring>
  #include <functional>
-@@ -22,11 +23,14 @@
+@@ -22,12 +23,19 @@
  #include "core/memory.h"
  #include "tests/core/system_test_context.h"
  #include "video_core/dirty_flags.h"
@@ -14612,9 +14616,14 @@ index 65d17759fc..3e42f98600 100644
 +#include "video_core/native_qmd.h"
 +#include "video_core/nx2.h"
  #include "video_core/renderer_null/null_rasterizer.h"
++#include "video_core/surface.h"
++#include "video_core/texture_cache/image_info.h"
++#include "video_core/texture_cache/util.h"
++#include "video_core/textures/decoders.h"
  
  namespace VideoCommon {
-@@ -51,14 +55,6 @@ struct GpuSplitTestAccess {
+ 
+@@ -51,14 +59,6 @@ struct GpuSplitTestAccess {
          split.back_thread = std::jthread([&split](std::stop_token stop) { split.BackLoop(stop); });
      }
  
@@ -14629,7 +14638,7 @@ index 65d17759fc..3e42f98600 100644
      /// The back's side as SettleIdleBack sees it, without a back thread.
      static void SetBack(GpuSplit& split, bool running, bool quiet, u64 consumed) {
          split.back_running.store(running);
-@@ -98,6 +94,17 @@ struct GpuSplitTestAccess {
+@@ -98,6 +98,17 @@ struct GpuSplitTestAccess {
          return GpuSplit::WriteSlot(a >> GpuSplit::WriteGranuleBits) ==
                 GpuSplit::WriteSlot(b >> GpuSplit::WriteGranuleBits);
      }
@@ -14647,7 +14656,7 @@ index 65d17759fc..3e42f98600 100644
  };
  
  } // namespace VideoCommon
-@@ -236,15 +243,6 @@ u32 RandomArgument(std::mt19937& rng, u32 method, const Maxwell3D& engine) {
+@@ -236,15 +247,6 @@ u32 RandomArgument(std::mt19937& rng, u32 method, const Maxwell3D& engine) {
      return rng() % 64;
  }
  
@@ -14663,7 +14672,87 @@ index 65d17759fc..3e42f98600 100644
  /// A Turing MME instruction from its fields (TuringMacroInterpreter::Decode); a lane left alone
  /// adds the zero register to itself.
  struct Mme {
-@@ -830,106 +828,22 @@ TEST_CASE("Split consumption does not complete deferred downstream callbacks",
+@@ -462,6 +464,79 @@ TEST_CASE("GpuSplit CB batching respects device remaps within GPU big pages",
+     f.Compare();
+ }
+ 
++TEST_CASE("GPU spans stop where device pages leave contiguous host memory",
++          "[video_core][maxwell_fast_method][memory_manager]") {
++    // A range contiguous in device memory but split in host memory (the r52 crash: the in-place
++    // unswizzle read such a range from its first page's pointer). GetSpan must refuse it.
++    Fixture f;
++    f.system.Initialize();
++    Kernel::KProcess process{f.system.Kernel()};
++    SCOPE_EXIT { f.system.Kernel().UnregisterKernelObject(&process); };
++    auto& table = process.GetPageTable().GetImpl();
++    table.Resize(20, 12);
++    auto* backing = f.physical.GetPointerFromRaw<u8>(0x10000);
++    auto* replacement = f.physical.GetPointerFromRaw<u8>(0x30000);
++    for (u64 page = 0; page < 16; ++page) {
++        table.entries.GetAndFault(4 + page)
++            .Store(false, Common::PageType::Memory, 1,
++                   reinterpret_cast<uintptr_t>(backing) - 0x4000);
++    }
++    table.entries.GetAndFault(0x20).Store(false, Common::PageType::Memory, 1,
++                                        reinterpret_cast<uintptr_t>(replacement) - 0x20000);
++    process.GetMemory().SetCurrentPageTable(process);
++    const auto asid = f.device_memory.RegisterProcess(&process.GetMemory());
++    f.device_memory.BindInterface(&f.rasterizer);
++    SCOPE_EXIT {
++        f.device_memory.Unmap(0x10000, 0x10000);
++        f.device_memory.UnregisterProcess(asid);
++    };
++    f.device_memory.Map(0x10000, 0x4000, 0x10000, asid, true);
++    f.memory.BindRasterizer(&f.rasterizer);
++    f.memory.Map(0x100000, 0x10000, 0x10000, Tegra::PTEKind::PITCH, true);
++    REQUIRE(f.memory.GetSpan(0x100000, 0x3000) == backing);
++
++    f.device_memory.Unmap(0x11000, 0x1000);
++    f.device_memory.Map(0x11000, 0x20000, 0x1000, asid, true);
++    REQUIRE(f.memory.IsContinuousRange(0x100000, 0x3000));
++    REQUIRE(f.memory.GetPointer(0x101000) == replacement);
++    CHECK(f.memory.GetSpan(0x100000, 0x3000) == nullptr);
++    CHECK(f.memory.GetSpan(0x100000, 0x1000) == backing);
++    CHECK(f.memory.GetSpan(0x101000, 0x1000) == replacement);
++    CHECK(f.memory.GetSpan(0x102000, 0x2000) == backing + 0x2000);
++
++    // A texture whose first band of blocks (8 KiB) runs across the moved page: its upload reads
++    // the moved page, not the memory after the first page.
++    for (u32 i = 0; i < 0x10000; ++i) {
++        backing[i] = static_cast<u8>(i * 7 + 1);
++    }
++    for (u32 i = 0; i < 0x1000; ++i) {
++        replacement[i] = static_cast<u8>(i * 13 + 5);
++    }
++    VideoCommon::ImageInfo info;
++    info.type = VideoCommon::ImageType::e2D;
++    info.format = VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM;
++    info.size = {256, 16, 1};
++    info.block = {0, 0, 0};
++    info.resources = {1, 1};
++    const std::array range{std::pair<u64, u64>{0, 0x4000}};
++    const auto plan = VideoCommon::PlanUnswizzleImageRows(0x100000, info, range);
++    REQUIRE(plan.layout_valid);
++    REQUIRE(!plan.runs.empty());
++    std::vector<u8> expected(plan.total_host_bytes);
++    std::vector<u8> actual(plan.total_host_bytes);
++    std::vector<u8> guest;
++    for (const auto& run : plan.runs) {
++        guest.resize(run.guest_bytes);
++        f.memory.ReadBlockUnsafe(run.src_addr, guest.data(), run.guest_bytes);
++        const auto out = std::span{expected}.subspan(run.host_offset, run.host_bytes);
++        Tegra::Texture::UnswizzleTexture(out, guest, 1U << plan.bpp_log2, run.run_tiles,
++                                         run.tile_rows, 1, run.block.height, run.block.depth,
++                                         run.run_alignment, f.memory.UsesNativeTiling());
++    }
++    VideoCommon::ExecuteUnswizzlePlan(f.memory, plan, actual);
++    CHECK(actual == expected);
++}
++
+ TEST_CASE("GpuSplit dispatch preserves mapped uploads and macro boundaries",
+           "[video_core][maxwell_fast_method][gpu_split_dispatch]") {
+     using Access = VideoCommon::GpuSplitTestAccess;
+@@ -830,106 +905,22 @@ TEST_CASE("Split consumption does not complete deferred downstream callbacks",
      REQUIRE(output == std::array<u32, 3>{1, 2, 3});
  }
  
@@ -14772,7 +14861,7 @@ index 65d17759fc..3e42f98600 100644
      // Already ran its hook.
      Access::SetBack(split, true, true, Access::End(split));
      REQUIRE_FALSE(settled());
-@@ -968,6 +882,60 @@ TEST_CASE("Split drain waits for the back's idle hook",
+@@ -968,6 +959,60 @@ TEST_CASE("Split drain waits for the back's idle hook",
      }
  }
  
@@ -14833,7 +14922,7 @@ index 65d17759fc..3e42f98600 100644
  TEST_CASE("Split command list fetches wait only for the writers before the last host sync",
            "[video_core][gpu_split_dependencies]") {
      using Access = VideoCommon::GpuSplitTestAccess;
-@@ -1048,43 +1016,211 @@ TEST_CASE("Split command list fetches wait only for the writers before the last
+@@ -1048,43 +1093,211 @@ TEST_CASE("Split command list fetches wait only for the writers before the last
      REQUIRE_FALSE(split.WaitForSyncedWriters());
      release[2] = true;
      split.Drain(VideoCommon::DrainSite::Other);
@@ -14894,11 +14983,11 @@ index 65d17759fc..3e42f98600 100644
 +    Access::Start(split, f.system);
 +    SCOPE_EXIT {
 +        split.Stop();
-     };
++    };
 +    // Runs before Stop: a failed check must not leave the back in the entry below.
 +    SCOPE_EXIT {
 +        release = true;
-+    };
+     };
 +    // Releases behind an entry the back is still in.
 +    split.Defer([&release] {
 +        while (!release.load()) {
@@ -15070,7 +15159,7 @@ index 65d17759fc..3e42f98600 100644
  }
  
  TEST_CASE("Split restart resets writer positions without replaying old releases",
-@@ -1181,9 +1317,6 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1181,9 +1394,6 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
            "[video_core][gpu_split_dependencies]") {
      using Access = VideoCommon::GpuSplitTestAccess;
      using Writes = VideoCommon::GpuSplit::Writes;
@@ -15080,7 +15169,7 @@ index 65d17759fc..3e42f98600 100644
      Fixture f;
      f.system.Initialize();
      Kernel::KProcess process{f.system.Kernel()};
-@@ -1224,15 +1357,15 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1224,15 +1434,15 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
          // Where reads wait: writes are placed by device memory, any GPU address of it.
          VideoCommon::GpuSplit split;
          Access::Initialize(split, f.system);
@@ -15099,7 +15188,7 @@ index 65d17759fc..3e42f98600 100644
          split.NoteWrite(f.memory, gpu_address + 0x1000, 0x8000);
          CHECK(Access::WritesTarget(split, f.memory, other, 0x18) == Access::End(split));
          split.Defer([] {});
-@@ -1253,7 +1386,7 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1253,7 +1463,7 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
      SCOPE_EXIT {
          split.Stop();
      };
@@ -15108,7 +15197,7 @@ index 65d17759fc..3e42f98600 100644
      std::atomic<bool> done{};
      std::thread reader;
      SCOPE_EXIT {
-@@ -1343,7 +1476,7 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1343,7 +1553,7 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
                      std::this_thread::yield();
                  }
              },
@@ -15117,7 +15206,7 @@ index 65d17759fc..3e42f98600 100644
          split.Publish();
      };
  
-@@ -1357,12 +1490,8 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1357,12 +1567,8 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
      // Work that writes nothing and a write of other words, still queued: the read goes ahead.
      blocking(release[0], Writes::Noted);
      upload(other, 0x33333333);
@@ -15130,7 +15219,7 @@ index 65d17759fc..3e42f98600 100644
      reader.join();
      release[0] = true;
      split.Drain(VideoCommon::DrainSite::Other);
-@@ -1372,16 +1501,10 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1372,16 +1578,10 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
      // A write of the word through its other GPU address: the read waits for it and sees it.
      blocking(release[1], Writes::Noted);
      upload(alias + 0x40, 0x44444444);
@@ -15147,7 +15236,7 @@ index 65d17759fc..3e42f98600 100644
      reader.join();
      split.Drain(VideoCommon::DrainSite::Other);
      CHECK(engine.regs.reg_array[state] == 0x44444444);
-@@ -1396,28 +1519,15 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1396,28 +1596,15 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
      split.Drain(VideoCommon::DrainSite::Other);
      CHECK(engine.regs.reg_array[state] == 0x33333333);
  
@@ -15178,7 +15267,7 @@ index 65d17759fc..3e42f98600 100644
      split.Drain(VideoCommon::DrainSite::Other);
      CHECK(engine.regs.reg_array[state] == 0x55555555);
  
-@@ -1429,12 +1539,12 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1429,12 +1616,12 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
      CHECK(engine.regs.reg_array[state] == 0x77777777);
  
      // A front macro that reads the register waits for the back's macro and gets its value.
@@ -15193,7 +15282,7 @@ index 65d17759fc..3e42f98600 100644
      REQUIRE(finishes());
      reader.join();
      split.Drain(VideoCommon::DrainSite::Other);
-@@ -1453,3 +1563,209 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
+@@ -1453,3 +1640,209 @@ TEST_CASE("Split macro DMA reads wait only for the queued work that can write th
      CHECK(engine.regs.reg_array[state] == 0x88888888);
      CHECK(engine.regs.reg_array[copy] == 0x88888888);
  }
@@ -53819,7 +53908,7 @@ index 9e541d6afc..bf25a9ff88 100644
      Size = 1 << 0,
      Format = 1 << 1,
 diff --git a/src/video_core/texture_cache/util.cpp b/src/video_core/texture_cache/util.cpp
-index 43cee9e0ce..ecb975bb3d 100644
+index 43cee9e0ce..96cf5a8d23 100644
 --- a/src/video_core/texture_cache/util.cpp
 +++ b/src/video_core/texture_cache/util.cpp
 @@ -10,6 +10,7 @@
@@ -53863,7 +53952,7 @@ index 43cee9e0ce..ecb975bb3d 100644
                  UnswizzleTexture(dst, src, 1U << bpp_log2, num_tiles.width, num_tiles.height,
                                   num_tiles.depth, block.height, block.depth, stride_alignment,
                                   gpu_memory.UsesNativeTiling());
-@@ -1267,12 +1279,28 @@ UnswizzlePlan PlanUnswizzleImageRows(
+@@ -1267,12 +1279,31 @@ UnswizzlePlan PlanUnswizzleImageRows(
  
  void ExecuteUnswizzlePlan(Tegra::MemoryManager& gpu_memory, const UnswizzlePlan& plan,
                           std::span<u8> output) {
@@ -53871,6 +53960,10 @@ index 43cee9e0ce..ecb975bb3d 100644
 +    // A run in one contiguous mapping is read in place: copying it out first was ~40% of the GPU
 +    // thread's time in a texture-loading hitch (Ocarina of Time, leaving Link's house; from
 +    // tomk134/lichii-custom e8e50e797). EDEN_NX2_UNSWIZZLE_COPY=1 always copies first.
++    // GetSpan, not IsContinuousRange: the run must be contiguous in host memory as well. The SMMU
++    // maps device pages to guest memory one by one, so a run contiguous in device memory read
++    // from its first host page read other guest memory, and past the end of guest memory crashed
++    // (r52, Hyrule Field to Kokiri Forest).
 +    static const bool always_copy = std::getenv("EDEN_NX2_UNSWIZZLE_COPY") != nullptr;
 +    // Other runs are copied into a grow-only scratch buffer, not a vector zero-filled and
 +    // reallocated per upload; thread_local because the texture workers upload too
@@ -53880,9 +53973,8 @@ index 43cee9e0ce..ecb975bb3d 100644
 -        run.resize(r.guest_bytes);
 -        gpu_memory.ReadBlockUnsafe(r.src_addr, run.data(), r.guest_bytes);
 +        std::span<const u8> input;
-+        const bool in_place =
-+            !always_copy && gpu_memory.IsContinuousRange(r.src_addr, r.guest_bytes);
-+        const u8* const direct = in_place ? gpu_memory.GetPointer(r.src_addr) : nullptr;
++        const u8* const direct =
++            always_copy ? nullptr : gpu_memory.GetSpan(r.src_addr, r.guest_bytes);
 +        if (direct != nullptr) {
 +            input = std::span<const u8>{direct, r.guest_bytes};
 +        } else {
@@ -56667,10 +56759,10 @@ index ffb7913207..f6d26138f5 100644
      QSlider* volume_slider = nullptr;
 diff --git a/src/yuzu/nx2_crash_dump.cpp b/src/yuzu/nx2_crash_dump.cpp
 new file mode 100644
-index 0000000000..1571ae17c6
+index 0000000000..a8aaf5b8e6
 --- /dev/null
 +++ b/src/yuzu/nx2_crash_dump.cpp
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,393 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -56915,11 +57007,18 @@ index 0000000000..1571ae17c6
 +        return;
 +    }
 +    const ExceptionInformation information{GetCurrentThreadId(), pointers, FALSE};
-+    // Unloaded modules, thread times and start addresses, thread info and the memory map; not
-+    // MiniDumpWithIndirectlyReferencedMemory, which failed on Eden's address space.
-+    constexpr int flags = 0x20 | 0x100 | 0x800 | 0x1000;
-+    write(GetCurrentProcess(), GetCurrentProcessId(), file, flags,
-+          pointers != nullptr ? &information : nullptr, nullptr, nullptr);
++    const void* const exception = pointers != nullptr ? &information : nullptr;
++    // Unloaded modules, thread times and start addresses and thread info. Not
++    // MiniDumpWithIndirectlyReferencedMemory, which failed on Eden's address space, nor
++    // MiniDumpWithFullMemoryInfo: walking the reserved placeholders stopped every thread for
++    // ~15 s and still wrote nothing (r52). A plain dump (all threads' stacks) if this fails.
++    constexpr int flags = 0x20 | 0x100 | 0x1000;
++    if (!write(GetCurrentProcess(), GetCurrentProcessId(), file, flags, exception, nullptr,
++               nullptr)) {
++        SetFilePointer(file, 0, nullptr, FILE_BEGIN);
++        SetEndOfFile(file);
++        write(GetCurrentProcess(), GetCurrentProcessId(), file, 0, exception, nullptr, nullptr);
++    }
 +    CloseHandle(file);
 +}
 +
