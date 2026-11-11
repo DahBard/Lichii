@@ -3,6 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
+#include <string>
+
+#include <fmt/format.h>
 
 #include "common/common_types.h"
 #include "common/logging.h"
@@ -30,9 +34,13 @@ s64 NowMs() {
 void Write() {
     static const bool named = [] {
         // Not the default name: it merges into the file on every write, which would count the
-        // earlier part of the session again each time.
+        // earlier part of the session again each time. Each write appends instead, and the
+        // runtime truncates only the startup file, so the start time keeps a reused process id
+        // from appending a second session to an old file.
         if (std::getenv("LLVM_PROFILE_FILE") == nullptr) {
-            __llvm_profile_set_filename("lichii-pgo-%p.profraw");
+            const std::string name =
+                fmt::format("lichii-pgo-{}-%p.profraw", static_cast<s64>(std::time(nullptr)));
+            __llvm_profile_set_filename(name.c_str());
         }
         return true;
     }();

@@ -445,7 +445,7 @@ PGO training build (the "pgo-train" download)
 This build records which code your game runs, so the next "pgo" build can be optimized for it.
 It runs slower than the others; that is expected. Run lichii.exe from it, play Ocarina through
 a few typical areas for 10-15 minutes, then stop the game and close the emulator normally. It
-leaves lichii-pgo-<number>.profraw files next to lichii.exe (it also saves them every 30 s).
+leaves lichii-pgo-<time>-<number>.profraw files next to lichii.exe (saved every 30 s).
 Zip them and attach the zip to a new pre-release in the fork whose tag starts with "pgo-"
 (for example pgo-r49): GitHub > Releases > Draft a new release, target the tuned branch, and
 tick "Set as a pre-release". Zips over 25 MB are fine there; release files can be up to 2 GB.
