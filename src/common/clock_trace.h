@@ -5,13 +5,16 @@
 
 #include <cstddef>
 
+#include "common/common_types.h"
+
 /// EDEN_NX2_CLOCK_TRACE=1 (Windows on x86-64): where a power-limited CPU's clock goes, per role
 /// thread. The threads DkbCpuTrace::Registration names (guest cores, GPU front and back, Vulkan
 /// worker) publish the logical processor they run on; a sampler thread ("ClockTrace") gives
 /// their CPU time to those processors every 10 ms and reads each processor's clock from PDH every
 /// second. Every 10 s one HW_GPU line ("Clock trace per second"): each role group's effective
-/// clock, CPU time, share on P-, E- and low-power E-cores and migrations, each core class's
-/// utility and clock, package power and the power mode. Read on first use, so nx2_switches.txt
+/// clock, CPU time split into polls and work, share on P-, E- and low-power E-cores and
+/// migrations, each core class's load, utility and clock, package power, the power mode and the
+/// battery. Read on first use, so nx2_switches.txt
 /// can set it too. With it unset each hook is a call that returns at once and nothing else runs.
 namespace Common::ClockTrace {
 
@@ -27,6 +30,11 @@ void NoteProcessor() noexcept;
 
 /// In a role thread's busy loop, never per draw or method: every 32nd call publishes.
 void NoteProcessorInLoop() noexcept;
+
+/// Around a role thread's poll before it sleeps (a spin or UMWAIT wait for another thread): its
+/// time is the thread's poll_ms, which Windows counts as running. 0 with the trace off.
+[[nodiscard]] u64 PollStart() noexcept;
+void PollEnd(u64 start) noexcept;
 
 struct Slot;
 

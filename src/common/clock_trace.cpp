@@ -50,12 +50,13 @@
 
 namespace Common::ClockTrace {
 
-/// A role thread's slot. The thread writes processor, migrations and loop_calls; the rest
-/// changes under the registry mutex, which the sampler holds while it reads a slot. One cache
-/// line each, so that role threads never write each other's.
+/// A role thread's slot. The thread writes processor, migrations, poll_ticks and loop_calls; the
+/// rest changes under the registry mutex, which the sampler holds while it reads a slot. One
+/// cache line each, so that role threads never write each other's.
 struct alignas(64) Slot {
     std::atomic<u32> processor{};  ///< (group << 8) | number, as GetCurrentProcessorNumberEx gives
     std::atomic<u32> migrations{}; ///< Changes of `processor`
+    std::atomic<u64> poll_ticks{}; ///< TSC ticks between PollStart and PollEnd
     u32 loop_calls{};
     bool active{};
     u64 generation{};
@@ -520,6 +521,7 @@ private:
         bool has_last{};
         u64 last_cycles{};
         u32 last_migrations{};
+        u64 last_poll{};
         std::vector<u64> second_cycles; ///< Per processor, then processor unknown
         // The window's.
         u64 cycles{};
@@ -527,6 +529,7 @@ private:
         double mhz_cycles{};   ///< Cycles times the effective MHz they ran at
         u64 clocked_cycles{};  ///< Cycles with a known clock
         u64 migrations{};
+        u64 poll_cycles{}; ///< TSC ticks in polls
     };
 
     struct GroupTotals {
@@ -535,6 +538,7 @@ private:
         double mhz_cycles{};
         u64 clocked_cycles{};
         u64 migrations{};
+        u64 poll_cycles{};
     };
 
     struct PowerCounter {
@@ -737,15 +741,18 @@ void Sampler::SampleThreads() {
             continue;
         }
         const u32 migrations = slot.migrations.load(std::memory_order_relaxed);
+        const u64 poll = slot.poll_ticks.load(std::memory_order_relaxed);
         if (state.has_last && cycles >= state.last_cycles) {
             // The time since the last sample goes to the processor the thread published last.
             state.second_cycles[IndexOf(slot.processor.load(std::memory_order_relaxed))] +=
                 cycles - state.last_cycles;
             state.migrations += migrations - state.last_migrations;
+            state.poll_cycles += poll - state.last_poll;
         }
         state.has_last = true;
         state.last_cycles = cycles;
         state.last_migrations = migrations;
+        state.last_poll = poll;
     }
 }
 
@@ -918,6 +925,7 @@ Sampler::GroupTotals Sampler::Totals(std::initializer_list<size_t> role_indices)
         totals.mhz_cycles += role.mhz_cycles;
         totals.clocked_cycles += role.clocked_cycles;
         totals.migrations += role.migrations;
+        totals.poll_cycles += role.poll_cycles;
     }
     return totals;
 }
@@ -928,8 +936,13 @@ std::string Sampler::GroupFields(const GroupTotals& totals, double seconds) cons
             ? std::string{"ghz=n/a"}
             : fmt::format("ghz={:.2f}", totals.mhz_cycles /
                                             static_cast<double>(totals.clocked_cycles) / 1e3);
-    fmt::format_to(std::back_inserter(text), " cpu_ms={:.1f}",
-                   static_cast<double>(totals.cycles) * 1e3 / tsc_hz / seconds);
+    const auto ms = [this, seconds](u64 ticks) {
+        return static_cast<double>(ticks) * 1e3 / tsc_hz / seconds;
+    };
+    // Polls are timed by the TSC while the thread may also be preempted: work never goes below 0.
+    const u64 work = totals.cycles > totals.poll_cycles ? totals.cycles - totals.poll_cycles : 0;
+    fmt::format_to(std::back_inserter(text), " cpu_ms={:.1f} poll_ms={:.1f} work_ms={:.1f}",
+                   ms(totals.cycles), ms(totals.poll_cycles), ms(work));
     // Shares only where there is more than one class.
     if (!class_present[ClassIndex(CoreClass::Uniform)]) {
         u64 classified = 0;
@@ -966,9 +979,14 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
                 index(Role::GuestCore3), index(Role::GuestCore4), index(Role::GuestCore5),
                 index(Role::GuestSingleCore)});
     fmt::format_to(std::back_inserter(line), " | guest_cores {}", GroupFields(guest, seconds));
+    // By work: a core that idles in its polls all the time shows close to 1000 cpu_ms too.
+    const auto work = [this](size_t role) {
+        const RoleState& state = roles[role];
+        return state.cycles > state.poll_cycles ? state.cycles - state.poll_cycles : u64{0};
+    };
     size_t busiest = index(Role::GuestCore0);
     for (size_t core = index(Role::GuestCore0); core <= index(Role::GuestSingleCore); ++core) {
-        if (roles[core].cycles > roles[busiest].cycles) {
+        if (work(core) > work(busiest)) {
             busiest = core;
         }
     }
@@ -1070,6 +1088,7 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
         role.mhz_cycles = 0.0;
         role.clocked_cycles = 0;
         role.migrations = 0;
+        role.poll_cycles = 0;
     }
     for (Processor& processor : processors) {
         processor.utility_sum = 0.0;
@@ -1114,6 +1133,30 @@ void NoteProcessorInLoop() noexcept {
     }
 }
 
+u64 PollStart() noexcept {
+#if LICHII_CLOCK_TRACE
+    if (g_publish.on.load(std::memory_order_relaxed)) [[unlikely]] {
+        if (t_slot != nullptr) {
+            return X64::FencedRDTSC();
+        }
+    }
+#endif
+    return 0;
+}
+
+void PollEnd([[maybe_unused]] u64 start) noexcept {
+#if LICHII_CLOCK_TRACE
+    if (start == 0) [[likely]] {
+        return;
+    }
+    if (Slot* const slot = t_slot) {
+        const u64 ticks = X64::FencedRDTSC() - start;
+        slot->poll_ticks.store(slot->poll_ticks.load(std::memory_order_relaxed) + ticks,
+                               std::memory_order_relaxed);
+    }
+#endif
+}
+
 Slot* RegisterThread(size_t role) {
     if (!Enabled() || role >= DkbCpuTrace::RoleCount) {
         return nullptr;
@@ -1136,6 +1179,7 @@ Slot* RegisterThread(size_t role) {
     slot.handle = handle;
     slot.processor.store(CurrentProcessor(), std::memory_order_relaxed);
     slot.migrations.store(0, std::memory_order_relaxed);
+    slot.poll_ticks.store(0, std::memory_order_relaxed);
     slot.loop_calls = 0;
     t_slot = &slot;
     return &slot;

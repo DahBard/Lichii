@@ -605,9 +605,11 @@ void GpuSplit::Backoff(u32 spins, u64 target) {
     if (Common::SpinWait::UsesWaitpkg()) {
         if (spins == 0) {
             // The same spin as below, with the core idling until the back stores `consumed`.
+            const u64 poll_start = Common::ClockTrace::PollStart();
             Common::SpinUntil(&consumed, 16384, [this, target] {
                 return consumed.load(std::memory_order_acquire) >= target;
             });
+            Common::ClockTrace::PollEnd(poll_start);
             return;
         }
     } else if (spins < 16384) {
@@ -879,12 +881,14 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                 back_idle_since.store(Nx2Profile::Ticks(), std::memory_order_relaxed);
             }
             // The front usually sends more within microseconds: spin briefly before sleeping.
+            const u64 poll_start = Common::ClockTrace::PollStart();
             Common::SpinUntil(&published, 8192, [&] {
                 available = published.load(std::memory_order_acquire);
                 return available != read_position ||
                        hook_requested.load(std::memory_order_relaxed) ||
                        tick_requested.load(std::memory_order_relaxed);
             });
+            Common::ClockTrace::PollEnd(poll_start);
             if (available == read_position) {
                 hook_requested.store(false, std::memory_order_seq_cst);
                 // The front may already see everything consumed: Drain() waits for back_quiet

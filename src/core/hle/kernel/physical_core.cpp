@@ -305,6 +305,7 @@ void PhysicalCore::Idle(KernelCore& kernel) {
     // (title 1's frames: 42 ms without, 35 ms with 50 us, 34 ms with 100 us, 36 ms with 300 us).
     const auto spin = std::chrono::microseconds{IdleSpinMicroseconds(kernel)};
     m_profile.Switch(GuestCoreProfile::Activity::IdleSpin);
+    const u64 poll_start = Common::ClockTrace::PollStart();
     if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
         // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
         Common::SpinUntilFor(&m_is_interrupted, spin, [this] {
@@ -331,6 +332,7 @@ void PhysicalCore::Idle(KernelCore& kernel) {
             std::this_thread::yield();
         }
     }
+    Common::ClockTrace::PollEnd(poll_start);
     m_profile.Switch(GuestCoreProfile::Activity::IdleWait);
     if (CoreLockEnabled()) {
         while (m_is_interrupted.load(std::memory_order_acquire) == 0) {
