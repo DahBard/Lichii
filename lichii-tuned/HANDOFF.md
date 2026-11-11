@@ -1608,6 +1608,43 @@ Own changes:
        'method'. Compare 'method' and 'other' with r50 only through unprofiled frame times.
      - Before nx2: run the [fast_draw] and uniform_stream_reuse unit tests (compiled, not run).
        Consider taking the InvalidateGPUCache early-out on the GPU thread only.
+   - Unit tests: `.github/workflows/lichii-tuned-tests.yml` (2026-11-11).
+     - It builds upstream's `tests` program from this branch plus the patch, with the Windows
+       builds' MinGW clang (no PGO, warnings not fatal), and runs it.
+     - It is its own workflow, so lichii-tuned.yml's run numbers (the build names) don't move.
+     - It runs on every patch push; run 1 tested build A.
+   - Build B done: tuned4 `0d3fb0540` (branch `r22-r52`), shipped as run #53 or later. Workflow
+     `wncy3e2y2` (implementer, reviewer, fixer), then a deep review `wp8s3x0f9`: one finder per item
+     and two skeptics per finding.
+     - #1161 792e12a47's fast-draw half, a hand port behind EDEN_NX2_TEST_1161_DRAWS (ab-29):
+       - full delta lists widen;
+       - handle checks cover the handle words only;
+       - attribute formats become draw parameters.
+     - #1274 FoldInstance (EDEN_NX2_FOLD_INSTANCES, ab-30). The fold is flushed at every Reserve,
+       Publish, Drain, WaitFor and FrontDmaRead.
+     - Native bank check bitsets (EDEN_NX2_TEST_BANK_BITS, ab-31). LICHII_BANK_CHECK=2 adds
+       'bitsets missed'.
+     - #1161's reports/fences half (EDEN_NX2_TEST_1161_REPORTS, ab-32). Not switchable: the
+       report operation layout and the run-time GetPointer.
+       - #1099 was not taken: our tree has nx2's delayed releases instead of b3f4ee7d3's
+         is_synced.
+     - Per-draw trims (EDEN_NX2_TEST_DRAW_TRIMS, ab-33).
+     - Per-thread GPU page translation cache (EDEN_NX2_TEST_XLATE_CACHE, ab-34).
+     - #1306 and #1311 (EDEN_NX2_TEST_1306, ab-35; #1306 fixes the RX 9070 XT device-heap crash
+       breaking pots in Hyrule Castle).
+     - Launcher verify-r52.
+     - The deep review confirmed one major defect, fixed in `419af3688`: with ab-29's change on, a
+       delta draw that kept attribute formats consumed Dirty::VertexInput without refreshing
+       PipelineCache::vertex_attribute_types. A later full draw with other programs could then key
+       a now-constant attribute with its old type, reading undefined vertex input.
+       KeepsAttributeTypes now compares the types the programs read (as the key holds them) and
+       stores the registers' types. FAST_DRAW_VERIFY could not see it.
+     - Two minor fixes:
+       - verify counting with the switch off;
+       - `0d3fb0540`: on the drawing thread, deferred buffer invalidations now apply before a
+         download.
+     - Not taken yet: e05a72847 (computed-handle delta draws). It waits for build A's mask run at
+       the Kokiri water.
    - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
      preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
      EXP26/28/53/61, #1131.

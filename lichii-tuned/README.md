@@ -15,6 +15,8 @@ with The Legend of Zelda: Ocarina of Time.
   - Windows: `pgo` (MinGW clang, Lichii's PGO profile, `-march=x86-64-v3 -mtune=arrowlake`),
     `pgo-lto` (the same plus ThinLTO) and `pgo-train`, with AMD's FSR 4 and frame generation
     libraries.
+- `.github/workflows/lichii-tuned-tests.yml` builds upstream's unit tests (`tests`) from the same
+  source with the same MinGW clang and runs them, on every push of the patch. It uploads nothing.
 - PGO: profiles the owner records with a `pgo-train` build (`lichii-pgo-*.profraw`, zipped) are
   attached to pre-releases whose tag starts with `pgo-` (the first is `pgo-r49`). Each build except
   `pgo-train` downloads them (`fetch_pgo_profiles.py`) and merges them into Lichii's profile,
