@@ -472,7 +472,9 @@ GraphicsPipeline::GraphicsPipeline(
         };
         // The words read_handle reads (upstream #1161). Handles computed at draw time neither
         // block delta draws nor take part: ComputedHandlesChanged evaluates them again for each
-        // delta draw, from the constant buffers bound and the data in memory then.
+        // delta draw, from the constant buffers bound and the data in memory then. Unlike
+        // upstream, their constant buffers stay out of the handle masks, so a rebind or write
+        // there ends a delta only when the evaluated handle changes.
         // TEST: EDEN_NX2_TEST_1161_HANDLES=0 keeps such pipelines out of delta draws.
         const auto add = [&](const auto& desc) {
             if (desc.handle_program != ~0U) {
