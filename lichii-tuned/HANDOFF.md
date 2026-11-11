@@ -1613,7 +1613,9 @@ Own changes:
        builds' MinGW clang (no PGO, warnings not fatal), and runs it.
      - It is its own workflow, so lichii-tuned.yml's run numbers (the build names) don't move.
      - It runs on every patch push; run 1 tested build A.
-   - Build B done: tuned4 `0d3fb0540` (branch `r22-r52`), shipped as run #53 or later. Workflow
+   - Build B done: tuned4 `0d3fb0540` (branch `r22-r52`), run #53 passed at 09:03 UTC. Artifacts
+     `lichii-tuned-r53-pgo-lto`, `-pgo` and `-pgo-train`; its launchers are named r52
+     (verify-r52, ab-29..35). The owner tests build A (r52) first. Workflow
      `wncy3e2y2` (implementer, reviewer, fixer), then a deep review `wp8s3x0f9`: one finder per item
      and two skeptics per finding.
      - #1161 792e12a47's fast-draw half, a hand port behind EDEN_NX2_TEST_1161_DRAWS (ab-29):
