@@ -66,4 +66,11 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_1306=0 keeps the aggressive collector at 40 images a frame unused for 10
+/// frames however far past the critical memory (before upstream #1306).
+[[nodiscard]] inline bool Collector1306() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_1306");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test
