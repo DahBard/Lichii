@@ -315,86 +315,30 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     // Written later: the buffer cache keeps GPU writes over it until then (NoteReportPending).
     const bool report_noted =
         !immediate && impl->rasterizer.NoteReportPending(cpu_addr, report_size);
-    std::function<void()> operation([this, streamer, query_base = query, query_location,
-                                     pointer, pointer_timestamp, cpu_addr, addr,
-                                     asid = gpu_memory->GetID(), counter_type, mirrored,
-                                     report_size, report_noted, split_entry, delayed_release,
-                                     payload] {
-        SCOPE_EXIT {
-            if (report_noted) {
-                impl->rasterizer.FinishReport(cpu_addr, report_size);
-            }
-            if (split_entry) {
-                VideoCommon::GpuSplit::Get().NoteFencedWrite(*split_entry);
-            }
-            if (delayed_release) {
-                Tegra::Nx2SemaphoreWaiters::Get().OnDelayedReleaseDone(cpu_addr, payload);
-            }
-        };
-        if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
-            if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Discard)) {
-                LOG_INFO(HW_GPU,
-                         "DKB_QUERY discard n={} as={} gpu={:#x} device={:#x} type={} "
-                         "reason=invalidated flags={:#x}",
-                         trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
-                         static_cast<u32>(query_base->flags));
-            }
-            impl->pending_unregister.push_back(query_location);
-            return;
-        }
-        if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
-            if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Discard)) {
-                LOG_INFO(HW_GPU,
-                         "DKB_QUERY discard n={} as={} gpu={:#x} device={:#x} type={} "
-                         "reason=unsynchronized flags={:#x}",
-                         trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
-                         static_cast<u32>(query_base->flags));
-            }
-            LOG_ERROR(HW_GPU,
-                      "Query report value not synchronized. Consider increasing GPU accuracy.");
-            impl->pending_unregister.push_back(query_location);
-            return;
-        }
-        query_base->value += streamer->GetAmendValue();
-        streamer->SetAccumulationValue(query_base->value);
-        FinishReads(cpu_addr, True(query_base->flags & QueryFlagBits::HasTimestamp) ? 16 : 4);
-        auto& shadow = Tegra::Nx2MirrorShadow::Get();
-        if (mirrored && shadow.Diverts(cpu_addr)) {
-            u32 guest;
-            std::memcpy(&guest, pointer, sizeof(guest));
-            shadow.Set(cpu_addr, static_cast<u32>(query_base->value), guest);
-        } else if (True(query_base->flags & QueryFlagBits::HasTimestamp)) {
-            u64 timestamp = impl->gpu.GetTicks();
-            std::memcpy(pointer_timestamp, &timestamp, sizeof(timestamp));
-            std::memcpy(pointer, &query_base->value, sizeof(query_base->value));
-        } else {
-            u32 value = static_cast<u32>(query_base->value);
-            std::memcpy(pointer, &value, sizeof(value));
-        }
-        if (!mirrored && counter_type == QueryType::Payload) {
-            shadow.NoteDirectRelease(cpu_addr, addr);
-        }
-        Tegra::Nx2SemaphoreWaiters::Get().OnWrite(
-            cpu_addr, static_cast<u32>(query_base->value),
-            counter_type == QueryType::Payload ? Tegra::Nx2SemaphoreWaiters::Source::PayloadRelease
-                                               : Tegra::Nx2SemaphoreWaiters::Source::QueryResult);
-        if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Write)) {
-            const bool wide = True(query_base->flags & QueryFlagBits::HasTimestamp);
-            LOG_INFO(HW_GPU,
-                     "DKB_QUERY write n={} path=completion as={} gpu={:#x} device={:#x} type={} "
-                     "bytes={} value={:#x} flags={:#x}",
-                     trace, asid, addr, cpu_addr, static_cast<u32>(counter_type), wide ? 8 : 4,
-                     wide ? query_base->value : static_cast<u32>(query_base->value),
-                     static_cast<u32>(query_base->flags));
-        }
-        impl->pending_unregister.push_back(query_location);
-    });
+    // The operation fits std::function's own storage (upstream #1161): a report per draw
+    // (Ocarina of Time's occlusion counts) allocated one each.
+    const ReportOp report_op{
+        .query = query,
+        .cpu_addr_bits = cpu_addr |
+                         (u64{(mirrored ? OpMirrored : 0U) | (report_noted ? OpNoted : 0U) |
+                              (has_timestamp ? OpWide : 0U) | (delayed_release ? OpDelayed : 0U)}
+                          << OpFlagsShift) |
+                         (u64{static_cast<u8>(counter_type)} << 40) |
+                         (u64{static_cast<u16>(gpu_memory->GetID())} << 48),
+        .addr = addr,
+        .split_entry = split_entry.value_or(~u64{0}),
+        .location = query_location,
+        .payload = payload,
+    };
+    const auto operation_body = [this, op = report_op] { RunReportOperation(op); };
+    static_assert(sizeof(operation_body) <= 48,
+                  "the report operation must fit std::function's own storage");
     if (is_fence) {
         if (delayed_release) {
             Tegra::Nx2SemaphoreWaiters::Get().OnDelayedRelease(cpu_addr, payload);
         }
         VideoCore::g_signaling_query_report_fence = true;
-        impl->rasterizer.SignalFence(std::move(operation));
+        impl->rasterizer.SignalFence(std::function<void()>(operation_body));
         VideoCore::g_signaling_query_report_fence = false;
     } else {
         if (immediate) {
@@ -428,7 +372,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
             streamer->Free(new_query_id);
             return;
         }
-        impl->rasterizer.SyncOperation(std::move(operation));
+        impl->rasterizer.SyncOperation(std::function<void()>(operation_body));
     }
     auto [cont_addr, base] = gen_caching_indexing(cpu_addr);
     {
@@ -445,6 +389,94 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         old_query->flags |= QueryFlagBits::IsRewritten;
         sub_container.insert_or_assign(base, query_location);
     }
+}
+
+template <typename Traits>
+void QueryCacheBase<Traits>::RunReportOperation(const ReportOp& op) {
+    const u32 bits = static_cast<u32>(op.cpu_addr_bits >> OpFlagsShift) & 0xf;
+    const DAddr cpu_addr = op.cpu_addr_bits & ((u64{1} << OpFlagsShift) - 1);
+    const bool mirrored = (bits & OpMirrored) != 0;
+    const u64 report_size = (bits & OpWide) != 0 ? 16 : 4;
+    const auto counter_type = static_cast<QueryType>((op.cpu_addr_bits >> 40) & 0xff);
+    const size_t asid = static_cast<size_t>(op.cpu_addr_bits >> 48);
+    const GPUVAddr addr = op.addr;
+    const QueryLocation query_location = op.location;
+    QueryBase* const query_base = op.query;
+    auto* const streamer = impl->streamers[query_location.stream_id.Value()];
+    SCOPE_EXIT {
+        if ((bits & OpNoted) != 0) {
+            impl->rasterizer.FinishReport(cpu_addr, report_size);
+        }
+        if (op.split_entry != ~u64{0}) {
+            VideoCommon::GpuSplit::Get().NoteFencedWrite(op.split_entry);
+        }
+        if ((bits & OpDelayed) != 0) {
+            Tegra::Nx2SemaphoreWaiters::Get().OnDelayedReleaseDone(cpu_addr, op.payload);
+        }
+    };
+    if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
+        if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Discard)) {
+            LOG_INFO(HW_GPU,
+                     "DKB_QUERY discard n={} as={} gpu={:#x} device={:#x} type={} "
+                     "reason=invalidated flags={:#x}",
+                     trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
+                     static_cast<u32>(query_base->flags));
+        }
+        impl->pending_unregister.push_back(query_location);
+        return;
+    }
+    if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
+        if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Discard)) {
+            LOG_INFO(HW_GPU,
+                     "DKB_QUERY discard n={} as={} gpu={:#x} device={:#x} type={} "
+                     "reason=unsynchronized flags={:#x}",
+                     trace, asid, addr, cpu_addr, static_cast<u32>(counter_type),
+                     static_cast<u32>(query_base->flags));
+        }
+        LOG_ERROR(HW_GPU,
+                  "Query report value not synchronized. Consider increasing GPU accuracy.");
+        impl->pending_unregister.push_back(query_location);
+        return;
+    }
+    query_base->value += streamer->GetAmendValue();
+    streamer->SetAccumulationValue(query_base->value);
+    FinishReads(cpu_addr, True(query_base->flags & QueryFlagBits::HasTimestamp) ? 16 : 4);
+    u8* const pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
+    u8* const pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
+    auto& shadow = Tegra::Nx2MirrorShadow::Get();
+    if (pointer == nullptr) [[unlikely]] {
+        // Unmapped since the report: nothing to write.
+    } else if (mirrored && shadow.Diverts(cpu_addr)) {
+        u32 guest;
+        std::memcpy(&guest, pointer, sizeof(guest));
+        shadow.Set(cpu_addr, static_cast<u32>(query_base->value), guest);
+    } else if (True(query_base->flags & QueryFlagBits::HasTimestamp)) {
+        u64 timestamp = impl->gpu.GetTicks();
+        if (pointer_timestamp != nullptr) {
+            std::memcpy(pointer_timestamp, &timestamp, sizeof(timestamp));
+        }
+        std::memcpy(pointer, &query_base->value, sizeof(query_base->value));
+    } else {
+        u32 value = static_cast<u32>(query_base->value);
+        std::memcpy(pointer, &value, sizeof(value));
+    }
+    if (!mirrored && counter_type == QueryType::Payload) {
+        shadow.NoteDirectRelease(cpu_addr, addr);
+    }
+    Tegra::Nx2SemaphoreWaiters::Get().OnWrite(
+        cpu_addr, static_cast<u32>(query_base->value),
+        counter_type == QueryType::Payload ? Tegra::Nx2SemaphoreWaiters::Source::PayloadRelease
+                                           : Tegra::Nx2SemaphoreWaiters::Source::QueryResult);
+    if (const u64 trace = QueryTrace::Sample(QueryTrace::Event::Write)) {
+        const bool wide = True(query_base->flags & QueryFlagBits::HasTimestamp);
+        LOG_INFO(HW_GPU,
+                 "DKB_QUERY write n={} path=completion as={} gpu={:#x} device={:#x} type={} "
+                 "bytes={} value={:#x} flags={:#x}",
+                 trace, asid, addr, cpu_addr, static_cast<u32>(counter_type), wide ? 8 : 4,
+                 wide ? query_base->value : static_cast<u32>(query_base->value),
+                 static_cast<u32>(query_base->flags));
+    }
+    impl->pending_unregister.push_back(query_location);
 }
 
 template <typename Traits>

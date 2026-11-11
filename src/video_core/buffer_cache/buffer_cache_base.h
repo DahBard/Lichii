@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <array>
 #include <chrono>
@@ -317,6 +318,14 @@ public:
     /// lands it: the older result lands over it, and a later read downloads it again. True when
     /// it keeps the result, which FinishReport then ends.
     [[nodiscard]] bool NoteReportPending(DAddr device_addr, u64 size);
+    /// Without `mutex`: false when the page under device_addr can't be one the guest reads back
+    /// (NoteReportPending would return false). Seeing the bounds before a page joins them is
+    /// the same as looking before that read took the lock.
+    [[nodiscard]] bool MayBeReadBackPage(DAddr device_addr) const noexcept {
+        const DAddr page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
+        return page >= read_back_first.load(std::memory_order_acquire) &&
+               page <= read_back_last.load(std::memory_order_acquire);
+    }
 
     /// The query cache wrote a result NoteReportPending kept to guest memory, or dropped it.
     void FinishReport(DAddr device_addr, u64 size);
@@ -1203,6 +1212,9 @@ private:
     static constexpr u64 EarlyBytesPerFrame = 1_MiB;
     static constexpr u32 MaxPendingEarlyDownloads = 32;
     std::vector<ReadBackPage> read_back_pages; ///< Sorted by page
+    /// The first and last page of read_back_pages (MayBeReadBackPage), set under `mutex`.
+    std::atomic<DAddr> read_back_first{~DAddr{0}};
+    std::atomic<DAddr> read_back_last{0};
     /// NoteReportPending's results not yet written, oldest first.
     struct PendingReport {
         DAddr addr;

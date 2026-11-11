@@ -43,4 +43,12 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_1161_REPORTS=0 restores, of upstream #1161's report and fence half, a
+/// new fence operation list per made fence, the buffer cache lock for every pending report and
+/// the host query pool reset on the recording thread.
+[[nodiscard]] inline bool Reports1161() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_1161_REPORTS");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test

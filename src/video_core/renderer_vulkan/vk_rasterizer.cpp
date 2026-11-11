@@ -2888,6 +2888,11 @@ void RasterizerVulkan::FinishRead(DAddr addr, u64 size) {
 }
 
 bool RasterizerVulkan::NoteReportPending(DAddr addr, u64 size) {
+    // A report per draw (Ocarina of Time's occlusion counts), rarely on a page the guest reads
+    // back: most skip the buffer cache's lock (upstream #1161; TEST: EDEN_NX2_TEST_1161_REPORTS).
+    if (VideoCommon::Nx2Test::Reports1161() && !buffer_cache.MayBeReadBackPage(addr)) {
+        return false;
+    }
     std::scoped_lock lock{buffer_cache.mutex};
     return buffer_cache.NoteReportPending(addr, size);
 }

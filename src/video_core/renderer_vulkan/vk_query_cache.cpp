@@ -19,6 +19,7 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/query_cache/frame_trace.h"
+#include "video_core/nx2_test_switches.h"
 #include "video_core/query_cache/query_cache.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
@@ -61,9 +62,16 @@ public:
     void Reset() override {
         ASSERT(references == 0);
         VideoCommon::BankBase::Reset();
-        if (device.IsHostQueryResetSupported()) {
+        if (device.IsHostQueryResetSupported() && VideoCommon::Nx2Test::Reports1161()) {
+            // On the Vulkan worker, ahead of the BeginQuery commands recorded after it: a host
+            // reset costs the recording thread ~100 us a bank on AMD's driver. The bank is dead
+            // (no query uses it and the GPU is done with it), so nothing else touches the pool.
+            scheduler.Record([dev = &device.GetLogical(), pool = *query_pool](vk::CommandBuffer) {
+                dev->ResetQueryPool(pool, 0, BANK_SIZE);
+            });
+        } else if (device.IsHostQueryResetSupported()) {
             const auto& dev = device.GetLogical();
-            dev.ResetQueryPool(*query_pool, 0, BANK_SIZE);
+            dev.ResetQueryPool(*query_pool, 0, BANK_SIZE); // TEST
         } else {
             scheduler.RequestOutsideRenderPassOperationContext();
             scheduler.Record([pool = *query_pool](vk::CommandBuffer cmdbuf) {

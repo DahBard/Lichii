@@ -215,6 +215,25 @@ protected:
     bool SemiFlushQueryDirty(QueryLocation location);
     void RequestGuestHostSync();
     void UnregisterPending();
+
+    // A report's operation, small enough for std::function to hold without allocating
+    // (CounterReport). The flags, the counter type and the address space id share a word with
+    // the device address, which has 36 bits.
+    static constexpr u32 OpFlagsShift = 36;
+    static constexpr u32 OpMirrored = 1;
+    static constexpr u32 OpNoted = 2;
+    static constexpr u32 OpWide = 4;
+    static constexpr u32 OpDelayed = 8;
+    static_assert(Tegra::MaxwellDeviceTraits::device_virtual_bits <= OpFlagsShift);
+    struct ReportOp {
+        QueryBase* query;
+        u64 cpu_addr_bits; ///< Device address | flags << 36 | counter type << 40 | asid << 48
+        GPUVAddr addr;
+        u64 split_entry; ///< ~0: none
+        QueryLocation location;
+        u32 payload;
+    };
+    void RunReportOperation(const ReportOp& op);
     /// Before a report's bytes go to guest memory: a download for a guest read still on its way
     /// would write the GPU's older copy over them later (as MemoryManager::Write).
     void FinishReads(DAddr address, size_t size);
