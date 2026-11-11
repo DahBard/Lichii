@@ -218,11 +218,45 @@ inline constexpr std::array<const char*, static_cast<size_t>(FineCounter::Count)
     };
 static_assert(fine_counter_names.back() != nullptr, "a fine counter without a name");
 
+/// Amounts counted on the GPU thread, logged per second with the zones.
+enum class Counter : u32 {
+    DownloadBytes,  ///< Buffer data copied back from the host GPU at fences
+    DownloadCopies, ///< Buffer ranges copied back
+    DmaReadBytes,   ///< Guest memory the native MME read with DMA
+    DownloadBytesOnDmaPages, ///< Of DownloadBytes: on pages the MME has DMA-read
+    MethodWrites,   ///< 3D register writes (Maxwell3D::CallMethod below the macro range)
+    SameValueWrites, ///< Of MethodWrites: the register already held the value
+    AcquireChecks,  ///< Semaphore acquires evaluated
+    AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
+    BankPagesChecked, ///< Native uniform bank pages compared with their snapshot
+    BankPagesSkipped, ///< Bank pages no write could have changed, not compared
+    /// TEST: the split's front publishes words while its back waits for work (GpuSplit::Publish):
+    /// the back's wait since it ran out or since the first of them was sent (Ticks), and count
+    LatePublishTicks,
+    LatePublishes,
+    ResnapshotWords, ///< TEST: command list words copied again at resumes
+    EarlyPublishes,  ///< TEST: publishes to a back waiting for work, before publish_every
+    // The split's back's ring entries by kind (GpuSplit::Execute), for the ring entries line.
+    Entry3dDirect,     ///< 3D Direct writes (macro state writes)
+    Entry3dSunk,       ///< 3D state writes held for the next executable method
+    Entry3dExecutable, ///< 3D executable methods
+    Entry3dCbRuns,     ///< Runs of single constant buffer words sent up together...
+    Entry3dCbWords,    ///< ...and their words
+    EntryOtherDirect,  ///< Other engines' Direct writes
+    EntryOtherSunk,    ///< Other engines' state writes held for their next executable method
+    EntryOtherExecutable,
+    EntryMulti,       ///< Multi-word method entries (any engine)
+    EntryCalls,       ///< Deferred calls...
+    EntryNeutralCalls, ///< ...of them FastDrawNeutral
+    EntryEngines,     ///< Engine switches
+    Count,
+};
+
 struct ThreadData {
     std::array<u64, static_cast<size_t>(FineCounter::Count)> fine_counters{}; ///< TEST
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 14> counters{}; ///< See Counter
+    std::array<u64, static_cast<size_t>(Counter::Count)> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
     /// GPU waits by the zone they happened in (Other: outside every zone)
@@ -392,25 +426,6 @@ private:
     u64 parent_child_ns{};
 };
 
-/// Amounts counted on the GPU thread, logged per second with the zones.
-enum class Counter : u32 {
-    DownloadBytes,  ///< Buffer data copied back from the host GPU at fences
-    DownloadCopies, ///< Buffer ranges copied back
-    DmaReadBytes,   ///< Guest memory the native MME read with DMA
-    DownloadBytesOnDmaPages, ///< Of DownloadBytes: on pages the MME has DMA-read
-    MethodWrites,   ///< 3D register writes (Maxwell3D::CallMethod below the macro range)
-    SameValueWrites, ///< Of MethodWrites: the register already held the value
-    AcquireChecks,  ///< Semaphore acquires evaluated
-    AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
-    BankPagesChecked, ///< Native uniform bank pages compared with their snapshot
-    BankPagesSkipped, ///< Bank pages no write could have changed, not compared
-    /// TEST: the split's front publishes words while its back waits for work (GpuSplit::Publish):
-    /// the back's wait since it ran out or since the first of them was sent (Ticks), and count
-    LatePublishTicks,
-    LatePublishes,
-    ResnapshotWords, ///< TEST: command list words copied again at resumes
-    EarlyPublishes,  ///< TEST: publishes to a back waiting for work, before publish_every
-};
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and
 /// same-value writes among them; MME DMA reads by the macro that made them. The most frequent
@@ -640,6 +655,21 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
     }
     if (const std::string reads = TopMethods(t_dma_reads, nullptr, window); !reads.empty()) {
         LOG_INFO(HW_GPU, "{} MME DMA reads per second by macro:{}", thread_name, reads);
+    }
+    if (counter(Counter::EntryEngines) != 0 || counter(Counter::Entry3dDirect) != 0 ||
+        counter(Counter::EntryOtherExecutable) != 0) {
+        const auto rate = [&](Counter which) { return counter(which) * 1e9 / window_ns; };
+        LOG_INFO(HW_GPU,
+                 "{} ring entries per second: 3D direct {:.0f}, sunk {:.0f}, executable {:.0f}, "
+                 "constant buffer runs {:.0f} ({:.0f} words) | other engines direct {:.0f}, sunk "
+                 "{:.0f}, executable {:.0f} | multi {:.0f} | calls {:.0f} ({:.0f} fast draw "
+                 "neutral) | engine switches {:.0f}",
+                 thread_name, rate(Counter::Entry3dDirect), rate(Counter::Entry3dSunk),
+                 rate(Counter::Entry3dExecutable), rate(Counter::Entry3dCbRuns),
+                 rate(Counter::Entry3dCbWords), rate(Counter::EntryOtherDirect),
+                 rate(Counter::EntryOtherSunk), rate(Counter::EntryOtherExecutable),
+                 rate(Counter::EntryMulti), rate(Counter::EntryCalls),
+                 rate(Counter::EntryNeutralCalls), rate(Counter::EntryEngines));
     }
     t_method_count = {};
     t_method_same = {};

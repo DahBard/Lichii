@@ -685,6 +685,7 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         return 0;
     case Kind::Engine:
         back_engine = reinterpret_cast<Tegra::Engines::EngineInterface*>(entry[1]);
+        Nx2Profile::Add(Nx2Profile::Counter::EntryEngines, 1);
         return 2;
     case Kind::Method: {
         const u32 method = static_cast<u32>((head >> 8) & 0xffff);
@@ -716,6 +717,8 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
                     ++count;
                 }
                 maxwell3d->ConsumeSink(*system);
+                Nx2Profile::Add(Nx2Profile::Counter::Entry3dCbRuns, 1);
+                Nx2Profile::Add(Nx2Profile::Counter::Entry3dCbWords, count);
                 if (count == 1) {
                     maxwell3d->CallMethod(*system, method, argument, true);
                 } else {
@@ -725,11 +728,14 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
                 return count;
             }
             if ((head & Direct) != 0) {
+                Nx2Profile::Add(Nx2Profile::Counter::Entry3dDirect, 1);
                 maxwell3d->ConsumeSink(*system);
                 maxwell3d->CallMethod(*system, method, argument, true);
             } else if (!maxwell3d->execution_mask[method]) {
+                Nx2Profile::Add(Nx2Profile::Counter::Entry3dSunk, 1);
                 maxwell3d->method_sink.emplace_back(method, argument);
             } else {
+                Nx2Profile::Add(Nx2Profile::Counter::Entry3dExecutable, 1);
                 maxwell3d->ConsumeSink(*system);
                 if ((head & HasSegment) != 0) {
                     maxwell3d->current_dma_segment = entry[1];
@@ -741,14 +747,19 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         if (!engine->reports_fast_draw_breaks) {
             Nx2FastDraw::Break(Nx2FastDraw::Reason::OtherEngine);
         }
+        // Sampled as the 3D writes are: a full zone per entry cost about as much as most of
+        // these entries take, and only in profiled runs.
         if ((head & Direct) != 0) {
-            Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
+            Nx2Profile::Add(Nx2Profile::Counter::EntryOtherDirect, 1);
+            Nx2Profile::SampledScope method_scope{Nx2Profile::Zone::Method};
             engine->ConsumeSink(*system);
             engine->CallMethod(*system, method, argument, true);
         } else if (!engine->execution_mask[method]) {
+            Nx2Profile::Add(Nx2Profile::Counter::EntryOtherSunk, 1);
             engine->method_sink.emplace_back(method, argument);
         } else {
-            Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
+            Nx2Profile::Add(Nx2Profile::Counter::EntryOtherExecutable, 1);
+            Nx2Profile::SampledScope method_scope{Nx2Profile::Zone::Method};
             engine->ConsumeSink(*system);
             if ((head & HasSegment) != 0) {
                 engine->current_dma_segment = entry[1];
@@ -765,7 +776,8 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         if (!engine->reports_fast_draw_breaks) {
             Nx2FastDraw::Break(Nx2FastDraw::Reason::OtherEngine);
         }
-        Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
+        Nx2Profile::Add(Nx2Profile::Counter::EntryMulti, 1);
+        Nx2Profile::SampledScope method_scope{Nx2Profile::Zone::Method};
         engine->ConsumeSink(*system);
         if ((head & HasSegment) != 0) {
             engine->current_dma_segment = entry[2];
@@ -775,6 +787,8 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         return data + (amount + 1) / 2;
     }
     case Kind::Call: {
+        Nx2Profile::Add(Nx2Profile::Counter::EntryCalls, 1);
+        Nx2Profile::Add(Nx2Profile::Counter::EntryNeutralCalls, (head & FastDrawNeutral) != 0);
         if ((head & FastDrawNeutral) == 0) {
             Nx2FastDraw::Break(Nx2FastDraw::Reason::Call, (head & WordsCall) != 0 ? 1 : 0);
             if (Nx2FastDraw::g_break_masks.load(std::memory_order_relaxed)) [[unlikely]] {
