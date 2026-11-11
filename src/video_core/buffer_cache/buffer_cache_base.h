@@ -572,6 +572,61 @@ public:
     boost::unordered_node_map<DAddr, NativeBankPage> native_indirect_page_snapshots;
     /// A bank page that changed within this many frames is compared on every bind.
     static constexpr u64 NativeBankHotFrames = 120;
+    /// Per device page, beside native_indirect_page_snapshots (CheckNativeBankPagesBits): whether
+    /// it holds the page (Known), the page's recheck flag (Recheck) and whether it changed
+    /// within NativeBankHotFrames frames (Hot; may stay set after that, until a compare of the
+    /// page clears it).
+    class NativeBankBits {
+    public:
+        enum Kind : size_t { Known, Recheck, Hot, Kinds };
+
+        /// The bits of `count` pages (at most 64) from page number `first`.
+        [[nodiscard]] u64 Get(Kind kind, u64 first, u32 count) const noexcept {
+            const u64 shift = first % 64;
+            u64 bits = Word(kind, first / 64) >> shift;
+            if (shift != 0) {
+                bits |= Word(kind, first / 64 + 1) << (64 - shift);
+            }
+            return count >= 64 ? bits : bits & ((u64{1} << count) - 1);
+        }
+        void Set(Kind kind, u64 page, bool value) {
+            const u64 chunk = page / ChunkPages;
+            if (chunk >= chunks.size()) {
+                return;
+            }
+            if (!chunks[chunk]) {
+                if (!value) {
+                    return;
+                }
+                chunks[chunk] = std::make_unique<Chunk>();
+            }
+            u64& word = chunks[chunk]->words[kind][(page % ChunkPages) / 64];
+            const u64 bit = u64{1} << (page % 64);
+            word = value ? word | bit : word & ~bit;
+        }
+        void Clear() {
+            for (auto& chunk : chunks) {
+                chunk.reset();
+            }
+        }
+
+    private:
+        static constexpr u64 ChunkPages = 4096;
+        struct Chunk {
+            std::array<std::array<u64, ChunkPages / 64>, Kinds> words{};
+        };
+        [[nodiscard]] u64 Word(Kind kind, u64 word) const noexcept {
+            const u64 chunk = word / (ChunkPages / 64);
+            if (chunk >= chunks.size() || !chunks[chunk]) {
+                return 0;
+            }
+            return chunks[chunk]->words[kind][word % (ChunkPages / 64)];
+        }
+        std::array<std::unique_ptr<Chunk>,
+                   (u64{1} << (Core::DevicePageFlags::AddressBits - Core::DEVICE_PAGEBITS)) /
+                       ChunkPages>
+            chunks;
+    } native_bank_bits;
     /// Why bank pages were compared and which of them had changed, by the first reason that
     /// applies (CheckNativeBankPagesTracked), logged every 10 s with the GPU profile.
     enum NativeBankReason : size_t {
@@ -590,6 +645,9 @@ public:
         u64 pages_skipped = 0;
         std::array<u64, BankReasons> compared{};
         std::array<u64, BankReasons> changed{};
+        /// LICHII_BANK_CHECK=2 with the bitsets: pages they would have skipped although a
+        /// reason applied, or without a snapshot (must stay 0).
+        u64 bit_misses = 0;
         std::chrono::steady_clock::time_point last_log{};
     } native_bank_tracked_stats;
 
@@ -641,6 +699,11 @@ private:
     /// The native uniform bank check of a bind of [device_addr, device_addr + size) that compares
     /// only the pages whose guest memory may have changed (LICHII_BANK_CHECK 1-3).
     void CheckNativeBankPagesTracked(DAddr device_addr, u32 size, int mode);
+    /// CheckNativeBankPagesTracked with the pages no reason applies to skipped in bulk
+    /// (native_bank_bits), unless EDEN_NX2_TEST_BANK_BITS=0.
+    void CheckNativeBankPagesBits(DAddr device_addr, u32 size, int mode);
+    /// The native bank check's 10 s line (GPU profile, LICHII_BANK_CHECK=2).
+    void LogNativeBankStats(int mode);
 
     void BindHostGraphicsStorageBuffers(size_t stage);
 

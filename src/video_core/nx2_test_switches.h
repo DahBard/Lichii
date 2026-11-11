@@ -36,4 +36,11 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_BANK_BITS=0 restores the native bank check's walk of every page with a
+/// snapshot lookup each (BufferCache::CheckNativeBankPagesTracked).
+[[nodiscard]] inline bool BankBits() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_BANK_BITS");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test

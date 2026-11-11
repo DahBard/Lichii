@@ -250,6 +250,19 @@ public:
         return (word.fetch_and(~bit, std::memory_order_seq_cst) & bit) != 0;
     }
 
+    /// The bits of `count` pages (at most 64) from page number `first`, without taking them.
+    [[nodiscard]] u64 Peek(u64 first, u32 count) const noexcept {
+        if (count == 0 || first / 64 >= words.size()) {
+            return 0;
+        }
+        const u64 shift = first % 64;
+        u64 bits = words[first / 64].load(std::memory_order_relaxed) >> shift;
+        if (shift != 0 && first / 64 + 1 < words.size()) {
+            bits |= words[first / 64 + 1].load(std::memory_order_relaxed) << (64 - shift);
+        }
+        return count >= 64 ? bits : bits & ((u64{1} << count) - 1);
+    }
+
 private:
     std::array<std::atomic<u64>, (u64{1} << (AddressBits - DEVICE_PAGEBITS)) / 64> words{};
 };
