@@ -38,8 +38,6 @@ Then (owner, 2026-11-10), in this order:
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
 
-The workflow can also build a CachyOS (Linux) package (round 16), but since round 17 the owner wants
-a Linux build only when they ask for one: pushes build Windows only; dispatch the workflow with
-`only: cachyos` when asked. The Linux build must run on any modern Intel CPU (x86-64-v3, no
-AVX-512). The build workflow, what the tuned build contains, the test results and the next steps are
-in @lichii-tuned/HANDOFF.md.
+Builds are Windows only. On 2026-11-11 the owner dropped the CachyOS (Linux) build: "we won't be
+building towards Linux in the future". The build workflow, what the tuned build contains, the test
+results and the next steps are in @lichii-tuned/HANDOFF.md.

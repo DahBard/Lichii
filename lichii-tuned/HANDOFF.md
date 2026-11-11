@@ -28,11 +28,9 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 - Sources (the owner, round 20): upstream Lichii (zortos293/Lichii nx2 and its pull requests) and
   Fritchii (Frizti/Lichii, branch `oot-gather-fix`, tags `fritchii-v*`) are the main influences;
   take from other forks only for a very good reason or when the owner names one.
-- The workflow can build a CachyOS (Linux) package from the same source (round 16; it must run
-  on any modern-generation Intel CPU: x86-64-v3, every Intel Core since Haswell, every Intel CPU
-  since 12th gen). Since round 17 the owner wants it built only when they ask ("only commit a
-  linux version when I specify to"): pushes build Windows only; when asked, run the workflow by
-  hand with `only: cachyos` and bring `lichii-tuned/README-cachyos.md` up to date first.
+- Windows only since 2026-11-11. The owner: "drop CachyOS, we won't be building towards Linux in
+  the future". The CachyOS job, `README-cachyos.md` and `make_linux_launchers.py` are gone; the
+  round 16-21 notes below describe the old job.
 
 ## How builds are made
 
@@ -48,16 +46,18 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
   push to `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with
-  `[skip ci]` doesn't); the CachyOS ones only in a manual run (`workflow_dispatch` with
-  `only: cachyos`, or `all` for both).
+  `[skip ci]` doesn't), and on a manual run (`workflow_dispatch`).
 - Variants (windows-2022): `pgo` (MSYS2 UCRT64 clang, repo's `eglantine.profdata`,
-  `-march=x86-64-v3 -mtune=arrowlake -ffp-contract=off`), `pgo-lto` (+ ThinLTO). Commented out
-  until needed: `msvc` (built like the official MSVC download, to A/B a glitch that only the pgo
-  builds show; off since 2026-11-07) and `pgo-train` (instrumented, writes
-  `lichii-pgo-*.profraw`). Profiles put in `lichii-tuned/pgo/` (raw or zipped) are merged 4:1
-  with Lichii's. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
+  `-march=x86-64-v3 -mtune=arrowlake -ffp-contract=off`), `pgo-lto` (+ ThinLTO) and `pgo-train`
+  (instrumented, writes `lichii-pgo-*.profraw`). `msvc` (built like the official MSVC download)
+  has been off since 2026-11-07.
+  - Recorded profiles: the owner zips them and attaches the zip to a pre-release tagged `pgo-*`
+    (the first is `pgo-r49`, 92 MB).
+  - Every non-train variant downloads them with `lichii-tuned/fetch_pgo_profiles.py` and merges
+    them 4:1 with Lichii's. So do files in `lichii-tuned/pgo/`.
+  - If llvm-profdata can't read them, the build warns and uses Lichii's profile alone. Artifacts: `lichii-tuned-r<run>-<variant>`. Each variant queues only behind the
   same variant of the previous run. ~40-50 min with warm caches.
-- Job `cachyos` (manual runs only since round 17; same workflow and run number; artifacts `lichii-tuned-r<run>-cachyos-<variant>`,
+- Removed on 2026-11-11: job `cachyos` (manual runs only since round 17; same workflow and run number; artifacts `lichii-tuned-r<run>-cachyos-<variant>`,
   each a tar.gz inside the zip so the executable bits survive): variants `pgo` and `pgo-lto` in
   the `cachyos/cachyos-v3` container (x86-64-v3 repos; the v4 one needs AVX-512) on
   ubuntu-24.04, with the runner's SDK folders deleted through volume mounts for disk space.

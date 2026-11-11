@@ -1,10 +1,10 @@
 name: lichii-tuned
 
-# Windows and CachyOS (Linux) builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H)
-# CPU and an AMD RDNA4 (RX 9070 XT) GPU; the source is this branch (upstream Lichii's tree, nx2
-# 17baed716 since round 22) plus lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the
-# `tuned` branch that touches the patch or this workflow builds the Windows variants. The CachyOS ones build only when the owner asks for a
-# Linux build: run the workflow by hand with `only: cachyos` (or `all`).
+# Windows builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H) CPU and an AMD RDNA4
+# (RX 9070 XT) GPU; the source is this branch (upstream Lichii's tree, nx2 17baed716 since round
+# 22) plus lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the `tuned` branch that
+# touches the patch or this workflow builds the variants; so does a manual run. The CachyOS
+# (Linux) job was removed on 2026-11-11: the owner builds for Windows only.
 on:
   push:
     branches: [tuned]
@@ -12,12 +12,6 @@ on:
       - "lichii-tuned/**"
       - ".github/workflows/lichii-tuned.yml"
   workflow_dispatch:
-    inputs:
-      only:
-        description: "Platforms to build"
-        type: choice
-        options: [windows, cachyos, all]
-        default: windows
 
 permissions:
   contents: read
@@ -25,7 +19,6 @@ permissions:
 jobs:
   build:
     name: windows ${{ matrix.variant }}
-    if: github.event_name != 'workflow_dispatch' || inputs.only != 'cachyos'
     runs-on: windows-2022
     timeout-minutes: 330
     # A newer push queues each variant behind the same variant of the running build instead of
@@ -151,6 +144,14 @@ jobs:
           restore-keys: |
             objects-tuned-${{ matrix.variant }}-v1-
 
+      # Profiles the owner recorded with a pgo-train build, attached to pgo-* releases (round 22).
+      - name: Fetch recorded PGO profiles
+        if: ${{ !matrix.msvc && !matrix.train }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python lichii-tuned/fetch_pgo_profiles.py lichii-tuned/pgo
+
       - name: Configure
         if: ${{ !matrix.msvc }}
         shell: msys2 {0}
@@ -168,9 +169,12 @@ jobs:
           if [ "${{ matrix.train }}" != "true" ] && [ ${#raws[@]} -gt 0 ]; then
             inputs=(--weighted-input=1,eglantine.profdata)
             for raw in "${raws[@]}"; do inputs+=("--weighted-input=4,$raw"); done
-            llvm-profdata merge -o merged.profdata "${inputs[@]}"
-            profdata="$PWD/merged.profdata"
-            echo "Merged ${#raws[@]} recorded profile(s) into merged.profdata"
+            if llvm-profdata merge -o merged.profdata "${inputs[@]}"; then
+              profdata="$PWD/merged.profdata"
+              echo "Merged ${#raws[@]} recorded profile(s) into merged.profdata"
+            else
+              echo "::warning::llvm-profdata could not read the recorded profiles; using Lichii's own"
+            fi
           fi
           profile="-fprofile-use=$(cygpath -m "$profdata") -Wno-backend-plugin \
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
@@ -364,309 +368,6 @@ jobs:
             else
               echo "- flags: ${{ matrix.train && 'PGO instrumentation' || 'PGO' }} + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
             fi
-            if [ -s lichii-tuned/lichii-tuned.patch ]; then
-              echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
-            fi
-            if [ -f merged.profdata ]; then
-              echo "- profile: eglantine.profdata merged with recorded profiles"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # The same source built in CachyOS's x86-64-v3 container against its own Qt 6, FFmpeg, SDL3 and
-  # system libraries, by clang with Lichii's PGO profile, for x86-64-v3 with generic tuning: any
-  # Intel Core from Haswell (4th gen) on and every Intel CPU from 12th gen on, Pentium, Celeron
-  # and N100-class included (and AMD Zen). The v3 container's static libraries (Boost) are
-  # x86-64-v3 too; the v4 one would need AVX-512, which Intel's consumer CPUs since 12th gen lack.
-  # Packaged as a tar with .sh twins of the Windows launchers (lichii-tuned/README-cachyos.md).
-  cachyos:
-    name: cachyos ${{ matrix.variant }}
-    if: github.event_name == 'workflow_dispatch' && inputs.only != 'windows'
-    runs-on: ubuntu-24.04
-    container:
-      image: cachyos/cachyos-v3:latest
-      # The runner's own SDKs, emptied in the first step: the build needs their disk space.
-      volumes:
-        - /usr/share/dotnet:/host/dotnet
-        - /usr/local/lib/android:/host/android
-        - /opt/ghc:/host/ghc
-        - /usr/local/share/boost:/host/boost
-    timeout-minutes: 330
-    # As for Windows: a newer push queues behind the running build of the same variant.
-    concurrency:
-      group: lichii-tuned-cachyos-${{ github.ref }}-${{ matrix.variant }}
-      cancel-in-progress: false
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: pgo
-            lto: "OFF"
-          - variant: pgo-lto
-            lto: "ON"
-    defaults:
-      run:
-        shell: bash
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      # Less than Windows: the repository has 10 GB of caches for every variant together.
-      CCACHE_MAXSIZE: 1500M
-      CCACHE_COMPILERCHECK: content
-      # The repo's "v3" preset (x86-64-v3, generic tuning) rather than the Windows builds' Arrow
-      # Lake tuning, for any modern Intel CPU. -ffp-contract=off: no fused multiply-adds the source
-      # does not ask for, so float results match official (x86-64 baseline) builds.
-      TUNE_FLAGS: -march=x86-64-v3 -mtune=generic -ffp-contract=off
-      # eglantine.profdata is LLVM's indexed profile format 14, which only LLVM 23 and newer
-      # read. CachyOS's own clang builds when its llvm-profdata reads the profile; otherwise this
-      # LLVM release does, pinned by hash.
-      LLVM_RELEASE: 23.1.5
-      LLVM_SHA256: f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a
-    steps:
-      - name: Free disk space
-        run: |
-          df -h / "$GITHUB_WORKSPACE" | sed 's/^/before: /'
-          rm -rf /host/dotnet/* /host/android/* /host/ghc/* /host/boost/* || true
-          df -h / "$GITHUB_WORKSPACE" | sed 's/^/after: /'
-
-      # The keyrings first, so packages signed by newer keys install on an older image. No
-      # `zlib`: CachyOS's zlib is zlib-ng-compat, which pacman would have to remove for it.
-      - name: Install build dependencies
-        run: |
-          set -euo pipefail
-          if [ ! -f /etc/pacman.d/gnupg/trustdb.gpg ]; then
-            pacman-key --init
-            pacman-key --populate
-          fi
-          pacman -Sy --noconfirm --needed archlinux-keyring cachyos-keyring
-          pacman -Su --noconfirm --needed \
-            base-devel git cmake ninja ccache python clang lld llvm \
-            boost catch2 enet ffmpeg fmt glslang libzip lz4 nlohmann-json openssl opus \
-            qt6-base qt6-charts qt6-svg qt6-wayland sdl3 zstd zip unzip \
-            vulkan-headers vulkan-icd-loader vulkan-utility-libraries libusb \
-            spirv-tools spirv-headers libpulse alsa-lib
-          pacman -Q clang qt6-base ffmpeg sdl3 boost mesa 2>/dev/null || true
-
-      - name: Check out source
-        uses: actions/checkout@v5
-
-      - name: Apply the tuning patch
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          patch=lichii-tuned/lichii-tuned.patch
-          if [ -s "$patch" ]; then
-            git apply --whitespace=nowarn --stat "$patch"
-            git apply --whitespace=nowarn "$patch"
-          else
-            echo "No patch: building the branch as is"
-          fi
-          # Name the build in the log and title bar: <commit>-tuned-r<run>-cachyos-<variant>.
-          printf '%s' "$GITHUB_SHA" > GIT-COMMIT
-          printf '%s' "tuned-r${GITHUB_RUN_NUMBER}-cachyos-${{ matrix.variant }}" > GIT-REFSPEC
-
-      - name: Restore LLVM
-        id: llvm-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: .llvm
-          key: llvm-${{ env.LLVM_RELEASE }}-linux-x64-v1
-
-      - name: Toolchain
-        id: toolchain
-        run: |
-          set -euo pipefail
-          if llvm-profdata show eglantine.profdata > /dev/null 2>&1; then
-            echo "Using CachyOS's $(clang --version | head -1)"
-            echo "bin=/usr/bin" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "CachyOS's $(clang --version | head -1) can't read eglantine.profdata: LLVM $LLVM_RELEASE"
-          llvm="$GITHUB_WORKSPACE/.llvm"
-          if [ ! -x "$llvm/bin/clang" ]; then
-            rm -rf "$llvm"
-            mkdir -p "$llvm"
-            top="LLVM-$LLVM_RELEASE-Linux-X64"
-            curl -fsSL --retry 4 --retry-delay 2 -o llvm.tar.xz \
-              "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_RELEASE/$top.tar.xz"
-            echo "$LLVM_SHA256  llvm.tar.xz" | sha256sum -c -
-            # Only the compiler, linker, archiver and profile tools, and clang's own headers.
-            tar -xJf llvm.tar.xz -C "$llvm" --strip-components=1 \
-              "$top/bin/clang" "$top/bin/clang++" "$top/bin/clang-23" "$top/bin/ld.lld" \
-              "$top/bin/lld" "$top/bin/llvm-ar" "$top/bin/llvm-ranlib" "$top/bin/llvm-nm" \
-              "$top/bin/llvm-profdata" "$top/bin/llvm-strip" "$top/lib/clang"
-            rm llvm.tar.xz
-            echo "save=true" >> "$GITHUB_OUTPUT"
-          fi
-          "$llvm/bin/clang" --version | head -1
-          "$llvm/bin/llvm-profdata" show eglantine.profdata > /dev/null
-          echo "bin=$llvm/bin" >> "$GITHUB_OUTPUT"
-
-      - name: Save LLVM
-        if: steps.toolchain.outputs.save == 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: .llvm
-          key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
-
-      - name: Restore CPM downloads
-        id: cpm-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: .cache/cpm
-          key: cpm-tuned-cachyos-v1-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
-          restore-keys: |
-            cpm-tuned-cachyos-v1-
-
-      - name: Restore compiler objects
-        id: compiler-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .ccache
-            .thinlto
-          key: objects-tuned-cachyos-${{ matrix.variant }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            objects-tuned-cachyos-${{ matrix.variant }}-v1-
-
-      # Boost links statically and fmt is built from source: CachyOS moves both to new sonames
-      # often, which would stop an older build from starting.
-      - name: Configure
-        run: |
-          set -euo pipefail
-          bin="${{ steps.toolchain.outputs.bin }}"
-          # Profiles recorded with a pgo-train build (lichii-tuned/pgo/*.profraw, or zips of them)
-          # are merged with Lichii's own profile, weighted 4:1 toward the recorded game.
-          profdata="$PWD/eglantine.profdata"
-          shopt -s nullglob
-          for zip in lichii-tuned/pgo/*.zip; do
-            python -m zipfile -e "$zip" lichii-tuned/pgo/
-          done
-          raws=(lichii-tuned/pgo/*.profraw lichii-tuned/pgo/*/*.profraw)
-          if [ ${#raws[@]} -gt 0 ]; then
-            inputs=(--weighted-input=1,eglantine.profdata)
-            for raw in "${raws[@]}"; do inputs+=("--weighted-input=4,$raw"); done
-            "$bin/llvm-profdata" merge -o merged.profdata "${inputs[@]}"
-            profdata="$PWD/merged.profdata"
-            echo "Merged ${#raws[@]} recorded profile(s) into merged.profdata"
-          fi
-          profile="-fprofile-use=$profdata -Wno-backend-plugin \
-            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
-          linker="-fuse-ld=lld"
-          if [ "${{ matrix.lto }}" = "ON" ]; then
-            mkdir -p .thinlto
-            linker="$linker -Wl,--thinlto-cache-dir=$PWD/.thinlto"
-          fi
-          cmake -S . -B build/release -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTING=OFF \
-            -DYUZU_TESTS=OFF \
-            -DYUZU_CMD=OFF \
-            -DYUZU_ROOM=OFF \
-            -DYUZU_ROOM_STANDALONE=OFF \
-            -DYUZU_USE_BUNDLED_QT=OFF \
-            -DYUZU_USE_BUNDLED_SDL3=OFF \
-            -DYUZU_USE_BUNDLED_FFMPEG=OFF \
-            -DVulkanHeaders_FORCE_BUNDLED=ON \
-            -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
-            -DBoost_USE_STATIC_LIBS=ON \
-            -Dfmt_FORCE_BUNDLED=ON \
-            -DENABLE_UPDATE_CHECKER=OFF \
-            -DUSE_DISCORD_PRESENCE=OFF \
-            -DUSE_CCACHE=ON \
-            -DENABLE_LTO=${{ matrix.lto }} \
-            "-DCMAKE_C_COMPILER=$bin/clang" \
-            "-DCMAKE_CXX_COMPILER=$bin/clang++" \
-            "-DCMAKE_AR=$bin/llvm-ar" \
-            "-DCMAKE_RANLIB=$bin/llvm-ranlib" \
-            "-DCMAKE_EXE_LINKER_FLAGS=$linker" \
-            "-DCMAKE_C_FLAGS=$profile $TUNE_FLAGS" \
-            "-DCMAKE_CXX_FLAGS=$profile $TUNE_FLAGS"
-
-      - name: Save CPM downloads
-        if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: .cache/cpm
-          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
-
-      - name: Build
-        run: |
-          set -euo pipefail
-          ccache --zero-stats
-          # -k 0: a failing file doesn't stop the others, so one run lists every error.
-          cmake --build build/release --target yuzu --parallel -- -k 0
-          ccache --show-stats
-
-      - name: Save compiler objects
-        if: always() && steps.compiler-cache.outcome == 'success'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .ccache
-            .thinlto
-          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
-
-      # A tar keeps the executable bits that GitHub's artifact zip drops. cachyos-packages.txt
-      # lists the CachyOS packages that own the libraries the program links directly (pacman
-      # brings their own dependencies), plus the Qt plugins it uses (Wayland, SVG icons), for
-      # `pacman -S --needed $(cat cachyos-packages.txt)`.
-      - name: Package
-        run: |
-          set -euo pipefail
-          name="lichii-tuned-r${GITHUB_RUN_NUMBER}-cachyos-${{ matrix.variant }}"
-          out="dist-cachyos/$name"
-          mkdir -p "$out"
-          test -x build/release/bin/lichii
-          cp build/release/bin/lichii "$out/"
-          "${{ steps.toolchain.outputs.bin }}/llvm-strip" "$out/lichii"
-          if [ -f build/release/bin/nx2_switches.txt ]; then
-            cp build/release/bin/nx2_switches.txt "$out/"
-          else
-            cp dist/nx2_switches.txt "$out/"
-          fi
-          grep -q '^EDEN_NX2_PRELOAD_ALL_PIPELINES=1' "$out/nx2_switches.txt"
-          if [ -d dist/lichii-tuned ]; then
-            cp dist/lichii-tuned/*.txt "$out/"
-            python -I lichii-tuned/make_linux_launchers.py dist/lichii-tuned "$out"
-          fi
-          mkdir -p "$out/recipes"
-          cp lichii-tuned/recipes/*.nx2recipe "$out/recipes/"
-          cp lichii-tuned/README-cachyos.md "$out/"
-          needed=" $(readelf -d "$out/lichii" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | tr '\n' ' ') "
-          {
-            ldd "$out/lichii" | while read -r lib _ path _; do
-              case "$needed" in *" $lib "*) ;; *) continue ;; esac
-              if [ -e "$path" ]; then
-                pacman -Qqo "$path" 2>/dev/null || true
-              fi
-            done
-            echo qt6-wayland
-            echo qt6-svg
-          } | grep -v -x -E 'glibc|gcc-libs|libgcc|libstdc\+\+' | sort -u > "$out/cachyos-packages.txt"
-          echo "Packages:"; cat "$out/cachyos-packages.txt"
-          if ldd "$out/lichii" | grep -q 'not found'; then
-            ldd "$out/lichii" | grep 'not found'
-            exit 1
-          fi
-          tar -czf "dist-cachyos/$name.tar.gz" -C dist-cachyos "$name"
-          ls -la dist-cachyos
-          echo "NAME=$name" >> "$GITHUB_ENV"
-
-      - name: Upload
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.NAME }}
-          path: dist-cachyos/${{ env.NAME }}.tar.gz
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo "### lichii-tuned r${GITHUB_RUN_NUMBER} (cachyos ${{ matrix.variant }})"
-            echo "- base: \`${GITHUB_SHA::10}\` on \`${GITHUB_REF_NAME}\`"
-            echo "- compiler: $("${{ steps.toolchain.outputs.bin }}/clang" --version 2>/dev/null | head -1)"
-            echo "- flags: PGO + \`$TUNE_FLAGS\`, ThinLTO ${{ matrix.lto }}"
             if [ -s lichii-tuned/lichii-tuned.patch ]; then
               echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
             fi
