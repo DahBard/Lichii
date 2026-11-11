@@ -7,6 +7,7 @@
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/hle/kernel/heap_trace.h"
 #include "core/hle/kernel/k_address_space_info.h"
 #include "core/hle/kernel/k_page_table_base.h"
 #include "core/hle/kernel/k_scoped_resource_reservation.h"
@@ -5145,8 +5146,13 @@ void KPageTableBase::CleanupForIpcClientOnServerSetupFailure(PageLinkedList* pag
 }
 
 Result KPageTableBase::MapPhysicalMemory(KProcessAddress address, size_t size) {
+    // EDEN_NX2_HEAP_TRACE: the call's host cost, from before the lock.
+    const u64 trace_start = HeapTrace::Start();
+
     // Lock the physical memory lock.
     KScopedLightLock phys_lk(m_map_physical_memory_lock);
+    HeapTrace::Call trace{m_system.Kernel(), HeapTrace::Direction::Map, size,
+                          m_mapped_physical_memory_size, trace_start};
 
     // Calculate the last address for convenience.
     const KProcessAddress last_address = address + size - 1;
@@ -5440,8 +5446,13 @@ Result KPageTableBase::MapPhysicalMemory(KProcessAddress address, size_t size) {
 }
 
 Result KPageTableBase::UnmapPhysicalMemory(KProcessAddress address, size_t size) {
+    // EDEN_NX2_HEAP_TRACE: the call's host cost, from before the lock.
+    const u64 trace_start = HeapTrace::Start();
+
     // Lock the physical memory lock.
     KScopedLightLock phys_lk(m_map_physical_memory_lock);
+    HeapTrace::Call trace{m_system.Kernel(), HeapTrace::Direction::Unmap, size,
+                          m_mapped_physical_memory_size, trace_start};
 
     // Lock the table.
     KScopedLightLock lk(m_general_lock);

@@ -33,6 +33,7 @@
 #include "core/device_memory.h"
 #include "core/gpu_dirty_memory_manager.h"
 #include "core/hardware_properties.h"
+#include "core/hle/kernel/heap_trace.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/memory.h"
@@ -122,11 +123,15 @@ struct Memory::Impl {
         ASSERT_MSG((base & YUZU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
         ASSERT_MSG(target >= DramMemoryMap::Base, "Out of bounds target: {:016X}",
                    GetInteger(target));
+        // EDEN_NX2_HEAP_TRACE: for a traced MapPhysicalMemory.
+        Kernel::HeapTrace::Phases trace{system.Kernel()};
         MapPages(page_table, base / YUZU_PAGESIZE, size / YUZU_PAGESIZE, target,
                  Common::PageType::Memory);
+        trace.End(Kernel::HeapTrace::Phase::PageTable);
 
         if (current_page_table->fastmem_arena) {
             host_buffer->Map(GetInteger(base), GetInteger(target) - DramMemoryMap::Base, size, perms, separate_heap);
+            trace.End(Kernel::HeapTrace::Phase::Host);
         }
     }
 
@@ -134,11 +139,15 @@ struct Memory::Impl {
                      bool separate_heap) {
         ASSERT_MSG((size & YUZU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
         ASSERT_MSG((base & YUZU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
+        // EDEN_NX2_HEAP_TRACE: for a traced UnmapPhysicalMemory.
+        Kernel::HeapTrace::Phases trace{system.Kernel()};
         MapPages(page_table, base / YUZU_PAGESIZE, size / YUZU_PAGESIZE, 0,
                  Common::PageType::Unmapped);
+        trace.End(Kernel::HeapTrace::Phase::PageTable);
 
         if (current_page_table->fastmem_arena) {
             host_buffer->Unmap(GetInteger(base), size, separate_heap);
+            trace.End(Kernel::HeapTrace::Phase::Host);
         }
     }
 

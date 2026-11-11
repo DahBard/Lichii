@@ -358,6 +358,8 @@ add_library(core STATIC
     hle/kernel/message_buffer.h
     hle/kernel/guest_core_profile.cpp
     hle/kernel/guest_core_profile.h
+    hle/kernel/heap_trace.cpp
+    hle/kernel/heap_trace.h
     hle/kernel/physical_core.cpp
     hle/kernel/physical_core.h
     hle/kernel/slab_helpers.h

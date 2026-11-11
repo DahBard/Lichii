@@ -11,6 +11,7 @@
 #include "common/scope_exit.h"
 #include "core/core.h"
 #include "core/device_memory.h"
+#include "core/hle/kernel/heap_trace.h"
 #include "core/hle/kernel/initial_process.h"
 #include "core/hle/kernel/k_memory_manager.h"
 #include "core/hle/kernel/k_page_group.h"
@@ -363,6 +364,9 @@ Result KMemoryManager::AllocateForProcess(KPageGroup* out, size_t num_pages, u32
     ASSERT(out != nullptr);
     ASSERT(out->GetNumPages() == 0);
 
+    // EDEN_NX2_HEAP_TRACE: the allocation and the fill, for a traced MapPhysicalMemory.
+    HeapTrace::Phases trace{m_system.Kernel()};
+
     // Decode the option.
     const auto [pool, dir] = DecodeOption(option);
 
@@ -383,6 +387,7 @@ Result KMemoryManager::AllocateForProcess(KPageGroup* out, size_t num_pages, u32
         // Set whether we should optimize.
         optimized = has_optimized && is_optimized;
     }
+    trace.End(HeapTrace::Phase::Allocate);
 
     // Perform optimized memory tracking, if we should.
     if (optimized) {
@@ -449,6 +454,7 @@ Result KMemoryManager::AllocateForProcess(KPageGroup* out, size_t num_pages, u32
                                                               block.GetSize(), fill_pattern);
         }
     }
+    trace.End(HeapTrace::Phase::ZeroFill);
 
     R_SUCCEED();
 }
