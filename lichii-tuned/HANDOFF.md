@@ -1565,6 +1565,9 @@ Own changes:
        #1161's reports/fences half; per-draw trims; maybe EXP63.
      - Build C, by data: pair blocks, a dispatch memo, delta-after-lookup, the stream buffer in
        host memory, fence submit batching.
+   - Owner (2026-11-11): 'Start the build now ... I accept all of your recommendations on moving
+     forward'. Build A (r51) is under way on branch `r22-r51` (workflow `wl1j39f8q`); B and C
+     follow the plan. The ab-25 (no zero trim) test comes later.
    - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
      preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
      EXP26/28/53/61, #1131.
