@@ -12,8 +12,12 @@
 #endif
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "common/common_types.h"
 #include "video_core/gpu_split.h"
@@ -70,6 +74,14 @@ enum class Zone : u32 {
     ListGpuWait,
     AcquirePoll, ///< TEST: a suspended acquire's poll (CanResumeAcquire in ResumePending)
     Resnapshot,  ///< TEST: command lists copied again at a resume (DmaPusher::RefreshSnapshot)
+    // Of compute: the steps of a dispatch (RasterizerVulkan::DispatchCompute, Configure).
+    ComputeLookup,   ///< CurrentComputePipeline
+    ComputePointers, ///< Storage buffer pointers read (BindComputeStorageBuffer)
+    ComputeViews,    ///< Texture and image handles read, image views found (FillImageViews)
+    ComputeResolve,  ///< Bindings resolved to buffers (UpdateComputeBuffers)
+    ComputeSync,     ///< Buffers synchronized and bound (BindHostComputeBuffers)
+    ComputeRecord,   ///< The dispatch recorded, early downloads, list copies submitted
+    ComputeFsr,      ///< The Ocarina upscaler replacement (TryOcarinaDlss: FSR 4)
     // TEST: fine zones, EDEN_NX2_GPU_PROFILE=2 only (FineScope): they split the zones above.
     CbBind,          ///< Of method: constant buffer binds (Maxwell3D::ProcessCBBind)
     CbUpload,        ///< Of method: constant buffer words written to memory
@@ -106,6 +118,8 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
     "fence skipped", "method", "split drain", "split wait",
     "writer wait", "list submit wait", "list GPU wait", "acquire poll", "resnapshot",
+    "compute lookup", "compute pointers", "compute views", "compute resolve",
+    "compute synchronize", "compute record", "compute FSR",
     "cb bind", "cb upload", "query report", "counter reset", "render enable", "sink",
     "macro end", "draw setup", "draw queries", "tick work", "geometry buffers",
     "storage bindings", "graphics pipeline miss", "compute pipeline miss", "pipeline wait",
@@ -249,6 +263,21 @@ enum class Counter : u32 {
     EntryCalls,       ///< Deferred calls...
     EntryNeutralCalls, ///< ...of them FastDrawNeutral
     EntryEngines,     ///< Engine switches
+    // The compute bindings line (Report): what a dispatch's storage buffers cost.
+    ComputeStorageBindings, ///< Compute storage buffers bound (BindHostComputeStorageBuffers)
+    ComputeStorageBytes,    ///< Their bound sizes
+    ComputeSyncUploads,     ///< Their SynchronizeBuffer calls that uploaded something
+    ComputeSyncBytes,       ///< Bytes those uploaded
+    RangeCacheHits,         ///< Compute VirtualRangeCache::Query answered from the cache
+    RangeCacheMisses,       ///< Compute VirtualRangeCache::Query that walked the page table
+    StorageBindingHits,     ///< Compute StorageBufferBinding answered from its cache
+    StorageBindingMisses,   ///< Compute StorageBufferBinding worked out again
+    WriteMarks,             ///< BufferCache::MarkWrittenBuffer calls...
+    WriteMarkPendingSets,   ///< ...the pending download sets each walked...
+    WriteMarkReadDownloads, ///< ...and the read downloads OutdateReadDownloads walked
+    LandingChecksDispatch,  ///< Early download landing checks (a semaphore query) after dispatches
+    LandingChecksDraw,      ///< ...and every 32nd draw
+    ListCopySubmits,        ///< SubmitNx2ListCopies flushes after dispatches
     Count,
 };
 
@@ -451,6 +480,16 @@ inline void CountRegisterWrite(u32 method, bool same) {
     ++counters[static_cast<size_t>(Counter::MethodWrites)];
     counters[static_cast<size_t>(Counter::SameValueWrites)] += same ? 1 : 0;
     CountMethod(method, same);
+}
+
+/// Compute dispatches on this thread by program (shader hash); the most frequent are logged
+/// with the zones.
+inline thread_local std::unordered_map<u64, u64> t_compute_programs;
+
+inline void CountComputeProgram(u64 shader_hash) {
+    if (Enabled()) {
+        ++t_compute_programs[shader_hash];
+    }
 }
 
 inline void CountDmaRead(u32 macro) {
@@ -670,6 +709,52 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
                  rate(Counter::EntryOtherSunk), rate(Counter::EntryOtherExecutable),
                  rate(Counter::EntryMulti), rate(Counter::EntryCalls),
                  rate(Counter::EntryNeutralCalls), rate(Counter::EntryEngines));
+    }
+    if (const u64 dispatches = data.count[static_cast<size_t>(Zone::Compute)];
+        dispatches != 0 || counter(Counter::ComputeStorageBindings) != 0 ||
+        counter(Counter::WriteMarks) != 0) {
+        // What a dispatch's storage buffers cost: bound against uploaded bytes, and how often
+        // the binding caches answered (the compute zones have the time).
+        const auto rate = [&](Counter which) { return counter(which) * 1e9 / window_ns; };
+        const auto per = [&](Counter which, Counter of) {
+            return counter(of) == 0 ? 0.0 : counter(which) / counter(of);
+        };
+        constexpr double MiB = 1024.0 * 1024.0;
+        LOG_INFO(HW_GPU,
+                 "{} compute bindings per second: {:.0f} dispatches, storage bound {:.1f} MiB in "
+                 "{:.0f} bindings, synchronized/uploaded {:.2f} MiB in {:.0f} uploads, range cache "
+                 "{:.0f} hits / {:.0f} misses, pointer cache {:.0f} hits / {:.0f} misses | written "
+                 "marks {:.0f} (pending download sets {:.1f}, read downloads {:.1f} per mark) | "
+                 "early landing checks {:.0f} after dispatches, {:.0f} after draws | list copy "
+                 "submits {:.0f}",
+                 thread_name, static_cast<double>(dispatches) * 1e9 / window_ns,
+                 rate(Counter::ComputeStorageBytes) / MiB, rate(Counter::ComputeStorageBindings),
+                 rate(Counter::ComputeSyncBytes) / MiB, rate(Counter::ComputeSyncUploads),
+                 rate(Counter::RangeCacheHits), rate(Counter::RangeCacheMisses),
+                 rate(Counter::StorageBindingHits), rate(Counter::StorageBindingMisses),
+                 rate(Counter::WriteMarks), per(Counter::WriteMarkPendingSets, Counter::WriteMarks),
+                 per(Counter::WriteMarkReadDownloads, Counter::WriteMarks),
+                 rate(Counter::LandingChecksDispatch), rate(Counter::LandingChecksDraw),
+                 rate(Counter::ListCopySubmits));
+    }
+    if (!t_compute_programs.empty()) {
+        std::vector<std::pair<u64, u64>> programs; // count, shader hash
+        programs.reserve(t_compute_programs.size());
+        for (const auto& [hash, count] : t_compute_programs) {
+            programs.emplace_back(count, hash);
+        }
+        const size_t top = (std::min<size_t>)(programs.size(), 8);
+        std::partial_sort(programs.begin(), programs.begin() + top, programs.end(),
+                          std::greater{});
+        std::string text;
+        for (size_t i = 0; i < top; ++i) {
+            text += fmt::format(" {:016x} {:.0f},", programs[i].second,
+                                static_cast<double>(programs[i].first) * 1e9 / window_ns);
+        }
+        text.pop_back();
+        LOG_INFO(HW_GPU, "{} compute programs per second ({} programs, top {}):{}", thread_name,
+                 programs.size(), top, text);
+        t_compute_programs.clear();
     }
     t_method_count = {};
     t_method_same = {};

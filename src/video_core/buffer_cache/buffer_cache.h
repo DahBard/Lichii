@@ -948,9 +948,13 @@ void BufferCache<P>::NoteWorkRecorded(bool dispatch) {
         }
         // Early downloads the host GPU ran go to guest memory, where their reads then find them.
         // Asking the host GPU is a call: after each dispatch, and every few draws.
-        if (pending_early_downloads != 0 && (dispatch || ++early_landing_checks % 32 == 0) &&
-            runtime.IsFreeNow(read_downloads.front().tick)) {
-            WriteCompletedReadDownloads();
+        if (pending_early_downloads != 0 && (dispatch || ++early_landing_checks % 32 == 0)) {
+            Nx2Profile::Add(dispatch ? Nx2Profile::Counter::LandingChecksDispatch
+                                     : Nx2Profile::Counter::LandingChecksDraw,
+                            1);
+            if (runtime.IsFreeNow(read_downloads.front().tick)) {
+                WriteCompletedReadDownloads();
+            }
         }
     }
 }
@@ -2874,8 +2878,16 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
             gpu_memory->MaxContinuousRange(binding.gpu_addr, binding.size) >= binding.size) {
             return;
         }
-        const VirtualSegments* found =
-            virtual_ranges.Query(*gpu_memory, binding.gpu_addr, binding.size);
+        // Counted for compute bindings only (the compute bindings line).
+        const bool count = Nx2Profile::Enabled() && &pool == &compute_segments;
+        bool hit = false;
+        const VirtualSegments* found = virtual_ranges.Query(*gpu_memory, binding.gpu_addr,
+                                                            binding.size, count ? &hit : nullptr);
+        if (count) {
+            Nx2Profile::Add(hit ? Nx2Profile::Counter::RangeCacheHits
+                                : Nx2Profile::Counter::RangeCacheMisses,
+                            1);
+        }
         if (!found || found->size() < 2) {
             return;
         }
@@ -3222,8 +3234,18 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
 template <class P>
 void BufferCache<P>::BindHostComputeStorageBuffers() {
     u32 binding_index = 0;
+    // EDEN_NX2_GPU_PROFILE: bytes bound against bytes uploaded (the compute bindings line).
+    const bool profile = Nx2Profile::Enabled();
+    count_compute_sync = profile;
+    SCOPE_EXIT {
+        count_compute_sync = false;
+    };
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
         const Binding& binding = channel_state->compute_storage_buffers[index];
+        if (profile) {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeStorageBindings, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeStorageBytes, binding.size);
+        }
         const bool is_written =
             ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
         // A native program's binding is min(layout, 8 MiB) because its pointer has no size, and
@@ -3605,6 +3627,11 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
             Buffer& buffer = slot_buffers[buffer_id];
             buffer.setWriteTick(runtime.CurrentTick());
         }
+    }
+    if (Nx2Profile::Enabled()) {
+        Nx2Profile::Add(Nx2Profile::Counter::WriteMarks, 1);
+        Nx2Profile::Add(Nx2Profile::Counter::WriteMarkPendingSets, pending_download_ranges.size());
+        Nx2Profile::Add(Nx2Profile::Counter::WriteMarkReadDownloads, read_downloads.size());
     }
     // The downloads already taken over this range hold older bytes: when their fences pop
     // they must not write them over this write's result in guest memory, nor drop the range
@@ -4288,6 +4315,10 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
         if (total_size_bytes == 0) {
             return true;
         }
+        if (count_compute_sync) [[unlikely]] {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncUploads, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncBytes, total_size_bytes);
+        }
         const std::span<BufferCopy> copies_span(upload_copies.data(), upload_copies.size());
         UploadMemory(buffer, total_size_bytes, largest_copy, copies_span);
         // Mapped uploads carry their own barriers (or run in the upload command buffer, which
@@ -4314,6 +4345,10 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
         });
         if (total_size_bytes == 0) {
             return true;
+        }
+        if (count_compute_sync) [[unlikely]] {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncUploads, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncBytes, total_size_bytes);
         }
         const std::span<BufferCopy> copies_span(copies.data(), copies.size());
         UploadMemory(buffer, total_size_bytes, largest_copy, copies_span);
@@ -4763,8 +4798,14 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
             cached.alignment == alignment && cached.flags == flags && !Nx2Perf::Verify()) {
             const Binding hit = cached.binding;
             std::rotate(set.begin(), set.begin() + way, set.begin() + way + 1);
+            if (compute) {
+                Nx2Profile::Add(Nx2Profile::Counter::StorageBindingHits, 1);
+            }
             return hit;
         }
+    }
+    if (compute) {
+        Nx2Profile::Add(Nx2Profile::Counter::StorageBindingMisses, 1);
     }
     const Binding binding = [&]() -> Binding {
         u32 size = [&]() {

@@ -85,6 +85,7 @@
 #include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_stats.h"
+#include "video_core/churn_counters.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -95,6 +96,75 @@ using VideoCommon::ImageViewType;
 
 
 namespace {
+
+/// EDEN_NX2_GPU_PROFILE: what a dispatch spent, read from the zones' totals before and after
+/// it, for the 'Slow dispatch' line.
+struct DispatchProbe {
+    static constexpr size_t FirstZone = static_cast<size_t>(VideoCommon::Nx2Profile::Zone::ComputeLookup);
+    static constexpr size_t Zones =
+        static_cast<size_t>(VideoCommon::Nx2Profile::Zone::ComputeFsr) + 1 - FirstZone;
+
+    static DispatchProbe Take() {
+        namespace Profile = VideoCommon::Nx2Profile;
+        DispatchProbe probe;
+        probe.ns = Profile::Now();
+        probe.ticks = Profile::Ticks();
+        const auto& data = Profile::t_data;
+        for (size_t zone = 0; zone < Zones; ++zone) {
+            probe.zones[zone] = data.exclusive_ns[FirstZone + zone];
+        }
+        probe.uploaded =
+            data.counters[static_cast<size_t>(Profile::Counter::ComputeSyncBytes)];
+        probe.created = VideoCommon::Churn::g_counters[VideoCommon::Churn::BuffersCreated].load(
+            std::memory_order_relaxed);
+        probe.joined = VideoCommon::Churn::g_counters[VideoCommon::Churn::BuffersJoined].load(
+            std::memory_order_relaxed);
+        return probe;
+    }
+
+    u64 ns{};
+    u64 ticks{};
+    std::array<u64, Zones> zones{};
+    u64 uploaded{};
+    u64 created{};
+    u64 joined{};
+};
+
+/// Logs a dispatch over 200 us since `start` with where the time went, at most 40 per 5 s.
+void ReportSlowDispatch(const DispatchProbe& start, u64 shader_hash) {
+    const DispatchProbe end = DispatchProbe::Take();
+    const u64 elapsed_ns = end.ns - start.ns;
+    if (elapsed_ns < 200'000) {
+        return;
+    }
+    static s64 window_start{};
+    static u32 logged{};
+    const s64 now_ms = static_cast<s64>(end.ns / 1'000'000);
+    if (now_ms - window_start > 5000) {
+        window_start = now_ms;
+        logged = 0;
+    }
+    if (logged++ >= 40) {
+        return;
+    }
+    // The zones count time stamp ticks: converted with this dispatch's own ticks per ns.
+    const double us_per_tick = static_cast<double>(elapsed_ns) / 1e3 /
+                               static_cast<double>((std::max<u64>)(end.ticks - start.ticks, 1));
+    std::array<double, DispatchProbe::Zones> us{};
+    double zoned{};
+    for (size_t zone = 0; zone < us.size(); ++zone) {
+        us[zone] = static_cast<double>(end.zones[zone] - start.zones[zone]) * us_per_tick;
+        zoned += us[zone];
+    }
+    const double total_us = static_cast<double>(elapsed_ns) / 1e3;
+    LOG_INFO(Render_Vulkan,
+             "Slow dispatch {:.0f} us, shader {:016x}: lookup {:.0f}, pointers {:.0f}, views "
+             "{:.0f}, resolve {:.0f}, synchronize {:.0f}, record {:.0f}, FSR {:.0f}, rest {:.0f} us "
+             "| buffers created {}, joined {} | uploaded {} KiB",
+             total_us, shader_hash, us[0], us[1], us[2], us[3], us[4], us[5], us[6],
+             (std::max)(total_us - zoned, 0.0), end.created - start.created,
+             end.joined - start.joined, (end.uploaded - start.uploaded) >> 10);
+}
 
 /// read_gpu_memory: the first address space (the bound channel's first) that maps the whole range,
 /// read as the GPU reads it, without flushing GPU caches.
@@ -2344,6 +2414,9 @@ void RasterizerVulkan::DispatchCompute() {
         gpu.TickWork();
     };
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Compute};
+    namespace Profile = VideoCommon::Nx2Profile;
+    const std::optional<DispatchProbe> probe =
+        Profile::Enabled() ? std::optional{DispatchProbe::Take()} : std::nullopt;
     FlushWork();
     gpu_memory->FlushCaching();
     if (frame_dump.Capturing()) {
@@ -2352,11 +2425,20 @@ void RasterizerVulkan::DispatchCompute() {
     }
 
     u64 native_key{};
-    ComputePipeline* const pipeline{pipeline_cache.CurrentComputePipeline(native_key)};
+    ComputePipeline* const pipeline{[&] {
+        const Profile::Scope lookup_scope{Profile::Zone::ComputeLookup};
+        return pipeline_cache.CurrentComputePipeline(native_key);
+    }()};
     if (!pipeline) {
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute pipeline unavailable");
         return;
     }
+    Profile::CountComputeProgram(pipeline->ShaderHash());
+    SCOPE_EXIT {
+        if (probe) {
+            ReportSlowDispatch(*probe, pipeline->ShaderHash());
+        }
+    };
     std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
     std::optional<ByteAddressedShadow> byte_addressed_shadow;
     const Tegra::Nx2ListStats::WriterScope list_writer{Tegra::Nx2ListStats::Writer::Dispatch,
@@ -2430,6 +2512,9 @@ void RasterizerVulkan::DispatchCompute() {
                               {qmd.block_dim_x, qmd.block_dim_y, qmd.block_dim_z},
                               indirect_address, indirect_grid);
     }
+    // Recording the dispatch, early downloads and list copies (the FSR replacement apart).
+    std::optional<Profile::Scope> record_scope;
+    record_scope.emplace(Profile::Zone::ComputeRecord);
     if (list_slot) {
         // The grid is GPU-written list words (Nx2ListIndirect): the host GPU copied them into the
         // slot at the list's place, and dispatches from there.
@@ -2463,6 +2548,7 @@ void RasterizerVulkan::DispatchCompute() {
             slots.CheckDispatch(*list_slot); // TEST
         }
         SubmitNx2ListCopies();
+        const Profile::Scope fsr_scope{Profile::Zone::ComputeFsr};
         TryOcarinaDlss(*pipeline, false); // As after a direct dispatch
         return;
     }
@@ -2502,10 +2588,12 @@ void RasterizerVulkan::DispatchCompute() {
     if (barrier_recorded) {
         scheduler.Record([](vk::CommandBuffer cmdbuf) { RecordDispatchBarrier(cmdbuf); });
     }
-    const auto* const replacement =
-        can_replace && !byte_addressed_shadow && TryOcarinaDlss(*pipeline, true)
-            ? oot_live_dlss.get()
-            : nullptr;
+    const auto* const replacement = [&]() -> decltype(oot_live_dlss.get()) {
+        const Profile::Scope fsr_scope{Profile::Zone::ComputeFsr};
+        return can_replace && !byte_addressed_shadow && TryOcarinaDlss(*pipeline, true)
+                   ? oot_live_dlss.get()
+                   : nullptr;
+    }();
     if (!replacement) {
         scheduler.TraceComputePipeline(pipeline->ShaderHash());
     }
@@ -2544,6 +2632,7 @@ void RasterizerVulkan::DispatchCompute() {
     publish_collision_map();
 
     if (!can_replace) {
+        const Profile::Scope fsr_scope{Profile::Zone::ComputeFsr};
         TryOcarinaDlss(*pipeline, false);
     }
 
@@ -2605,6 +2694,7 @@ void RasterizerVulkan::SubmitNx2ListCopies() {
     // Submitted at once: ReadGpuWrittenCommands waits on these copies, so they can't sit out
     // the longer DeferFlush interval (#161).
     if (buffer_cache.Nx2CopyListPages(scheduler.CurrentTick())) {
+        VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::ListCopySubmits, 1);
         scheduler.Flush();
     }
 }

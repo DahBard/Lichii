@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include <boost/container/small_vector.hpp>
@@ -454,18 +455,26 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     }
     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
 
-    buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
-    buffer_cache.UnbindComputeStorageBuffers();
-    size_t ssbo_index{};
-    for (const auto& desc : info.storage_buffers_descriptors) {
-        ASSERT(desc.count == 1);
-        buffer_cache.BindComputeStorageBuffer(ssbo_index, desc.cbuf_index, desc.cbuf_offset,
-                                              desc.is_written, desc.indirect_offset,
+    namespace Profile = VideoCommon::Nx2Profile;
+    {
+        const Profile::Scope pointers_scope{Profile::Zone::ComputePointers};
+        buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask,
+                                                  &uniform_buffer_sizes);
+        buffer_cache.UnbindComputeStorageBuffers();
+        size_t ssbo_index{};
+        for (const auto& desc : info.storage_buffers_descriptors) {
+            ASSERT(desc.count == 1);
+            buffer_cache.BindComputeStorageBuffer(ssbo_index, desc.cbuf_index, desc.cbuf_offset,
+                                                  desc.is_written, desc.indirect_offset,
 
-                                              desc.write_extent);
-        ++ssbo_index;
+                                                  desc.write_extent);
+            ++ssbo_index;
+        }
     }
 
+    // Ends after FillImageViews (views_scope.reset() below).
+    std::optional<Profile::Scope> views_scope;
+    views_scope.emplace(Profile::Zone::ComputeViews);
     texture_cache.SynchronizeDescriptors(true);
 
     boost::container::small_vector<VideoCommon::ImageViewInOut, 64> views;
@@ -565,6 +574,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
         add_image(desc, desc.is_written);
     }
     texture_cache.FillImageViews(std::span(views.data(), views.size()), true);
+    views_scope.reset();
     if (auto& trace{GetUpscalerTrace()}; trace.enabled && kepler_compute.IsNativeMode()) {
         const u64 frame{trace.frame.load(std::memory_order_relaxed)};
         if (!trace.armed && frame >= trace.first_frame && info.uses_subgroup_shuffles) {
@@ -686,8 +696,14 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     std::ranges::for_each(info.texture_buffer_descriptors, add_buffer);
     std::ranges::for_each(info.image_buffer_descriptors, add_buffer);
 
-    buffer_cache.UpdateComputeBuffers();
-    buffer_cache.BindHostComputeBuffers();
+    {
+        const Profile::Scope resolve_scope{Profile::Zone::ComputeResolve};
+        buffer_cache.UpdateComputeBuffers();
+    }
+    {
+        const Profile::Scope sync_scope{Profile::Zone::ComputeSync};
+        buffer_cache.BindHostComputeBuffers();
+    }
     if (buffer_cache.any_buffer_uploaded) {
         buffer_cache.runtime.PostCopyBarrier();
         buffer_cache.any_buffer_uploaded = false;
