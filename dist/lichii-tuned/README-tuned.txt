@@ -267,14 +267,16 @@ below), plus:
      in r53 and r54, so ab-33 and ab-34 are gone and the code goes next round. Until then
      EDEN_NX2_TEST_DRAW_TRIMS=1 or EDEN_NX2_TEST_XLATE_CACHE=1 turns one back on.
    - The log names every TEST switch, and the A/B launchers' other switches (instance folding,
-     zero-page passes, kernel spinning), and whether each is on ("TEST switches in effect:", when
-     the GPU starts), so a launcher whose switch did not take effect shows there.
+     zero-page passes, kernel spinning, and since option 3 below the GPU thread pinning, UMWAIT
+     and its C0.2 state, the idle poll and the clock trace), and whether each is on ("TEST
+     switches in effect:", when the GPU starts), so a launcher whose switch did not take effect
+     shows there.
    - Draws no longer read the clock for a time only perf-trace and the verify launchers log
      (two reads a draw, about 4,000 a frame).
    - Heap trace: in the second area after a load the same build runs 24-44 fps from session to
      session, because the game's 550-715 memory maps and unmaps a second cost the host 143-342
      microseconds each. perf-trace, perf-trace-fine, perf-trace-noprofile, the unprofiled A/B
-     launchers (ab-26 to ab-37) and ab-25 (no zero-page passes, one suspect) now log where that
+     launchers (ab-26 to ab-40) and ab-25 (no zero-page passes, one suspect) now log where that
      time goes every 10 s ("MapPhysicalMemory per second" and "UnmapPhysicalMemory per second"
      lines: the lock wait, allocation (with the memory it committed), zero fill, page table and
      Windows mapping times (with the regions mapped per call), the freeing of unmapped pages,
@@ -283,6 +285,37 @@ below), plus:
    - perf-trace splits its "publishes to an idle back late by" time by why the words waited.
    - verify-r55 checks the repeat draws while they run; ab-37 is ab-20 (no kernel spinning)
      without the profile, for the laptop's power limit.
+   - Option 3, for that power limit. The laptop's CPU runs at its power limit all the time, and
+     its P-cores, where the GPU back thread that holds the frame back runs, reach only 2.6-3.3
+     GHz. Spinning less, pinning threads or another power mode may give that thread more clock;
+     these launchers measure it before bigger changes to the back thread's work.
+     The clock trace (EDEN_NX2_CLOCK_TRACE=1, now in perf-trace, perf-trace-fine,
+     perf-trace-noprofile and every unprofiled A/B launcher) logs a "Clock trace
+     (EDEN_NX2_CLOCK_TRACE):" line a second after the game starts: the CPU's P-cores, E-cores
+     and low-power E-cores with their base clocks, the power plan, the power mode, AC power,
+     battery saver and the plan's processor settings. Then every 10 s a "Clock trace per
+     second" line: for the GPU back thread (back), the GPU thread (front), the Vulkan worker,
+     the emulated CPU cores together and the busiest of them, the clock each really ran at
+     (ghz), its CPU time a second (cpu_ms), how much of that was on P-, E- and low-power E-cores
+     (p, e, lpe) and how often it moved to another core; how busy and how fast each kind of
+     core was, with each P-core's clock and load; the CPU's power in watts where Windows shows
+     it; the power mode and AC state (changed=yes when they changed since the line before); and
+     what the trace itself costs. The emulated CPU cores' CPU time includes their idle polls,
+     which Windows counts as running.
+       ab-37  the emulated kernel's locks and waits sleep at once instead of spinning first
+       ab-38  the GPU thread's front and back on a P-core each, and the six emulated CPU cores
+              on the other four P-cores (the "Pin GPU threads to their own cores" setting, for
+              that run only)
+       ab-39  waiting cores idle in the deeper C0.2 state instead of C0.1; if Windows does not
+              allow C0.2, nothing changes
+       ab-40  ab-37 and ab-39 together, and an idle emulated core polls 30 microseconds before
+              it sleeps instead of 100 (shorter, not gone: without the poll another game's
+              frames took 42 ms instead of 34-35); if it helps, ab-37 and ab-39 tell which part
+              did
+     Run each of them and perf-trace-noprofile.bat (the baseline) over the same route, with the
+     same Windows power mode, the same Lenovo Vantage mode, plugged in, and frame generation at
+     AMD FSR 2x as before: otherwise their clocks and frame times don't compare. The "TEST
+     switches in effect" line and the first "Clock trace" line show what each run had.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -370,6 +403,16 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-37-no-kernel-spin.bat     ab-20 without the profile: the emulated kernel's locks and waits
                               sleep at once (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0); compare
                               with perf-trace-noprofile.bat
+ ab-38-pin-gpu-threads.bat    the GPU thread's front and back on a P-core each, the emulated CPU
+                              cores on the other four P-cores (EDEN_NX2_PIN_GPU_THREADS=1, the
+                              pin setting for this run only); compare with
+                              perf-trace-noprofile.bat
+ ab-39-umwait-c02.bat         waiting cores idle in C0.2 instead of C0.1 (LICHII_UMWAIT_C02=1);
+                              compare with perf-trace-noprofile.bat
+ ab-40-low-power.bat          ab-37 and ab-39 together and a 30 microsecond idle poll instead of
+                              100 (EDEN_NX2_IDLE_SPIN_US=30); compare with
+                              perf-trace-noprofile.bat. ab-37 to ab-40 log the clock trace like
+                              all timing launchers: run them as option 3 above says
  verify-r55.bat               verify-r52 without resolving repeat draws in full, so they run and
                               the delta descriptor and uniform keep checks check them (their
                               mismatches should stay 0, as verify-r52's); slower
@@ -411,16 +454,18 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
                               logged like perf-trace.bat: slower, for comparison
  perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores, frame
-                              times and the heap trace in the log (EDEN_NX2_GPU_PROFILE=1,
-                              EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1,
-                              EDEN_NX2_HEAP_TRACE=1). Draws are timed one sampled frame in four
+                              times and the heap and clock traces in the log
+                              (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1,
+                              EDEN_NX2_MME_DMA_STATS=1, EDEN_NX2_HEAP_TRACE=1,
+                              EDEN_NX2_CLOCK_TRACE=1). Draws are timed one sampled frame in four
                               (LICHII_TRACE_DRAWS_EVERY=4)
  perf-trace-fine.bat          perf-trace.bat plus the fine zones and counters
                               (EDEN_NX2_GPU_PROFILE=2): slower, for where the time goes
- perf-trace-noprofile.bat     default settings with only the frame and heap traces
-                              (EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_HEAP_TRACE=1; the heap trace
-                              since r55): gpu_back_cpu_ms_per_frame and frame times without the
-                              zones' cost; the baseline for ab-26 to ab-37, which log the same
+ perf-trace-noprofile.bat     default settings with only the frame, heap and clock traces
+                              (EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_HEAP_TRACE=1,
+                              EDEN_NX2_CLOCK_TRACE=1; the heap and clock traces since r55):
+                              gpu_back_cpu_ms_per_frame and frame times without the zones' cost;
+                              the baseline for ab-26 to ab-40, which log the same
  frame-times.bat              default settings with only each frame's time logged
                               (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
