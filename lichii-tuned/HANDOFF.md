@@ -1336,6 +1336,12 @@ Own changes:
   - The first build to merge the owner's recorded profile: the `pgo-r49` release, downloaded by
     `fetch_pgo_profiles.py`. Check 'fetch_pgo_profiles:' and 'Merged 1 recorded profile(s)' in
     the CI log.
+- Run #50 (tuned `40f6521ab` = nx2 `17baed716` + tuned4 `cd5482ece`): all three variants built
+  (artifacts `lichii-tuned-r50-*`).
+  - The recorded profile was used: 'fetch_pgo_profiles: pgo-r49/lichii-pgo-22360.zip: 92445945
+    bytes', then 'Merged 1 recorded profile(s) into merged.profdata'.
+  - The profile changes every object, so the compiler cache missed: pgo took 41 min to build
+    (job 45 min), pgo-lto 59 min (job 64 min); pgo-train, which doesn't use it, 13 min.
 - Three-way test (owner, 2026-11-10): r35 `pgo-lto`, the official Fritchii v5.5 download and
   upstream Lichii build 132 (`nx2-build-132`, MSVC 1944). The logs were compared by several
   agents; the lines below were rechecked by hand. All three ran Exclusive fullscreen, VSync
