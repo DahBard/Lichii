@@ -20,6 +20,7 @@
 #include "common/event_wait.h"
 #include "common/logging.h"
 #include "common/assert.h"
+#include "common/settings.h"
 #include "common/thread.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -809,6 +810,29 @@ void PinCurrentThread(PinnedRole role) {
         return true;
     }();
 #endif
+}
+
+namespace {
+/// EDEN_NX2_PIN_GPU_THREADS: -1 unset (the setting decides), else 0 or 1.
+int PinGpuThreadsOverride() {
+    static const int value = [] {
+        const char* const text = std::getenv("EDEN_NX2_PIN_GPU_THREADS");
+        if (text == nullptr || text[0] == '\0') {
+            return -1;
+        }
+        return text[0] == '0' ? 0 : 1;
+    }();
+    return value;
+}
+} // Anonymous namespace
+
+bool PinGpuThreads() {
+    const int forced = PinGpuThreadsOverride();
+    return forced >= 0 ? forced == 1 : Settings::values.pin_gpu_threads.GetValue();
+}
+
+bool PinGpuThreadsFromEnvironment() {
+    return PinGpuThreadsOverride() >= 0;
 }
 
 void SetCurrentThreadToEfficiencyCores() {

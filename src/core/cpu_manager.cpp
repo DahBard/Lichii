@@ -180,7 +180,7 @@ void CpuManager::RunThread(std::stop_token token, std::size_t core) {
     Common::SetCurrentThreadName(name.c_str());
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
     Common::SetCurrentThreadToPerformanceCores();
-    if (Settings::values.pin_gpu_threads.GetValue()) {
+    if (Common::PinGpuThreads()) {
         Common::PinCurrentThread(Common::PinnedRole::GuestCore);
     }
     auto& data = core_data[core];

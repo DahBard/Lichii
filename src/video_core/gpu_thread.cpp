@@ -109,7 +109,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
 #endif
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
         Common::SetCurrentThreadToFastestCores();
-        if (Settings::values.pin_gpu_threads.GetValue()) {
+        if (Common::PinGpuThreads()) {
             Common::PinCurrentThread(Common::PinnedRole::GpuFront);
         }
         system.RegisterHostThread();

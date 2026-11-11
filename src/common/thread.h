@@ -147,6 +147,13 @@ enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
 /// on other hosts.
 void PinCurrentThread(PinnedRole role);
 
+/// Whether the threads that pin (PinCurrentThread) do so: the pin_gpu_threads setting, or for
+/// this run only EDEN_NX2_PIN_GPU_THREADS=0 or 1 (read once). The setting is never written: the
+/// config is saved on exit, which would keep the override.
+[[nodiscard]] bool PinGpuThreads();
+/// Whether EDEN_NX2_PIN_GPU_THREADS decides PinGpuThreads() rather than the setting.
+[[nodiscard]] bool PinGpuThreadsFromEnvironment();
+
 void RefreshThreadPolicies();
 void PollThreadPolicies();
 
