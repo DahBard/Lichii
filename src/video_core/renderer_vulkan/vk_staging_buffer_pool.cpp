@@ -92,10 +92,26 @@ size_t GetStreamBufferSize(const Device& device) {
     }
     return (std::min)(Common::AlignUp(size, MAX_ALIGNMENT), MAX_STREAM_BUFFER_SIZE);
 }
+/// Makes the memory at `pointer` observable to code the compiler can't see: copies into it are
+/// neither dropped nor moved out of the timed span around them.
+void Escape(void* pointer) {
+#if defined(__GNUC__) || defined(__clang__)
+    asm volatile("" : : "g"(pointer) : "memory");
+#else
+    static void* volatile sink;
+    sink = pointer;
+#endif
+}
+
 /// TEST (EDEN_NX2_GPU_PROFILE or EDEN_DKB_FRAME_TRACE): how fast the CPU writes into the stream
-/// buffer's memory, against host memory, logged once at startup. The buffer is unused yet.
+/// buffer's memory, against host memory, logged once at startup. The buffer is unused yet. Both
+/// 8 MiB copies and the small copies the stream buffer gets (uniform buffers of ~400 bytes, each
+/// at the next 256-byte boundary, ~100-200k a second) are timed.
 void LogStreamWriteRate(std::span<u8> stream) {
     constexpr size_t Bytes = 8_MiB;
+    constexpr size_t SmallBytes = 400;
+    constexpr size_t SmallStride = Common::AlignUp(SmallBytes, MAX_ALIGNMENT);
+    constexpr size_t SmallCopies = Bytes / SmallStride;
     if (stream.size() < Bytes) {
         return;
     }
@@ -104,24 +120,50 @@ void LogStreamWriteRate(std::span<u8> stream) {
     for (size_t i = 0; i < Bytes; ++i) {
         source[i] = static_cast<u8>(i * 31);
     }
-    const auto best_gbps = [&](u8* destination) {
-        double best = 0.0;
+    Escape(source.data());
+    // A size the compiler doesn't know, as the stream buffer's copies have (ReadBlockUnsafe).
+    static volatile size_t small_bytes = SmallBytes;
+    const size_t small_size = small_bytes;
+    // Best of 3: bytes per ns (GB/s) and ns per copy.
+    const auto best = [&](u8* destination, bool small) {
+        Escape(destination);
+        double best_ns = 0.0;
         for (int run = 0; run < 3; ++run) {
             const auto start = std::chrono::steady_clock::now();
-            std::memcpy(destination, source.data(), Bytes);
+            if (small) {
+                for (size_t copy = 0; copy < SmallCopies; ++copy) {
+                    std::memcpy(destination + copy * SmallStride,
+                                source.data() + (copy * 7 % SmallCopies) * SmallStride,
+                                small_size);
+                }
+            } else {
+                std::memcpy(destination, source.data(), Bytes);
+            }
+            Escape(destination);
             const auto end = std::chrono::steady_clock::now();
             const double ns = static_cast<double>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
-            best = (std::max)(best, ns > 0.0 ? static_cast<double>(Bytes) / ns : 0.0);
+            if (ns > 0.0 && (best_ns == 0.0 || ns < best_ns)) {
+                best_ns = ns;
+            }
         }
-        return best;
+        const double bytes = small ? static_cast<double>(SmallCopies * small_size)
+                                   : static_cast<double>(Bytes);
+        const double copies = small ? static_cast<double>(SmallCopies) : 1.0;
+        return std::pair{best_ns > 0.0 ? bytes / best_ns : 0.0,
+                         best_ns > 0.0 ? best_ns / copies : 0.0};
     };
-    const double stream_gbps = best_gbps(stream.data());
-    const double host_gbps = best_gbps(host.data());
+    const double stream_gbps = best(stream.data(), false).first;
+    const double host_gbps = best(host.data(), false).first;
+    const auto [stream_small_gbps, stream_small_ns] = best(stream.data(), true);
+    const auto [host_small_gbps, host_small_ns] = best(host.data(), true);
     LOG_INFO(Render_Vulkan,
-             "Stream buffer write rate: {:.2f} GB/s into its memory, {:.2f} GB/s into host memory "
-             "(8 MiB copies, best of 3; host byte {})",
-             stream_gbps, host_gbps, host[Bytes / 2]);
+             "Stream buffer write rate: 8 MiB copies {:.2f} GB/s into its memory, {:.2f} GB/s "
+             "into host memory | {}-byte copies {:.2f} GB/s ({:.0f} ns each) into its memory, "
+             "{:.2f} GB/s ({:.0f} ns each) into host memory (best of 3; {} copies, host bytes {} "
+             "{})",
+             stream_gbps, host_gbps, small_size, stream_small_gbps, stream_small_ns,
+             host_small_gbps, host_small_ns, SmallCopies, host[Bytes / 2], host[SmallStride + 1]);
 }
 } // Anonymous namespace
 
