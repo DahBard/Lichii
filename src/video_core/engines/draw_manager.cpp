@@ -247,6 +247,13 @@ void Maxwell3D::DrawManager::DrawBegin(Maxwell3D& maxwell3d) {
     draw_state.topology = maxwell3d.regs.draw.topology;
 }
 
+void Maxwell3D::DrawManager::AddLoopInstances(Maxwell3D& maxwell3d, u32 count) {
+    // DrawBegin, `count` times, for draw.instance_id == Subsequent.
+    draw_state.instance_count += count;
+    draw_state.draw_mode = DrawMode::Instance;
+    draw_state.topology = maxwell3d.regs.draw.topology;
+}
+
 void Maxwell3D::DrawManager::DrawEnd(Maxwell3D& maxwell3d, u32 instance_count, bool force_draw) {
     switch (draw_state.draw_mode) {
     case DrawMode::Instance:

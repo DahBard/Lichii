@@ -220,6 +220,7 @@ void GpuSplit::Stop() {
     // never ran, it waited on its syncpoint forever), and the engines it held were freed.
     ring.reset();
     write_position = 0;
+    fold_count = 0;
     last_writer_position = 0;
     last_barrier_position = 0;
     write_blocks.clear();
@@ -313,6 +314,7 @@ void GpuSplit::NoteLatePublish() {
 }
 
 void GpuSplit::Publish() {
+    FlushFold();
     if (published_local == write_position) {
         return;
     }
@@ -329,6 +331,7 @@ void GpuSplit::Publish() {
 }
 
 void GpuSplit::Drain(DrainSite site) {
+    FlushFold();
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache == write_position && BackQuiet()) {
         return;
@@ -548,6 +551,7 @@ bool GpuSplit::WaitForWrites(const Tegra::MemoryManager& memory, GPUVAddr addres
 }
 
 bool GpuSplit::WaitFor(u64 target, DrainSite site) {
+    FlushFold();
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache >= target) {
         return false;

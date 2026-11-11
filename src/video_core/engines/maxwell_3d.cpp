@@ -9,6 +9,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -1635,6 +1636,18 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
         }
         return;
     }
+    // Instance folding (upstream #1274): a later instance of an instance loop. The register keeps
+    // its value (instance id Subsequent, the same topology) and nothing waits in the back's sink,
+    // so all the write does there is count one more instance (DrawManager::DrawBegin): the count
+    // is sent once, before the front's next entry. After FrontSkipsLoopWrite, which tracks the
+    // loop; the dropped same-value draw.end writes between these do nothing on the back either.
+    if (method == MAXWELL3D_REG_INDEX(draw.begin) && fs.instance_loop &&
+        ((value >> 26) & 3) == 1 && fs.skip_same && !fs.sink_pending && shadow_kept &&
+        fs.regs[method] == value && FoldInstancesEnabled()) {
+        fs.draw_pending = true;
+        split.FoldInstance(&FlushFoldedInstances, this);
+        return;
+    }
     if (!execution_mask[method]) {
         // Nothing would change on the back: CallMethod and ConsumeSinkImpl skip same-value state
         // writes, and the shadow RAM (tracked by default) holds the value already.
@@ -2494,6 +2507,40 @@ void Maxwell3D::DrawFromGpuArguments(Core::System& system, GPUVAddr arguments, D
     draw_manager.gpu_draw_arguments.reset();
 }
 
+bool Maxwell3D::FoldInstancesEnabled() {
+    // EDEN_NX2_FOLD_INSTANCES=0: every later instance is sent as its own write again.
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_FOLD_INSTANCES");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
+void Maxwell3D::FlushFoldedInstances(void* engine, u32 count) {
+    auto* const self = static_cast<Maxwell3D*>(engine);
+    if (static const bool diagnostics = std::getenv("EDEN_NX2_LIST_DIAG") != nullptr;
+        diagnostics) {
+        // EDEN_NX2_LIST_DIAG: how many instances reach the back in how many calls.
+        static u64 instances{};
+        static u64 calls{};
+        instances += count;
+        ++calls;
+        static auto window = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now();
+            now - window >= std::chrono::seconds{2}) {
+            window = now;
+            LOG_INFO(HW_GPU, "Instance fold per 2 s: {} instances sent in {} calls", instances,
+                     calls);
+            instances = calls = 0;
+        }
+    }
+    // As the draw.begin writes: instance loop methods do not end the fast draw path, and the
+    // draw they defer writes through the caches (what FrontNoteWrites notes for each of them).
+    VideoCommon::GpuSplit::Get().Defer(
+        [self, count] { self->draw_manager.AddLoopInstances(*self, count); },
+        VideoCommon::GpuSplit::Writes::Caches, VideoCommon::GpuSplit::FastDrawNeutral);
+}
+
 void Maxwell3D::FrontTrackInstanceLoop(FrontState& fs, u32 method, u32 value) {
     switch (method) {
     case MAXWELL3D_REG_INDEX(draw.begin):
@@ -2606,6 +2653,8 @@ void Maxwell3D::FrontNoteWrites(VideoCommon::GpuSplit& split, const FrontState& 
 
 void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 macro,
                              u32 method, u32 count) {
+    // Folded instances go first, as their writes would have.
+    split.FlushFold();
     const GPUVAddr source = (GPUVAddr{FrontRegister(split, fs, 0x154) & 0x1ffffff} << 32) |
                             FrontRegister(split, fs, 0x155);
     const u32 ram = FrontRegister(split, fs, 0x156);

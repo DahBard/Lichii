@@ -3116,6 +3116,9 @@ public:
         void SetInlineIndexBuffer(Maxwell3D& maxwell3d, u32 index);
         void SetInlineIndexBuffer(Maxwell3D& maxwell3d, u32 method, const u32* base_start, u32 amount);
         void DrawBegin(Maxwell3D& maxwell3d);
+        /// Instance folding: as `count` draw.begin writes of the register's value,
+        /// which is a later instance of an instance loop.
+        void AddLoopInstances(Maxwell3D& maxwell3d, u32 count);
         void DrawEnd(Maxwell3D& maxwell3d, u32 instance_count = 1, bool force_draw = false);
         void DrawIndexSmall(Maxwell3D& maxwell3d, u32 argument);
         void DrawTexture(Maxwell3D& maxwell3d);
@@ -3527,6 +3530,10 @@ private:
     bool FrontTakeOver(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
     void FrontTrackInstanceLoop(FrontState& state, u32 method, u32 value);
     bool FrontSkipsLoopWrite(FrontState& state, u32 method, u32 value, bool shadow_kept);
+    /// GpuSplit::FoldInstance's flush, `engine` a Maxwell3D.
+    static void FlushFoldedInstances(void* engine, u32 count);
+    /// Whether the front counts an instance loop's later instances (FrontWrite).
+    static bool FoldInstancesEnabled();
     void FrontNoteWrites(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
                          u32 amount);
     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
