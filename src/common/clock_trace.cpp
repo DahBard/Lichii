@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -61,11 +62,14 @@ struct alignas(64) Slot {
     void* handle{}; ///< The thread, for QueryThreadCycleTime
 };
 
-namespace Detail {
-std::atomic<bool> g_publish{false};
-} // namespace Detail
-
 namespace {
+
+/// Set once when the trace is enabled; every hook reads it. A cache line of its own, so that no
+/// often-written variable that the linker places next to it makes the hooks miss.
+struct alignas(64) PublishFlag {
+    std::atomic<bool> on{false};
+};
+PublishFlag g_publish;
 
 constexpr u32 LoopPublishInterval = 32;
 
@@ -1035,29 +1039,29 @@ bool Enabled() {
     static const bool enabled = [] {
         const bool on = LICHII_CLOCK_TRACE != 0 && Requested();
         if (on) {
-            Detail::g_publish.store(true, std::memory_order_relaxed);
+            g_publish.on.store(true, std::memory_order_relaxed);
         }
         return on;
     }();
     return enabled;
 }
 
-namespace Detail {
-
-void Publish() {
-    if (Slot* const slot = t_slot) {
-        PublishTo(*slot);
+void NoteProcessor() noexcept {
+    if (g_publish.on.load(std::memory_order_relaxed)) [[unlikely]] {
+        if (Slot* const slot = t_slot) {
+            PublishTo(*slot);
+        }
     }
 }
 
-void PublishInLoop() {
-    Slot* const slot = t_slot;
-    if (slot != nullptr && ++slot->loop_calls % LoopPublishInterval == 0) {
-        PublishTo(*slot);
+void NoteProcessorInLoop() noexcept {
+    if (g_publish.on.load(std::memory_order_relaxed)) [[unlikely]] {
+        Slot* const slot = t_slot;
+        if (slot != nullptr && ++slot->loop_calls % LoopPublishInterval == 0) {
+            PublishTo(*slot);
+        }
     }
 }
-
-} // namespace Detail
 
 Slot* RegisterThread(size_t role) {
     if (!Enabled() || role >= DkbCpuTrace::RoleCount) {
