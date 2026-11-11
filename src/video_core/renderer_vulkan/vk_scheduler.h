@@ -214,6 +214,7 @@ public:
         if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
         }
+        ++record_serial;
         if (uploads_pending) {
             // Pending uploads precede every other recorded command, including upload-buffer work.
             FlushUploads();
@@ -348,6 +349,9 @@ public:
 private:
     std::chrono::steady_clock::time_point last_flush{};
     bool flush_pending{};
+    u64 record_serial{};    ///< Commands recorded
+    u64 submitted_serial{}; ///< record_serial after the last submission
+    u64 empty_flushes{};    ///< Flushes with nothing to submit (EDEN_NX2_GPU_PROFILE)
 
     class Command {
     public:

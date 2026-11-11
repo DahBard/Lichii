@@ -81,7 +81,7 @@ void CountRenderPassEnd(const char* file, u32 line) {
     ++g_profile_ends[fmt::format("{}:{}", name, line)];
 }
 
-void ReportSubmitCounts() {
+void ReportSubmitCounts(u64& empty_flushes) {
     const u64 now = VideoCommon::Nx2Profile::Now();
     u64 start = g_profile_window_start.load(std::memory_order_relaxed);
     if (start == 0) {
@@ -95,11 +95,12 @@ void ReportSubmitCounts() {
     const double seconds = static_cast<double>(now - start) / 1e9;
     LOG_INFO(Render_Vulkan,
              "Scheduler per second: {:.0f} submits, {:.0f} render passes, {:.0f} finishes "
-             "waiting {:.1f} ms",
+             "waiting {:.1f} ms, {:.0f} flushes with nothing recorded since the last submit",
              static_cast<double>(g_profile_submits.exchange(0)) / seconds,
              static_cast<double>(g_profile_renderpasses.exchange(0)) / seconds,
              static_cast<double>(g_profile_finishes.exchange(0)) / seconds,
-             static_cast<double>(g_profile_finish_ns.exchange(0)) / 1e6 / seconds);
+             static_cast<double>(g_profile_finish_ns.exchange(0)) / 1e6 / seconds,
+             static_cast<double>(std::exchange(empty_flushes, u64{0})) / seconds);
     constexpr double MiB = 1024.0 * 1024.0;
     LOG_INFO(Render_Vulkan,
              "Staging traffic per second: {:.1f} MiB uploaded through the stream buffer, {:.1f} "
@@ -237,6 +238,12 @@ u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
     }
     if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::Flush");
+    }
+    // Nothing recorded, no uploads and no deferred clear since the last submission: this one
+    // carries only its own barrier.
+    if (VideoCommon::Nx2Profile::Enabled() && record_serial == submitted_serial &&
+        !uploads_pending && deferred_clear.framebuffer == nullptr) {
+        ++empty_flushes;
     }
     // When flushing, we only send data to the worker thread; no waiting is necessary.
     const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);
@@ -916,7 +923,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     }
     if (VideoCommon::Nx2Profile::Enabled()) {
         g_profile_submits.fetch_add(1, std::memory_order_relaxed);
-        ReportSubmitCounts();
+        ReportSubmitCounts(empty_flushes);
     }
     EndPendingOperations();
     InvalidateState();
@@ -989,6 +996,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     });
     chunk->MarkSubmit();
     DispatchWork();
+    submitted_serial = record_serial;
     return signal_value;
 }
 
