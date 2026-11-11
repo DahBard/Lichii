@@ -190,8 +190,7 @@ if(WIN32)
         windows/timer_resolution.h
         windows/hybrid_cpu.cpp
         windows/hybrid_cpu.h)
-    # pdh: EDEN_NX2_CLOCK_TRACE's processor clock and power counters (clock_trace.cpp).
-    target_link_libraries(common PRIVATE ntdll pdh)
+    target_link_libraries(common PRIVATE ntdll)
 endif()
 
 if(NOT WIN32)

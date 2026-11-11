@@ -301,17 +301,64 @@ PowerState ReadPowerState(const PowerApi& api) {
     return state;
 }
 
+/// pdh.dll, loaded by the first session that reads a counter rather than linked, so that the
+/// process does not load it with the trace off. Kept loaded once it is.
+class PdhApi {
+public:
+    using OpenQueryFn = PDH_STATUS(WINAPI*)(LPCWSTR, DWORD_PTR, PDH_HQUERY*);
+    using AddEnglishCounterFn = PDH_STATUS(WINAPI*)(PDH_HQUERY, LPCWSTR, DWORD_PTR,
+                                                    PDH_HCOUNTER*);
+    using CollectQueryDataFn = PDH_STATUS(WINAPI*)(PDH_HQUERY);
+    using GetFormattedCounterArrayFn = PDH_STATUS(WINAPI*)(PDH_HCOUNTER, DWORD, LPDWORD, LPDWORD,
+                                                           PDH_FMT_COUNTERVALUE_ITEM_W*);
+    using CloseQueryFn = PDH_STATUS(WINAPI*)(PDH_HQUERY);
+
+    static const PdhApi& Get() {
+        static const PdhApi* const api = new PdhApi;
+        return *api;
+    }
+
+    bool Loaded() const {
+        return open_query != nullptr && add_english_counter != nullptr &&
+               collect_query_data != nullptr && get_formatted_counter_array != nullptr &&
+               close_query != nullptr;
+    }
+
+    OpenQueryFn open_query{};
+    AddEnglishCounterFn add_english_counter{};
+    CollectQueryDataFn collect_query_data{};
+    GetFormattedCounterArrayFn get_formatted_counter_array{};
+    CloseQueryFn close_query{};
+
+private:
+    PdhApi() {
+        const HMODULE module = LoadLibraryExW(L"pdh.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (module == nullptr) {
+            return;
+        }
+        const auto proc = [module](const char* name) {
+            return reinterpret_cast<void*>(GetProcAddress(module, name));
+        };
+        open_query = reinterpret_cast<OpenQueryFn>(proc("PdhOpenQueryW"));
+        add_english_counter = reinterpret_cast<AddEnglishCounterFn>(proc("PdhAddEnglishCounterW"));
+        collect_query_data = reinterpret_cast<CollectQueryDataFn>(proc("PdhCollectQueryData"));
+        get_formatted_counter_array =
+            reinterpret_cast<GetFormattedCounterArrayFn>(proc("PdhGetFormattedCounterArrayW"));
+        close_query = reinterpret_cast<CloseQueryFn>(proc("PdhCloseQuery"));
+    }
+};
+
 /// A PDH query of wildcard counters, read per instance.
 class PdhQuery {
 public:
-    PdhQuery() {
-        if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS) {
+    PdhQuery() : api{PdhApi::Get()} {
+        if (!api.Loaded() || api.open_query(nullptr, 0, &query) != ERROR_SUCCESS) {
             query = nullptr;
         }
     }
     ~PdhQuery() {
         if (query != nullptr) {
-            PdhCloseQuery(query);
+            api.close_query(query);
         }
     }
     PdhQuery(const PdhQuery&) = delete;
@@ -321,14 +368,15 @@ public:
     /// so that localized Windows finds them too.
     PDH_HCOUNTER Add(const wchar_t* path) {
         PDH_HCOUNTER counter{};
-        if (query == nullptr || PdhAddEnglishCounterW(query, path, 0, &counter) != ERROR_SUCCESS) {
+        if (query == nullptr ||
+            api.add_english_counter(query, path, 0, &counter) != ERROR_SUCCESS) {
             return nullptr;
         }
         return counter;
     }
 
     bool Collect() {
-        return query != nullptr && PdhCollectQueryData(query) == ERROR_SUCCESS;
+        return query != nullptr && api.collect_query_data(query) == ERROR_SUCCESS;
     }
 
     /// Calls visit(instance name, value) for each instance with a valid value. Rate counters
@@ -339,12 +387,14 @@ public:
         constexpr DWORD Format = PDH_FMT_DOUBLE | PDH_FMT_NOCAP100;
         DWORD bytes = 0;
         DWORD count = 0;
-        PDH_STATUS status = PdhGetFormattedCounterArrayW(counter, Format, &bytes, &count, nullptr);
+        PDH_STATUS status =
+            api.get_formatted_counter_array(counter, Format, &bytes, &count, nullptr);
         for (int attempt = 0; attempt < 3 && static_cast<DWORD>(status) == PDH_MORE_DATA;
              ++attempt) {
             buffer.resize(bytes / sizeof(PDH_FMT_COUNTERVALUE_ITEM_W) + 1);
             bytes = static_cast<DWORD>(buffer.size() * sizeof(PDH_FMT_COUNTERVALUE_ITEM_W));
-            status = PdhGetFormattedCounterArrayW(counter, Format, &bytes, &count, buffer.data());
+            status =
+                api.get_formatted_counter_array(counter, Format, &bytes, &count, buffer.data());
         }
         if (status != ERROR_SUCCESS) {
             return false;
@@ -361,6 +411,7 @@ public:
     }
 
 private:
+    const PdhApi& api;
     PDH_HQUERY query{};
     std::vector<PDH_FMT_COUNTERVALUE_ITEM_W> buffer;
 };
