@@ -238,6 +238,23 @@ below), plus:
      actually get; verify-r51 checks the repeat draws and back macros against the slow way.
      In profiled logs the back macros' 3D writes now count under "deferred call", not
      "method", so compare those two zones with r50 only through the unprofiled frame times.
+ * r52, the next round for the GPU back thread, every change with an A/B launcher:
+   - Upstream #1161's repeat draw changes: a long run of constant writes no longer ends the
+     cheap repeat draws (the "delta overflow" breaks), writes next to a draw's texture handles
+     no longer count as handle changes, and vertex attribute format changes keep them when the
+     pipeline is the same. ab-29 turns them off.
+   - Upstream #1274: the instances of an instance loop reach the GPU back thread as one count
+     instead of ~380,000 writes a second. ab-30 turns it off.
+   - The bank check skips the pages no write touched in bulk. ab-31 turns it off.
+   - Upstream #1161's report and fence trims: no memory allocation per query report, reused
+     fence lists, no buffer cache lock for reports nobody reads back, the query pool reset off
+     the GPU thread. ab-32 turns off the switchable ones.
+   - Per-draw trims: less copying, one lock round trip less, the FSR state read once a frame
+     (FSR 4 and frame generation get the same inputs). ab-33 turns them off.
+   - GPU page translations cached per thread (Eglantine, via Fritchii). ab-34 turns it off.
+   - Upstream #1306 and #1311: the texture collector frees faster the further past its limit,
+     for the device-memory crash breaking pots in Hyrule Castle. ab-35 turns #1306 off.
+   - perf-trace logs what each change does, and verify-r52 checks them against the slow ways.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -309,6 +326,23 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               perf-trace-noprofile.bat
  ab-28-no-quick-wins.bat      r51's switchable small speedups off (EDEN_NX2_TEST_QUICK=0);
                               unprofiled, compare with perf-trace-noprofile.bat
+ ab-29-no-1161-draws.bat      repeat draws as in r51: delta overflows, whole-buffer handle checks,
+                              attribute formats end them (EDEN_NX2_TEST_1161_DRAWS=0)
+ ab-30-no-fold.bat            every later instance sent on its own (EDEN_NX2_FOLD_INSTANCES=0)
+ ab-31-no-bank-bits.bat       the bank check looks up every page (EDEN_NX2_TEST_BANK_BITS=0)
+ ab-32-no-1161-reports.bat    r51's fence lists, report locks and query pool resets
+                              (EDEN_NX2_TEST_1161_REPORTS=0)
+ ab-33-no-draw-trims.bat      r51's per-draw copies, locks and FSR state reads
+                              (EDEN_NX2_TEST_DRAW_TRIMS=0)
+ ab-34-no-xlate-cache.bat     no per-thread translation cache (EDEN_NX2_TEST_XLATE_CACHE=0)
+ ab-35-no-1306.bat            the texture collector as before #1306 (EDEN_NX2_TEST_1306=0); the
+                              Hyrule Castle pot crash may come back, so only for comparisons
+                              ab-29 to ab-35 are unprofiled: compare with
+                              perf-trace-noprofile.bat
+ verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and
+                              bitsets missed, "Read download check" differing bytes, fast draw,
+                              delta descriptor and uniform keep mismatches should stay 0, no
+                              "Nx2Perf" errors); slower
  verify-r51.bat               resolves repeat draws in full and runs back macros the old way
                               ("Fast draw verify" mismatches and the back macros' "with other
                               writes" should stay 0, no "Nx2Perf mapping runs" errors); slower
