@@ -250,8 +250,9 @@ below), plus:
      fence lists, no buffer cache lock for reports nobody reads back, the query pool reset off
      the GPU thread. ab-32 turns off the switchable ones.
    - Per-draw trims: less copying, one lock round trip less, the FSR state read once a frame
-     (FSR 4 and frame generation get the same inputs). ab-33 turns them off.
-   - GPU page translations cached per thread (Eglantine, via Fritchii). ab-34 turns it off.
+     (FSR 4 and frame generation get the same inputs). Off since r55: no gain measured.
+   - GPU page translations cached per thread (Eglantine, via Fritchii). Off since r55: no gain
+     measured.
    - Upstream #1306 and #1311: the texture collector frees faster the further past its limit,
      for the device-memory crash breaking pots in Hyrule Castle. ab-35 turns #1306 off.
    - perf-trace logs what each change does, and verify-r52 checks them against the slow ways.
@@ -262,6 +263,22 @@ below), plus:
    - perf-trace splits "compute FSR" (the FSR 4 dispatch) and "compute synchronize" into their
      steps, and the one-time "Stream buffer write rate" line measures for real, with small
      copies too. perf-trace-fine adds the finer zones (slower).
+   - r52's per-draw trims and per-thread GPU page translations are off: neither gained anything
+     in r53 and r54, so ab-33 and ab-34 are gone and the code goes next round. Until then
+     EDEN_NX2_TEST_DRAW_TRIMS=1 or EDEN_NX2_TEST_XLATE_CACHE=1 turns one back on.
+   - The log names every TEST switch and whether it is on ("TEST switches in effect:", when the
+     GPU starts), so a launcher whose switch did not take effect shows there.
+   - Draws no longer read the clock for a time only perf-trace and the verify launchers log
+     (two reads a draw, about 4,000 a frame).
+   - Heap trace: in the second area after a load the same build runs 24-44 fps from session to
+     session, because the game's 550-715 memory maps and unmaps a second cost the host 143-342
+     microseconds each. perf-trace, perf-trace-fine, perf-trace-noprofile, ab-26, ab-36 and
+     ab-37 now log where that time goes every 10 s ("MapPhysicalMemory per second" and
+     "UnmapPhysicalMemory per second" lines: the lock wait, zero fill, page table and Windows
+     mapping times, page faults, and the RAM free and commit charge; EDEN_NX2_HEAP_TRACE=1).
+   - perf-trace splits its "publishes to an idle back late by" time by why the words waited.
+   - verify-r55 checks the repeat draws while they run; ab-37 is ab-20 (no kernel spinning)
+     without the profile, for the laptop's power limit.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -339,9 +356,6 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-31-no-bank-bits.bat       the bank check looks up every page (EDEN_NX2_TEST_BANK_BITS=0)
  ab-32-no-1161-reports.bat    r51's fence lists, report locks and query pool resets
                               (EDEN_NX2_TEST_1161_REPORTS=0)
- ab-33-no-draw-trims.bat      r51's per-draw copies, locks and FSR state reads
-                              (EDEN_NX2_TEST_DRAW_TRIMS=0)
- ab-34-no-xlate-cache.bat     no per-thread translation cache (EDEN_NX2_TEST_XLATE_CACHE=0)
  ab-35-no-1306.bat            the texture collector as before #1306 (EDEN_NX2_TEST_1306=0); the
                               Hyrule Castle pot crash may come back, so only for comparisons.
                               ab-29 to ab-35 are unprofiled: compare with
@@ -349,6 +363,12 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-36-no-1161-handles.bat    repeat draws as in r54 for shaders that pick their textures from
                               memory (EDEN_NX2_TEST_1161_HANDLES=0); unprofiled, compare with
                               perf-trace-noprofile.bat
+ ab-37-no-kernel-spin.bat     ab-20 without the profile: the emulated kernel's locks and waits
+                              sleep at once (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0); compare
+                              with perf-trace-noprofile.bat
+ verify-r55.bat               verify-r52 without resolving repeat draws in full, so they run and
+                              the delta descriptor and uniform keep checks check them (their
+                              mismatches should stay 0, as verify-r52's); slower
  verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and
                               bitsets missed, "Read download check" differing bytes, fast draw,
                               delta descriptor and uniform keep mismatches should stay 0, no
@@ -386,15 +406,17 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               perf-trace.bat: for comparison, or if the new waits misbehave
  trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
                               logged like perf-trace.bat: slower, for comparison
- perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores and
-                              frame times in the log (EDEN_NX2_GPU_PROFILE=1,
-                              EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1). Draws are timed
-                              one sampled frame in four (LICHII_TRACE_DRAWS_EVERY=4)
+ perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores, frame
+                              times and the heap trace in the log (EDEN_NX2_GPU_PROFILE=1,
+                              EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_MME_DMA_STATS=1,
+                              EDEN_NX2_HEAP_TRACE=1). Draws are timed one sampled frame in four
+                              (LICHII_TRACE_DRAWS_EVERY=4)
  perf-trace-fine.bat          perf-trace.bat plus the fine zones and counters
                               (EDEN_NX2_GPU_PROFILE=2): slower, for where the time goes
  perf-trace-noprofile.bat     default settings with only the frame trace (EDEN_DKB_FRAME_TRACE=1):
                               gpu_back_cpu_ms_per_frame and frame times without the zones'
-                              cost; the baseline for ab-26 to ab-28
+                              cost; the baseline for ab-26 to ab-37. Since r55 with the heap
+                              trace (EDEN_NX2_HEAP_TRACE=1), as ab-26, ab-36 and ab-37
  frame-times.bat              default settings with only each frame's time logged
                               (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
