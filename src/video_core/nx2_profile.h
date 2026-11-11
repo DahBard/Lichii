@@ -274,6 +274,12 @@ enum class Counter : u32 {
     /// the back's wait since it ran out or since the first of them was sent (Ticks), and count
     LatePublishTicks,
     LatePublishes,
+    /// TEST: LatePublishTicks by why the front held the words: it sent nothing since the back
+    /// waited, a PublishHold, fewer than PublishAfterWait words, the back's wait not seen yet
+    LateFrontBusyTicks,
+    LateHoldTicks,
+    LateFewWordsTicks,
+    LateIdleUnseenTicks,
     ResnapshotWords, ///< TEST: command list words copied again at resumes
     EarlyPublishes,  ///< TEST: publishes to a back waiting for work, before publish_every
     // The split's back's ring entries by kind (GpuSplit::Execute), for the ring entries line.
@@ -672,12 +678,19 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
     if (counter(Counter::LatePublishes) != 0 || counter(Counter::ResnapshotWords) != 0 ||
         counter(Counter::EarlyPublishes) != 0) {
         // TEST: the back idle while words it could run waited on the front.
+        const auto late_ms = [&](Counter which) {
+            return counter(which) * 1000.0 / static_cast<double>(window_ticks);
+        };
         line += fmt::format(" | publishes to an idle back late by {:.1f} ms ({:.0f}/s), early "
-                            "{:.0f}/s | resnapshot words {:.0f}/s",
-                            counter(Counter::LatePublishTicks) * 1000.0 /
-                                static_cast<double>(window_ticks),
+                            "{:.0f}/s | late words held as the front sent nothing {:.1f} ms, in a "
+                            "publish hold {:.1f} ms, too few {:.1f} ms, the wait unseen {:.1f} ms "
+                            "| resnapshot words {:.0f}/s",
+                            late_ms(Counter::LatePublishTicks),
                             counter(Counter::LatePublishes) * 1e9 / window_ns,
                             counter(Counter::EarlyPublishes) * 1e9 / window_ns,
+                            late_ms(Counter::LateFrontBusyTicks), late_ms(Counter::LateHoldTicks),
+                            late_ms(Counter::LateFewWordsTicks),
+                            late_ms(Counter::LateIdleUnseenTicks),
                             counter(Counter::ResnapshotWords) * 1e9 / window_ns);
     }
     std::string drains;

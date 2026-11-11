@@ -291,8 +291,34 @@ void GpuSplit::WaitForSpace(size_t words) {
     }
 }
 
-void GpuSplit::NoteFirstUnpublished() {
-    first_unpublished_ticks = Nx2Profile::Ticks();
+void GpuSplit::NoteCommit(size_t words) {
+    const u64 now = Nx2Profile::Ticks();
+    if (write_position == published_local) {
+        first_unpublished_ticks = now;
+    }
+    const u64 idle_since = back_idle_since.load(std::memory_order_relaxed);
+    if (idle_since == 0) {
+        return;
+    }
+    AddLateStretch(now, idle_since);
+    const u64 unpublished = write_position + words - published_local;
+    late_mark = now;
+    late_reason = publish_held                     ? LateReason::Hold
+                  : unpublished < PublishAfterWait ? LateReason::FewWords
+                                                   : LateReason::IdleUnseen;
+}
+
+void GpuSplit::AddLateStretch(u64 now, u64 idle_since) {
+    const u64 since = std::max(idle_since, first_unpublished_ticks);
+    if (first_unpublished_ticks == 0 || now <= since) {
+        return;
+    }
+    static constexpr std::array<Nx2Profile::Counter, 4> counters{
+        Nx2Profile::Counter::LateFrontBusyTicks, Nx2Profile::Counter::LateHoldTicks,
+        Nx2Profile::Counter::LateFewWordsTicks, Nx2Profile::Counter::LateIdleUnseenTicks};
+    const bool marked = late_mark >= since;
+    const LateReason reason = marked ? late_reason : LateReason::FrontBusy;
+    Nx2Profile::Add(counters[static_cast<size_t>(reason)], now - (marked ? late_mark : since));
 }
 
 void GpuSplit::NoteEarlyPublish() {
@@ -310,6 +336,7 @@ void GpuSplit::NoteLatePublish() {
     if (now > since) {
         Nx2Profile::Add(Nx2Profile::Counter::LatePublishTicks, now - since);
         Nx2Profile::Add(Nx2Profile::Counter::LatePublishes, 1);
+        AddLateStretch(now, idle_since);
     }
 }
 

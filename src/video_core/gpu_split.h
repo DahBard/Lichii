@@ -689,8 +689,11 @@ private:
     }
     u64* ReserveSlow(size_t words);
     void Commit(size_t words) {
-        if (profile_publishes && write_position == published_local) [[unlikely]] {
-            NoteFirstUnpublished(); // TEST
+        // TEST: the first word not published yet, and each commit while the back waits for work.
+        if (profile_publishes && (write_position == published_local ||
+                                  back_idle_since.load(std::memory_order_relaxed) != 0))
+            [[unlikely]] {
+            NoteCommit(words);
         }
         last_entry_start = write_position;
         write_position += words;
@@ -724,8 +727,11 @@ private:
     /// Nx2Profile::Enabled() as the split started (MaybeStart, after VideoCore::CreateGPU read
     /// the switch).
     bool profile_publishes{};
-    void NoteFirstUnpublished();
+    void NoteCommit(size_t words);
     void NoteLatePublish();
+    /// Adds the late time up to `now` to the reason of the last commit NoteCommit marked, or to
+    /// FrontBusy when none was marked since the wait began.
+    void AddLateStretch(u64 now, u64 idle_since);
     /// TEST: Commit publishes before publish_every, because the back waits for the words.
     void NoteEarlyPublish();
     void WaitForSpace(size_t words);
@@ -839,6 +845,11 @@ private:
     bool publish_held{};
     u64 consumed_cache{};
     u64 first_unpublished_ticks{}; ///< TEST: when the first word not published yet was sent
+    /// TEST: why the last commit while the back waited for work held the words (one with none of
+    /// these published them), and when; before it, the front sent nothing since the back waited.
+    enum class LateReason : u8 { FrontBusy, Hold, FewWords, IdleUnseen };
+    LateReason late_reason{};
+    u64 late_mark{};
     std::unique_ptr<SentMethod[]> logged_methods; ///< TEST: see LogMethod
     u64 logged_method_count{};
     /// Words between publishes: small right after the front waited for the back (Drain,
