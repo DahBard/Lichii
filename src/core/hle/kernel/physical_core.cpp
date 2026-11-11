@@ -307,10 +307,13 @@ void PhysicalCore::Idle(KernelCore& kernel) {
     m_profile.Switch(GuestCoreProfile::Activity::IdleSpin);
     const u64 poll_start = Common::ClockTrace::PollStart();
     if (spin.count() > 0 && Common::SpinWait::UsesWaitpkg()) {
-        // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding.
-        Common::SpinUntilFor(&m_is_interrupted, spin, [this] {
-            return m_is_interrupted.load(std::memory_order_acquire) != 0;
-        });
+        // The core idles in C0.1 until Interrupt() stores the flag, rather than yielding. The
+        // flag is the only condition and on the monitored line, so LICHII_UMWAIT_C02 (TEST) can
+        // wait the whole poll in one UMWAIT.
+        Common::SpinUntilFor(&m_is_interrupted, spin,
+                             Common::SpinWait::MonitoredLineSliceTicks(), [this] {
+                                 return m_is_interrupted.load(std::memory_order_acquire) != 0;
+                             });
     } else if (spin.count() > 0) {
         // Without WAITPKG: poll with PAUSE instead of yielding, so no syscall per iteration
         // (EDEN_NX2_IDLE_PAUSE=0 restores the yield loop).

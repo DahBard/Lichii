@@ -103,7 +103,7 @@ void LogTestSwitches(const Core::System& system) {
                    "EDEN_NX2_IDLE_SPIN_US {} ({} us), EDEN_NX2_CLOCK_TRACE {}",
                    Common::PinGpuThreads() ? "on" : "off",
                    Common::PinGpuThreadsFromEnvironment() ? "EDEN_NX2_PIN_GPU_THREADS" : "setting",
-                   Common::SpinWait::UsesC02() ? "on" : "off",
+                   Common::SpinWait::UsesC02() ? "on (idle polls in one UMWAIT)" : "off",
                    Common::SpinWait::UsesWaitpkg() ? "on" : "off",
                    idle_spin < 0 ? std::string{"default"} : std::to_string(idle_spin),
                    Kernel::IdleSpinMicroseconds(system.Kernel()),

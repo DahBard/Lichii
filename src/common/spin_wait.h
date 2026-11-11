@@ -14,7 +14,8 @@ namespace SpinWait {
 /// Lake and later), its TSC rate is known, and LICHII_WAITPKG_SPIN is not 0.
 bool UsesWaitpkg();
 
-/// LICHII_UMWAIT_C02=1 (TEST, read once): WaitUntil asks for C0.2 instead of C0.1.
+/// LICHII_UMWAIT_C02=1 (TEST, read once): WaitUntil asks for C0.2 instead of C0.1, and waits
+/// whose only condition is on the monitored line are one UMWAIT (MonitoredLineSliceTicks).
 bool UsesC02();
 
 /// TSC ticks a PAUSE instruction takes on this CPU (measured once).
@@ -33,10 +34,19 @@ void Monitor(const void* address);
 /// line or an interrupt (UMWAIT). Requires UsesWaitpkg().
 void WaitUntil(u64 deadline);
 
+/// TSC ticks one UMWAIT of a wait lasts at most (4 us): conditions that are not on the monitored
+/// line are seen within one.
+inline u64 SliceTicks() {
+    return 4 * TicksPerMicrosecond();
+}
+
+/// The slice of a wait whose only condition is on the monitored line: SliceTicks(), or with
+/// UsesC02() (TEST) the whole wait in one UMWAIT, since a C0.2 wait cut into 4 us slices may be
+/// too short to reach C0.2.
+u64 MonitoredLineSliceTicks();
+
 template <typename Ready>
-bool IdleUntil(const void* address, u64 deadline, Ready& ready) {
-    // Conditions that are not on the monitored line are seen within a slice.
-    const u64 slice = 4 * TicksPerMicrosecond();
+bool IdleUntil(const void* address, u64 deadline, Ready& ready, u64 slice) {
     while (true) {
         if (ready()) {
             return true;
@@ -72,7 +82,7 @@ bool SpinUntil(const void* address, u32 pauses, Ready&& ready) {
     }
     if (spin < pauses && SpinWait::UsesWaitpkg()) {
         const u64 deadline = SpinWait::Now() + u64{pauses - spin} * SpinWait::PauseTicks();
-        return SpinWait::IdleUntil(address, deadline, ready);
+        return SpinWait::IdleUntil(address, deadline, ready, SpinWait::SliceTicks());
     }
     for (; spin < pauses; ++spin) {
         if (ready()) {
@@ -83,12 +93,14 @@ bool SpinUntil(const void* address, u32 pauses, Ready&& ready) {
     return ready();
 }
 
-/// Waits like SpinUntil for up to `duration`. Requires SpinWait::UsesWaitpkg().
+/// Waits like SpinUntil for up to `duration`, each UMWAIT at most `slice` TSC ticks (see
+/// SpinWait::SliceTicks). Requires SpinWait::UsesWaitpkg().
 template <typename Ready>
-bool SpinUntilFor(const void* address, std::chrono::microseconds duration, Ready&& ready) {
+bool SpinUntilFor(const void* address, std::chrono::microseconds duration, u64 slice,
+                  Ready&& ready) {
     const u64 deadline =
         SpinWait::Now() + static_cast<u64>(duration.count()) * SpinWait::TicksPerMicrosecond();
-    return SpinWait::IdleUntil(address, deadline, ready);
+    return SpinWait::IdleUntil(address, deadline, ready, slice);
 }
 
 } // namespace Common

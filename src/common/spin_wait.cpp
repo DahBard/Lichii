@@ -25,6 +25,10 @@ bool UsesC02() {
     return enabled;
 }
 
+u64 MonitoredLineSliceTicks() {
+    return UsesC02() ? ~u64{0} : SliceTicks();
+}
+
 #ifdef ARCHITECTURE_x86_64
 
 u64 Now() {
