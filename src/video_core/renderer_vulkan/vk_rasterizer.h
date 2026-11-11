@@ -547,7 +547,8 @@ private:
     /// The constant buffer binds and data since the previous draw.
     VideoCommon::Nx2FastDraw::Delta taken_delta;
     /// PrepareDraw: the buffer cache's part of FlushCaching's invalidations, applied under the
-    /// draw's cache lock (TEST: EDEN_NX2_TEST_DRAW_TRIMS).
+    /// draw's cache lock, or before a download the drawing thread makes first (TEST:
+    /// EDEN_NX2_TEST_DRAW_TRIMS).
     bool defer_buffer_invalidation{};
     std::vector<std::pair<DAddr, std::size_t>> deferred_buffer_invalidations;
     FastDrawStats fast_draw_stats;

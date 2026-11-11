@@ -357,6 +357,9 @@ void RecordDispatchBarrier(vk::CommandBuffer cmdbuf) {
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            0, READ_BARRIER);
 }
+
+/// The rasterizer whose deferred buffer invalidations this thread holds (PrepareDraw).
+thread_local const RasterizerVulkan* t_deferring_rasterizer{};
 } // Anonymous namespace
 
 void RasterizerVulkan::ReadMeshEmulationProbe() {
@@ -2908,6 +2911,11 @@ void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType 
     }
     if ((True(which & VideoCommon::CacheType::BufferCache))) {
         std::scoped_lock lock{buffer_cache.mutex};
+        // A read during the draw's pipeline lookup (shader code): the constant buffer data
+        // FlushCaching invalidated must leave the GPU-modified ranges before a download.
+        if (t_deferring_rasterizer == this) {
+            ApplyDeferredBufferInvalidations();
+        }
         buffer_cache.DownloadMemory(addr, size);
     }
     if ((True(which & VideoCommon::CacheType::QueryCache))) {
@@ -2928,6 +2936,9 @@ void RasterizerVulkan::FlushRegionForRead(DAddr addr, u64 size) {
     }
     {
         std::scoped_lock lock{buffer_cache.mutex};
+        if (t_deferring_rasterizer == this) {
+            ApplyDeferredBufferInvalidations();
+        }
         buffer_cache.DownloadMemoryForRead(addr, size);
     }
     query_cache.FlushRegion(addr, size);
@@ -3127,6 +3138,7 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
         return;
     }
     if (defer_buffer_invalidation) {
+        t_deferring_rasterizer = this;
         deferred_buffer_invalidations.insert(deferred_buffer_invalidations.end(),
                                              sequences.begin(), sequences.end());
     } else {
@@ -3150,6 +3162,7 @@ void RasterizerVulkan::ApplyDeferredBufferInvalidations() {
         buffer_cache.WriteMemory(addr, size);
     }
     deferred_buffer_invalidations.clear();
+    t_deferring_rasterizer = nullptr;
 }
 
 bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
