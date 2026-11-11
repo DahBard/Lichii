@@ -204,6 +204,7 @@ public:
                                               DWORD*);
     using ReadACValueIndexFn = DWORD(WINAPI*)(HKEY, const GUID*, const GUID*, const GUID*, DWORD*);
     using GetEffectiveOverlaySchemeFn = DWORD(WINAPI*)(GUID*);
+    using GetUserConfiguredPowerModeFn = DWORD(WINAPI*)(GUID*);
 
     PowerApi() {
         module = LoadLibraryExW(L"powrprof.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -220,6 +221,10 @@ public:
             reinterpret_cast<ReadACValueIndexFn>(proc("PowerReadACValueIndex"));
         get_effective_overlay_scheme = reinterpret_cast<GetEffectiveOverlaySchemeFn>(
             proc("PowerGetEffectiveOverlayScheme"));
+        get_user_ac_mode = reinterpret_cast<GetUserConfiguredPowerModeFn>(
+            proc("PowerGetUserConfiguredACPowerMode"));
+        get_user_dc_mode = reinterpret_cast<GetUserConfiguredPowerModeFn>(
+            proc("PowerGetUserConfiguredDCPowerMode"));
     }
     ~PowerApi() {
         if (module != nullptr) {
@@ -276,29 +281,70 @@ public:
         return OverlayName(overlay);
     }
 
+    /// The mode the user chose for this power source (documented since Windows 11 23H2): where it
+    /// differs from PowerMode(), something else (a vendor tool, a game mode) overrides it.
+    std::string UserPowerMode(bool on_ac) const {
+        const GetUserConfiguredPowerModeFn get = on_ac ? get_user_ac_mode : get_user_dc_mode;
+        GUID mode{};
+        if (get == nullptr || get(&mode) != ERROR_SUCCESS) {
+            return "n/a";
+        }
+        return OverlayName(mode);
+    }
+
 private:
     HMODULE module{};
     GetActiveSchemeFn get_active_scheme{};
     ReadFriendlyNameFn read_friendly_name{};
     ReadACValueIndexFn read_ac_value_index{};
     GetEffectiveOverlaySchemeFn get_effective_overlay_scheme{};
+    GetUserConfiguredPowerModeFn get_user_ac_mode{};
+    GetUserConfiguredPowerModeFn get_user_dc_mode{};
 };
 
 struct PowerState {
     std::string mode;
+    std::string user_mode;
     std::string_view ac;
     std::string_view battery_saver;
+    /// Charge and whether it charges: a charging battery, or one that drains on AC, takes part of
+    /// the laptop's power budget from the CPU.
+    std::string battery;
 
     bool operator==(const PowerState&) const = default;
 };
 
+std::string BatteryText(const SYSTEM_POWER_STATUS& status) {
+    if (status.BatteryFlag == 255) {
+        return "unknown";
+    }
+    if ((status.BatteryFlag & 128) != 0) {
+        return "none";
+    }
+    std::string text = status.BatteryLifePercent <= 100
+                           ? fmt::format("{}%", status.BatteryLifePercent)
+                           : std::string{"unknown"};
+    if ((status.BatteryFlag & 8) != 0) {
+        text += ",charging";
+    }
+    return text;
+}
+
 PowerState ReadPowerState(const PowerApi& api) {
-    PowerState state{.mode = api.PowerMode(), .ac = "unknown", .battery_saver = "unknown"};
+    PowerState state{.mode = api.PowerMode(),
+                     .user_mode = {},
+                     .ac = "unknown",
+                     .battery_saver = "unknown",
+                     .battery = "unknown"};
     SYSTEM_POWER_STATUS status{};
+    bool on_ac = true;
     if (GetSystemPowerStatus(&status)) {
         state.ac = status.ACLineStatus == 1 ? "on" : status.ACLineStatus == 0 ? "off" : "unknown";
         state.battery_saver = (status.SystemStatusFlag & 1) != 0 ? "on" : "off";
+        state.battery = BatteryText(status);
+        on_ac = status.ACLineStatus != 0;
     }
+    state.user_mode = api.UserPowerMode(on_ac);
     return state;
 }
 
@@ -512,7 +558,9 @@ private:
         // The window's.
         double utility_sum{};
         u32 utility_seconds{};
-        double busy_sum{};
+        double time_sum{}; ///< % Processor Time
+        u32 time_seconds{};
+        double busy_sum{};     ///< % Processor Time in the seconds with a known clock
         double busy_mhz_sum{}; ///< Busy % times effective MHz
     };
 
@@ -793,6 +841,10 @@ void Sampler::CollectSecond() {
             processor.utility_sum += processor.utility;
             ++processor.utility_seconds;
         }
+        if (std::isfinite(processor.busy)) {
+            processor.time_sum += processor.busy;
+            ++processor.time_seconds;
+        }
         if (std::isfinite(processor.busy) && std::isfinite(effective_mhz[i])) {
             processor.busy_sum += processor.busy;
             processor.busy_mhz_sum += processor.busy * effective_mhz[i];
@@ -836,6 +888,7 @@ void Sampler::CollectSecond() {
 
 void Sampler::LogStart() {
     std::string classes;
+    std::string off_tsc;
     for (const CoreClass core_class : {CoreClass::Performance, CoreClass::Efficient,
                                        CoreClass::LowPower, CoreClass::Uniform}) {
         std::vector<std::pair<u16, u8>> members;
@@ -869,6 +922,15 @@ void Sampler::LogStart() {
         fmt::format_to(std::back_inserter(classes), "{}{} {} (EfficiencyClass {}, {} nominal)",
                        classes.empty() ? "" : ", ", name, ProcessorList(members),
                        efficiency_class, nominal);
+        // ghz is the nominal clock times % Processor Performance. If Windows scales a class's
+        // performance to the TSC rate rather than its own nominal clock, its ghz is off by their
+        // ratio: worth one check against HWiNFO's core clocks where they differ.
+        const double tsc_mhz = tsc_hz / 1e6;
+        if (std::isfinite(low) && (std::abs(low - tsc_mhz) > 0.05 * tsc_mhz ||
+                                   std::abs(high - tsc_mhz) > 0.05 * tsc_mhz)) {
+            fmt::format_to(std::back_inserter(off_tsc), "{}{}", off_tsc.empty() ? "" : ", ",
+                           name);
+        }
     }
 
     std::string plan = "power plan n/a";
@@ -906,12 +968,19 @@ void Sampler::LogStart() {
         power = fmt::format("package power counters: {}", instances.empty() ? "none" : instances);
     }
 
+    const std::string tsc_note =
+        off_tsc.empty() ? std::string{}
+                        : fmt::format(" ({}: nominal clock not the TSC rate; check their ghz "
+                                      "against HWiNFO's core clocks once)",
+                                      off_tsc);
     LOG_INFO(HW_GPU,
-             "Clock trace (EDEN_NX2_CLOCK_TRACE): {}; {}, power mode \"{}\", AC power {}, battery "
-             "saver {}; the plan's base AC values (the power mode may change them): {}; {}; TSC "
-             "{:.1f} MHz; reading the processor counters took {:.2f} ms",
-             classes.empty() ? "no processors" : classes, plan, last_power.mode, last_power.ac,
-             last_power.battery_saver, values, power, tsc_hz / 1e6, collect_ms);
+             "Clock trace (EDEN_NX2_CLOCK_TRACE): {}; {}, power mode \"{}\" (user-configured "
+             "\"{}\"), AC power {}, battery saver {}, battery {}; the plan's base AC values (the "
+             "power mode may change them): {}; {}; TSC {:.1f} MHz{}; reading the processor "
+             "counters took {:.2f} ms",
+             classes.empty() ? "no processors" : classes, plan, last_power.mode,
+             last_power.user_mode, last_power.ac, last_power.battery_saver, last_power.battery,
+             values, power, tsc_hz / 1e6, tsc_note, collect_ms);
 }
 
 Sampler::GroupTotals Sampler::Totals(std::initializer_list<size_t> role_indices) const {
@@ -1003,20 +1072,31 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
         if (!class_present[class_index]) {
             continue;
         }
+        const auto mean = [](double sum, u32 count) {
+            return count == 0 ? NoReading : sum / static_cast<double>(count);
+        };
+        const auto percent = [](double sum, u32 count) {
+            return count == 0 ? std::string{"n/a"}
+                              : fmt::format("{:.0f}%", sum / static_cast<double>(count));
+        };
+        double load = 0.0;
+        u32 load_count = 0;
         double utility = 0.0;
         u32 utility_count = 0;
         double busy = 0.0;
         double busy_mhz = 0.0;
-        // Each top-class processor: its clock while busy and its utility.
+        // Each top-class processor: its clock while busy and how busy it was.
         std::vector<std::pair<double, double>> each;
         for (const Processor& processor : processors) {
             if (ClassIndex(processor.core_class) != class_index) {
                 continue;
             }
-            const double mean_utility =
-                processor.utility_seconds == 0
-                    ? NoReading
-                    : processor.utility_sum / static_cast<double>(processor.utility_seconds);
+            const double mean_load = mean(processor.time_sum, processor.time_seconds);
+            if (std::isfinite(mean_load)) {
+                load += mean_load;
+                ++load_count;
+            }
+            const double mean_utility = mean(processor.utility_sum, processor.utility_seconds);
             if (std::isfinite(mean_utility)) {
                 utility += mean_utility;
                 ++utility_count;
@@ -1026,12 +1106,13 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
             each.emplace_back(processor.busy_sum > 0.0
                                   ? processor.busy_mhz_sum / processor.busy_sum / 1e3
                                   : 0.0,
-                              std::isfinite(mean_utility) ? mean_utility : 0.0);
+                              std::isfinite(mean_load) ? mean_load : 0.0);
         }
-        fmt::format_to(std::back_inserter(line), " | {} util={} ghz={}", ClassNames[class_index],
-                       utility_count == 0
-                           ? std::string{"n/a"}
-                           : fmt::format("{:.0f}%", utility / static_cast<double>(utility_count)),
+        // busy: % Processor Time; util: % Processor Utility, busy times clock over base (above
+        // 100% in turbo).
+        fmt::format_to(std::back_inserter(line), " | {} busy={} util={} ghz={}",
+                       ClassNames[class_index], percent(load, load_count),
+                       percent(utility, utility_count),
                        busy > 0.0 ? fmt::format("{:.2f}", busy_mhz / busy / 1e3)
                                   : std::string{"n/a"});
         const bool top_class = class_index == ClassIndex(CoreClass::Performance) ||
@@ -1039,9 +1120,9 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
         if (top_class && busy > 0.0) {
             std::ranges::sort(each, std::greater{});
             std::string cores;
-            for (const auto& [ghz, core_utility] : each) {
+            for (const auto& [ghz, core_load] : each) {
                 fmt::format_to(std::back_inserter(cores), "{}{:.2f}@{:.0f}%",
-                               cores.empty() ? "" : ",", ghz, core_utility);
+                               cores.empty() ? "" : ",", ghz, core_load);
             }
             fmt::format_to(std::back_inserter(line), " each={}", cores);
         }
@@ -1063,8 +1144,10 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
 
     const PowerState power = ReadPowerState(*power_api);
     fmt::format_to(std::back_inserter(line),
-                   " | power_mode=\"{}\" ac={} battery_saver={} changed={}", power.mode,
-                   power.ac, power.battery_saver, power == last_power ? "no" : "yes");
+                   " | power_mode=\"{}\" user_mode=\"{}\" ac={} battery_saver={} battery={} "
+                   "changed={}",
+                   power.mode, power.user_mode, power.ac, power.battery_saver, power.battery,
+                   power == last_power ? "no" : "yes");
     last_power = power;
     if (collect_failures != 0) {
         fmt::format_to(std::back_inserter(line), " | pdh_failures={}", collect_failures);
@@ -1093,6 +1176,8 @@ void Sampler::LogWindow(SteadyClock::time_point now) {
     for (Processor& processor : processors) {
         processor.utility_sum = 0.0;
         processor.utility_seconds = 0;
+        processor.time_sum = 0.0;
+        processor.time_seconds = 0;
         processor.busy_sum = 0.0;
         processor.busy_mhz_sum = 0.0;
     }
