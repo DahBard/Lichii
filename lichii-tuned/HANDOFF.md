@@ -1737,6 +1737,15 @@ Own changes:
        - the .dmp is again 0 bytes (r53 still had the old flags).
        It looks like one texture the game places at the top of guest memory at a scene load.
        r54 has the fix.
+   - ab-25 (EDEN_NX2_ZERO_TRIM=0, r54, profiled, 223 s): the zero-page trim does not cause
+     hitches. Keep it on.
+     - In runs with trims, frames within 2 s of a pass look worse (r53 perf-trace: 14% over
+       33 ms near passes against 4.6% elsewhere; r54-fine 15.8% against 4.9%).
+     - The passes land next to area loads. In ab-25 (no passes) the same game-time windows are
+       as bad or worse: 57-63 s 52% over 33 ms against 48%/36% with trims, 96-101 s 31% against
+       16%/25%, 176-181 s 9% against 7%/3%.
+     - So the hitches there are the loads. The trim frees several GB of RAM.
+     - Script: scratchpad trimscripts/trim_hitches.py.
      - Run #54 passed (15:19 UTC): `lichii-tuned-r54-pgo-lto`, `-pgo` and `-pgo-train`. Unit
        tests run 5: all 1225 test cases pass, including the new host-split GetSpan and unswizzle
        test.
