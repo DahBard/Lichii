@@ -1606,13 +1606,26 @@ Own changes:
        verify-r51 (FAST_DRAW_VERIFY, BACK_MACRO_VERIFY=64, PERF_VERIFY).
      - Under the profile, the back macros' 3D writes now count under 'deferred call' rather than
        'method'. Compare 'method' and 'other' with r50 only through unprofiled frame times.
-     - Before nx2: run the [fast_draw] and uniform_stream_reuse unit tests (compiled, not run).
-       Consider taking the InvalidateGPUCache early-out on the GPU thread only.
+     - Before nx2: consider taking the InvalidateGPUCache early-out on the GPU thread only. The
+       unit tests now run in CI (below).
    - Unit tests: `.github/workflows/lichii-tuned-tests.yml` (2026-11-11).
      - It builds upstream's `tests` program from this branch plus the patch, with the Windows
        builds' MinGW clang (no PGO, warnings not fatal), and runs it.
      - It is its own workflow, so lichii-tuned.yml's run numbers (the build names) don't move.
-     - It runs on every patch push; run 1 tested build A.
+     - It runs on every patch push, or by hand (workflow_dispatch on `tuned`; it worked from the
+       API although the workflow is not on the default branch).
+     - Run 1 (build A): 2031 of 2032 build steps compiled. tests/core/file_sys_parsers.cpp needs
+       `-fsized-deallocation`: MinGW's libstdc++ declares the sized operator delete that
+       fssystem_bucket_tree.h uses only with that flag. It is upstream code, and lichii.exe
+       never instantiates it.
+     - Run 3 (build B): 1222 of 1224 test cases passed. Two independent traces found no defect,
+       so be33a34bc adapts the two expectations:
+       - the #1216 fence test: #1161's AppendRange merges overlapping ranges, so the test now
+         writes its short report at another address;
+       - our native bank test (7864fd62e), failing since the EXP9 port: mode 3 compares only
+         pages a reason applies to, so the test now flags the page as a collected write.
+     - Run 4 (build B + be33a34bc, 2026-11-11 09:45 UTC): all 1224 test cases passed
+       (70.9 M assertions). A warm run takes ~4 minutes.
    - Build B done: tuned4 `0d3fb0540` (branch `r22-r52`), run #53 passed at 09:03 UTC. Artifacts
      `lichii-tuned-r53-pgo-lto`, `-pgo` and `-pgo-train`; its launchers are named r52
      (verify-r52, ab-29..35). The owner tests build A (r52) first. Workflow
