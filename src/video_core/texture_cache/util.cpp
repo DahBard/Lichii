@@ -1282,6 +1282,10 @@ void ExecuteUnswizzlePlan(Tegra::MemoryManager& gpu_memory, const UnswizzlePlan&
     // A run in one contiguous mapping is read in place: copying it out first was ~40% of the GPU
     // thread's time in a texture-loading hitch (Ocarina of Time, leaving Link's house; from
     // tomk134/lichii-custom e8e50e797). EDEN_NX2_UNSWIZZLE_COPY=1 always copies first.
+    // GetSpan, not IsContinuousRange: the run must be contiguous in host memory as well. The SMMU
+    // maps device pages to guest memory one by one, so a run contiguous in device memory read
+    // from its first host page read other guest memory, and past the end of guest memory crashed
+    // (r52, Hyrule Field to Kokiri Forest).
     static const bool always_copy = std::getenv("EDEN_NX2_UNSWIZZLE_COPY") != nullptr;
     // Other runs are copied into a grow-only scratch buffer, not a vector zero-filled and
     // reallocated per upload; thread_local because the texture workers upload too
@@ -1289,9 +1293,8 @@ void ExecuteUnswizzlePlan(Tegra::MemoryManager& gpu_memory, const UnswizzlePlan&
     static thread_local Common::ScratchBuffer<u8> run;
     for (const auto& r : plan.runs) {
         std::span<const u8> input;
-        const bool in_place =
-            !always_copy && gpu_memory.IsContinuousRange(r.src_addr, r.guest_bytes);
-        const u8* const direct = in_place ? gpu_memory.GetPointer(r.src_addr) : nullptr;
+        const u8* const direct =
+            always_copy ? nullptr : gpu_memory.GetSpan(r.src_addr, r.guest_bytes);
         if (direct != nullptr) {
             input = std::span<const u8>{direct, r.guest_bytes};
         } else {
