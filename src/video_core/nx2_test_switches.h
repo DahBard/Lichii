@@ -59,4 +59,11 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
+/// TEST: EDEN_NX2_TEST_XLATE_CACHE=0 turns off the per-thread cache of GPU page translations
+/// (MemoryManager::GpuToCpuAddress; Eglantine b1e650849e, Fritchii EXP63).
+[[nodiscard]] inline bool TranslationCache() {
+    static const bool on = SwitchOn("EDEN_NX2_TEST_XLATE_CACHE");
+    return on;
+}
+
 } // namespace VideoCommon::Nx2Test
