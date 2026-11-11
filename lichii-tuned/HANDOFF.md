@@ -1566,8 +1566,31 @@ Own changes:
      - Build C, by data: pair blocks, a dispatch memo, delta-after-lookup, the stream buffer in
        host memory, fence submit batching.
    - Owner (2026-11-11): 'Start the build now ... I accept all of your recommendations on moving
-     forward'. Build A (r51) is under way on branch `r22-r51` (workflow `wl1j39f8q`); B and C
-     follow the plan. The ab-25 (no zero trim) test comes later.
+     forward'. B and C follow the plan. The ab-25 (no zero trim) test comes later.
+   - Build A done: r51 = tuned4 `93e92691a` (branch `r22-r51`, workflow `wl1j39f8q`: one
+     implementer, two reviewers, one fixer), run #51.
+     - #1216 9ad7c7cee picked with DjouWish's authorship; it keeps our Writes::Caches.
+       EDEN_NX2_TEST_1216=0 (ab-26) restores tuned4's breaks. g_dynamic_strides follows the
+       pipeline cache's DynamicFeatures (EDS and VIDS, with the setting). Boot line:
+       'Fast draws: extended dynamic state ..., dynamic strides ...'.
+     - #1251 5100362a6 (layout, no switch).
+     - #1161 58144d258, d5c9589d0, 0593fd75f and cccac7bb7, plus the InvalidateGPUCache
+       early-out. The switchable ones sit behind EDEN_NX2_TEST_QUICK=0 (ab-28).
+     - #717's CONTIG check (MaxContinuousRange before VirtualRangeCache::Query, graphics and
+       compute) behind EDEN_NX2_TEST_CONTIG=0 (ab-27).
+     - Profile lines:
+       - fast-draw break masks, the 'different kind' split and the breaking thunks;
+       - ring entries per kind;
+       - compute sub-zones and 'Slow dispatch';
+       - submits by site;
+       - fence submit/commit, the idle hook, deferred calls and lock holds;
+       - the stream copy (at =2) and a stream-write probe at startup.
+     - New launchers: perf-trace-noprofile (the baseline for the unprofiled A/Bs), ab-26/27/28,
+       verify-r51 (FAST_DRAW_VERIFY, BACK_MACRO_VERIFY=64, PERF_VERIFY).
+     - Under the profile, the back macros' 3D writes now count under 'deferred call' rather than
+       'method'. Compare 'method' and 'other' with r50 only through unprofiled frame times.
+     - Before nx2: run the [fast_draw] and uniform_stream_reuse unit tests (compiled, not run).
+       Consider taking the InvalidateGPUCache early-out on the GPU thread only.
    - Dropped: EDS3 blending (it would change every pipeline key and invalidate the
      preparation), hot pages (stale data), raising MaxWrites, CB fusion, #717 as a bundle,
      EXP26/28/53/61, #1131.
