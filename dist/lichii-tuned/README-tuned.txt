@@ -336,7 +336,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (EDEN_NX2_TEST_DRAW_TRIMS=0)
  ab-34-no-xlate-cache.bat     no per-thread translation cache (EDEN_NX2_TEST_XLATE_CACHE=0)
  ab-35-no-1306.bat            the texture collector as before #1306 (EDEN_NX2_TEST_1306=0); the
-                              Hyrule Castle pot crash may come back, so only for comparisons
+                              Hyrule Castle pot crash may come back, so only for comparisons.
                               ab-29 to ab-35 are unprofiled: compare with
                               perf-trace-noprofile.bat
  verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and

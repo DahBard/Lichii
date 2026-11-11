@@ -259,7 +259,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             const u64 over = total_used_memory - critical_memory;
             num_iterations += static_cast<size_t>((std::min)(over / 2_MiB, u64{1024}));
             if (over >= 1_GiB) {
-                ticks_to_destroy = (std::max)(min_age, u64{3});
+                ticks_to_destroy = TextureGcEffectiveMinAge(3ULL, min_age, aggressive_mode);
             }
         }
     };
