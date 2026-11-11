@@ -675,11 +675,16 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
     // Vertex attribute formats are draw parameters with dynamic vertex input (UpdateVertexInput
     // records them for every draw); only the type class of each attribute is in the pipeline key.
     if (FastDraw::g_vertex_streams_dynamic.load(std::memory_order_relaxed) &&
-        maxwell3d->dirty.flags[Dirty::VertexInput] &&
-        (!draw.pipeline->HasDynamicVertexInput() ||
-         FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs) !=
-             draw.pipeline->DynamicAttributeTypes())) {
-        return full(FullDraw::VertexInput);
+        maxwell3d->dirty.flags[Dirty::VertexInput]) {
+        if (!draw.pipeline->HasDynamicVertexInput() ||
+            FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs) !=
+                draw.pipeline->DynamicAttributeTypes()) {
+            return full(FullDraw::VertexInput);
+        }
+        ++fast_draw_stats.formats_kept;
+    }
+    if (delta.no_uniform_keeps) {
+        ++fast_draw_stats.widened;
     }
     const bool handle_words = FastDraw::g_test_1161_draws.load(std::memory_order_relaxed);
     const auto& handles = draw.pipeline->HandleConstantBuffers();
@@ -712,6 +717,7 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
                     return full(FullDraw::HandleData);
                 }
                 taken_delta.no_uniform_keeps = true;
+                ++fast_draw_stats.between_handles;
             }
         }
     }
@@ -848,6 +854,15 @@ void RasterizerVulkan::ReportFastDraws() {
              ineligible, micros(DrawPath::Full), micros(DrawPath::Delta),
              all_draws == 0 ? 0.0 : static_cast<double>(all_ns) / 1e3 / static_cast<double>(all_draws),
              static_cast<double>(all_draws) / seconds);
+    LOG_INFO(Render_Vulkan,
+             "Fast draw #1161 per second: {:.0f} widened delta lists (delta overflows before), "
+             "{:.0f} handle buffers written between their handles, {:.0f} vertex attribute format "
+             "changes kept (EDEN_NX2_TEST_1161_DRAWS {})",
+             static_cast<double>(stats.widened) / seconds,
+             static_cast<double>(stats.between_handles) / seconds,
+             static_cast<double>(stats.formats_kept) / seconds,
+             VideoCommon::Nx2FastDraw::g_test_1161_draws.load(std::memory_order_relaxed) ? "on"
+                                                                                    : "off");
     if (fast_draw_verify) {
         LOG_INFO(Render_Vulkan,
                  "Fast draw verify per second: {:.0f} checked, {:.0f} pipeline mismatches, {:.0f} "
@@ -2923,8 +2938,10 @@ bool RasterizerVulkan::NoteReportPending(DAddr addr, u64 size) {
     // A report per draw (Ocarina of Time's occlusion counts), rarely on a page the guest reads
     // back: most skip the buffer cache's lock (upstream #1161; TEST: EDEN_NX2_TEST_1161_REPORTS).
     if (VideoCommon::Nx2Test::Reports1161() && !buffer_cache.MayBeReadBackPage(addr)) {
+        VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::ReportLockSkips, 1);
         return false;
     }
+    VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::ReportLocks, 1);
     std::scoped_lock lock{buffer_cache.mutex};
     return buffer_cache.NoteReportPending(addr, size);
 }

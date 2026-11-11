@@ -2519,8 +2519,9 @@ bool Maxwell3D::FoldInstancesEnabled() {
 void Maxwell3D::FlushFoldedInstances(void* engine, u32 count) {
     auto* const self = static_cast<Maxwell3D*>(engine);
     if (static const bool diagnostics = std::getenv("EDEN_NX2_LIST_DIAG") != nullptr;
-        diagnostics) {
-        // EDEN_NX2_LIST_DIAG: how many instances reach the back in how many calls.
+        diagnostics || VideoCommon::Nx2Profile::Enabled()) {
+        // EDEN_NX2_LIST_DIAG or EDEN_NX2_GPU_PROFILE: how many instances reach the back in how
+        // many calls.
         static u64 instances{};
         static u64 calls{};
         instances += count;

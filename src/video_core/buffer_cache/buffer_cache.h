@@ -3111,6 +3111,7 @@ void BufferCache<P>::CheckNativeBankPagesBits(DAddr device_addr, u32 size, int m
             visit = all & ~skip;
             const u64 skipped = static_cast<u64>(std::popcount(skip));
             stats.pages_skipped += skipped;
+            stats.pages_bulk_skipped += skipped;
             Nx2Profile::Add(Nx2Profile::Counter::BankPagesSkipped, skipped);
         }
         for (u64 bits = visit; bits != 0; bits &= bits - 1) {
@@ -3223,7 +3224,8 @@ void BufferCache<P>::LogNativeBankStats(int mode) {
              changed[BankFrame], compared[BankNone], changed[BankNone],
              verify ? changed[BankNone] : 0,
              verify ? changed[BankNone] + changed[BankFrame] : 0,
-             Nx2Test::BankBits() ? fmt::format("; bitsets missed {}", stats.bit_misses)
+             Nx2Test::BankBits() ? fmt::format("; bitsets missed {}, {} skipped without a lookup",
+                                               stats.bit_misses, stats.pages_bulk_skipped)
                                  : std::string{});
     stats = {};
     stats.last_log = now;

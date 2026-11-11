@@ -519,6 +519,12 @@ private:
         std::unordered_map<u32, u64> break_masks;
         std::unordered_map<u64, u64> call_thunks;
         std::array<u64, 6> kinds{};
+        /// Upstream #1161's fast draw changes: draws whose delta list was widened when full
+        /// (once a delta overflow), whose handle buffers took writes only between the handle
+        /// words, and whose vertex attribute formats changed within their type classes.
+        u64 widened{};
+        u64 between_handles{};
+        u64 formats_kept{};
         u64 window_start{};
     };
     /// The pipeline the draw can take the delta path with, or null for a full resolve. Clears

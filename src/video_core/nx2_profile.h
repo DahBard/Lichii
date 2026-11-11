@@ -293,6 +293,11 @@ enum class Counter : u32 {
     InvalidateGatheredRanges,   ///< ...these ranges
     StreamCopies,     ///< Uniform buffers copied into the mapped stream buffer...
     StreamCopyBytes,  ///< ...and their bytes
+    // Upstream #1161's report and fence half (the reports and fences line).
+    ReportLockSkips,    ///< Pending reports that skipped the buffer cache lock (MayBeReadBackPage)
+    ReportLocks,        ///< ...and that took it
+    FenceListsRecycled, ///< Fence operation lists reused after the fencing thread ran them
+    FenceListsNew,      ///< ...and allocated anew
     Count,
 };
 
@@ -769,6 +774,15 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
                      ? fmt::format(" in {:.2f} ms ({:.2f} GB/s)", copy_ms,
                                    copy_bytes / 1e6 / copy_ms)
                      : std::string{});
+    }
+    if (counter(Counter::ReportLockSkips) != 0 || counter(Counter::ReportLocks) != 0 ||
+        counter(Counter::FenceListsRecycled) != 0 || counter(Counter::FenceListsNew) != 0) {
+        const auto rate = [&](Counter which) { return counter(which) * 1e9 / window_ns; };
+        LOG_INFO(HW_GPU,
+                 "{} reports and fences per second: pending reports {:.0f} without the buffer "
+                 "cache lock, {:.0f} with it | fence operation lists {:.0f} recycled, {:.0f} new",
+                 thread_name, rate(Counter::ReportLockSkips), rate(Counter::ReportLocks),
+                 rate(Counter::FenceListsRecycled), rate(Counter::FenceListsNew));
     }
     if (counter(Counter::EntryEngines) != 0 || counter(Counter::Entry3dDirect) != 0 ||
         counter(Counter::EntryOtherExecutable) != 0) {

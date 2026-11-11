@@ -129,9 +129,11 @@ public:
             if (!spare_operations.empty()) {
                 uncommitted_operations = std::move(spare_operations.back());
                 spare_operations.pop_back();
+                Nx2Profile::Add(Nx2Profile::Counter::FenceListsRecycled, 1);
             } else {
                 uncommitted_operations = OperationList{}; // moved-from: make it empty explicitly
                 uncommitted_operations.reserve(64);
+                Nx2Profile::Add(Nx2Profile::Counter::FenceListsNew, 1);
             }
         }
         pending_flushes.push_back(committed_flushes);

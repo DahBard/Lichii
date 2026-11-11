@@ -657,6 +657,8 @@ public:
         /// LICHII_BANK_CHECK=2 with the bitsets: pages they would have skipped although a
         /// reason applied, or without a snapshot (must stay 0).
         u64 bit_misses = 0;
+        /// With the bitsets: skipped pages that took no snapshot lookup.
+        u64 pages_bulk_skipped = 0;
         std::chrono::steady_clock::time_point last_log{};
     } native_bank_tracked_stats;
 
