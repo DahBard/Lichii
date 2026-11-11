@@ -1727,6 +1727,16 @@ Own changes:
        walking the placeholders. cbe51e88a drops that flag, falls back to a plain dump, logs the
        memory layout at boot, and adds a unit test.
      - These ship as r54 (build B + fix).
+     - The same crash again on r53 (owner's ab31 run, lichii-crash-17360.txt), so not
+       ab31-specific:
+       - same registers: r13 0x600, rbx 0x55, r15 0x154;
+       - the input again exactly 0xaa000 before the end of guest memory;
+       - a LinePool worker thread this time;
+       - the crash function (r53 0x549560) is byte-identical to r52's 0x59bfa0, and the
+         faulting instruction is the same vmovups [rax+r9];
+       - the .dmp is again 0 bytes (r53 still had the old flags).
+       It looks like one texture the game places at the top of guest memory at a scene load.
+       r54 has the fix.
      - Run #54 passed (15:19 UTC): `lichii-tuned-r54-pgo-lto`, `-pgo` and `-pgo-train`. Unit
        tests run 5: all 1225 test cases pass, including the new host-split GetSpan and unswizzle
        test.
