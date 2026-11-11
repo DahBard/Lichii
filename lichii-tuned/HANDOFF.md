@@ -1577,6 +1577,14 @@ Own changes:
        non-trivial thread_locals.
      - Build A ships as run #52 (artifacts `r52-*`). Build B therefore becomes run #53 or later;
        its branch keeps the name `r22-r52`.
+     - Run #52 passed (07:23 UTC). Artifacts `lichii-tuned-r52-pgo-lto`, `-pgo` and
+       `-pgo-train`. The PGO step merged the recorded `pgo-r49` profile (92 MB zip).
+     - The owner's test plan:
+       - perf-trace-noprofile (the baseline);
+       - ab-26;
+       - perf-trace (the full profile, for build C);
+       - verify-r51;
+       - optionally ab-27, ab-28, ab-25 and pin_gpu_threads.
      - Rule for new code: no `inline thread_local` of a non-trivial type in a header.
      - #1216 9ad7c7cee picked with DjouWish's authorship; it keeps our Writes::Caches.
        EDEN_NX2_TEST_1216=0 (ab-26) restores tuned4's breaks. g_dynamic_strides follows the
