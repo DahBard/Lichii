@@ -5,6 +5,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -14,9 +17,11 @@
 #include "common/assert.h"
 #include "common/bit_util.h"
 #include "common/common_types.h"
+#include "common/dkb_frame_trace.h"
 #include "common/literals.h"
 #include "common/logging.h"
 #include "video_core/churn_counters.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_upload_switches.h"
@@ -87,6 +92,37 @@ size_t GetStreamBufferSize(const Device& device) {
     }
     return (std::min)(Common::AlignUp(size, MAX_ALIGNMENT), MAX_STREAM_BUFFER_SIZE);
 }
+/// TEST (EDEN_NX2_GPU_PROFILE or EDEN_DKB_FRAME_TRACE): how fast the CPU writes into the stream
+/// buffer's memory, against host memory, logged once at startup. The buffer is unused yet.
+void LogStreamWriteRate(std::span<u8> stream) {
+    constexpr size_t Bytes = 8_MiB;
+    if (stream.size() < Bytes) {
+        return;
+    }
+    std::vector<u8> source(Bytes);
+    std::vector<u8> host(Bytes);
+    for (size_t i = 0; i < Bytes; ++i) {
+        source[i] = static_cast<u8>(i * 31);
+    }
+    const auto best_gbps = [&](u8* destination) {
+        double best = 0.0;
+        for (int run = 0; run < 3; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            std::memcpy(destination, source.data(), Bytes);
+            const auto end = std::chrono::steady_clock::now();
+            const double ns = static_cast<double>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+            best = (std::max)(best, ns > 0.0 ? static_cast<double>(Bytes) / ns : 0.0);
+        }
+        return best;
+    };
+    const double stream_gbps = best_gbps(stream.data());
+    const double host_gbps = best_gbps(host.data());
+    LOG_INFO(Render_Vulkan,
+             "Stream buffer write rate: {:.2f} GB/s into its memory, {:.2f} GB/s into host memory "
+             "(8 MiB copies, best of 3; host byte {})",
+             stream_gbps, host_gbps, host[Bytes / 2]);
+}
 } // Anonymous namespace
 
 StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& memory_allocator_,
@@ -123,6 +159,9 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     }
     stream_pointer = stream_buffer.Mapped();
     ASSERT_MSG(!stream_pointer.empty(), "Stream buffer must be host visible!");
+    if (VideoCommon::Nx2Profile::Enabled() || Common::DkbFrameTrace::Enabled()) {
+        LogStreamWriteRate(stream_pointer);
+    }
 }
 
 StagingBufferPool::~StagingBufferPool() = default;

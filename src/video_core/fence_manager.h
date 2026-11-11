@@ -99,7 +99,11 @@ public:
         if constexpr (!can_async_check) {
             TryReleasePendingFences<false>();
         }
-        auto [should_flush, committed_flushes] = CommitCacheFlushes();
+        auto [should_flush, committed_flushes] = [this] {
+            const Nx2Profile::Scope commit_scope{Nx2Profile::Zone::FenceCommit,
+                                                 Nx2Profile::Enabled()}; // TEST
+            return CommitCacheFlushes();
+        }();
         if (Nx2Profile::Enabled()) {
             NoteFenceDecision(delay_fence, committed_flushes);
         }
@@ -126,12 +130,18 @@ public:
             uncommitted_operations.reserve(64);
         }
         pending_flushes.push_back(committed_flushes);
-        QueueFence(new_fence);
+        {
+            const Nx2Profile::Scope submit_scope{Nx2Profile::Zone::FenceSubmit,
+                                                 Nx2Profile::Enabled()}; // TEST
+            QueueFence(new_fence);
+        }
         if (!delay_fence) {
             func();
         }
         fences.push(std::move(new_fence));
         if (should_flush && !VideoCommon::Nx2Test::QuickWins()) {
+            const Nx2Profile::Scope submit_scope{Nx2Profile::Zone::FenceSubmit,
+                                                 Nx2Profile::Enabled()};
             rasterizer.FlushCommands(); // TEST: EDEN_NX2_TEST_QUICK=0
         }
         if constexpr (can_async_check) {
@@ -139,6 +149,8 @@ public:
             cv.notify_all();
         }
         if (delay_fence) {
+            const Nx2Profile::Scope submit_scope{Nx2Profile::Zone::FenceSubmit,
+                                                 Nx2Profile::Enabled()}; // TEST
             SubmitDeferredWork();
         }
         rasterizer.InvalidateGPUCache();
@@ -312,16 +324,32 @@ private:
                 texture_pops += (released.flushes & TextureFlushes) != 0 ? 1 : 0;
                 buffer_pops += (released.flushes & BufferFlushes) != 0 ? 1 : 0;
             }
+            // TEST (EDEN_NX2_GPU_PROFILE): how long this thread holds each lock.
+            const bool profile = Nx2Profile::Enabled();
+            auto& holds = Nx2Profile::g_lock_holds;
             if (texture_pops != 0) {
                 std::scoped_lock lock{texture_cache.mutex};
+                const u64 start = profile ? Nx2Profile::Ticks() : 0;
                 for (size_t i = 0; i < texture_pops; ++i) {
                     texture_cache.PopAsyncFlushes();
+                }
+                if (profile) {
+                    holds.texture_ticks.fetch_add(Nx2Profile::Ticks() - start,
+                                                  std::memory_order_relaxed);
+                    holds.texture_holds.fetch_add(1, std::memory_order_relaxed);
                 }
             }
             if (buffer_pops != 0) {
                 std::scoped_lock lock{buffer_cache.mutex};
+                const u64 start = profile ? Nx2Profile::Ticks() : 0;
                 for (size_t i = 0; i < buffer_pops; ++i) {
                     buffer_cache.PopAsyncFlushes();
+                }
+                if (profile) {
+                    holds.buffer_ticks.fetch_add(Nx2Profile::Ticks() - start,
+                                                 std::memory_order_relaxed);
+                    holds.buffer_holds.fetch_add(1, std::memory_order_relaxed);
+                    holds.buffer_pops.fetch_add(buffer_pops, std::memory_order_relaxed);
                 }
             }
             // Queries and operations keep their per-fence order.

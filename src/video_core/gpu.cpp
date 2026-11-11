@@ -119,8 +119,10 @@ struct GPU::Impl {
         // Nothing collected since the last gather began: every collect sets the flag after its
         // write is recorded, and the gather clears it before it reads them (as
         // DmaPusher::ApplyCollectedWrites checks it).
+        namespace Profile = VideoCommon::Nx2Profile;
         if (!Core::g_writes_collected.load(std::memory_order_acquire) &&
             VideoCommon::Nx2Test::QuickWins()) {
+            Profile::Add(Profile::Counter::InvalidateNothingCollected, 1); // TEST
             return;
         }
         // Gathered first so the rasterizer takes each cache's lock once, not once per range: the
@@ -141,8 +143,11 @@ struct GPU::Impl {
             Core::g_writes_collected.exchange(false, std::memory_order_acq_rel);
             system.GatherGPUDirtyMemory(callback_writes);
             if (writes.empty()) {
+                Profile::Add(Profile::Counter::InvalidateGatheredNothing, 1); // TEST
                 return;
             }
+            Profile::Add(Profile::Counter::InvalidateGathered, 1);
+            Profile::Add(Profile::Counter::InvalidateGatheredRanges, writes.size());
             applying_writes.push_back(&writes);
         }
         // Also if OnCacheInvalidations throws: ForEachPendingCpuWrite must not reach `writes`

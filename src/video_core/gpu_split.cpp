@@ -796,6 +796,8 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
             }
         }
         const size_t payload = static_cast<size_t>((head >> 8) & 0xffffff);
+        const Nx2Profile::Scope call_scope{Nx2Profile::Zone::DeferredCall,
+                                           Nx2Profile::Enabled()}; // TEST
         reinterpret_cast<void (*)(const u64*)>(entry[1])(entry + 2);
         return 2 + payload;
     }
@@ -855,6 +857,8 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                 // too, so the deferred submit can't overlap whatever the front does next.
                 if (!back_quiet.load(std::memory_order_relaxed)) {
                     if (idle_hook != nullptr) {
+                        const Nx2Profile::Scope hook_scope{Nx2Profile::Zone::IdleHook,
+                                                           Nx2Profile::Enabled()}; // TEST
                         idle_hook(idle_argument);
                     }
                     back_quiet.store(true, std::memory_order_release);
@@ -890,6 +894,8 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             if (hook_requested.load(std::memory_order_relaxed) &&
                 idle_hook != nullptr) [[unlikely]] {
                 hook_requested.store(false, std::memory_order_seq_cst);
+                const Nx2Profile::Scope hook_scope{Nx2Profile::Zone::IdleHook,
+                                                   Nx2Profile::Enabled()}; // TEST
                 idle_hook(idle_argument);
             }
             // A guest thread waits for a flush: run it now, not after the draws and compute work

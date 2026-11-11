@@ -12,6 +12,7 @@
 #include <type_traits>
 
 #include "common/common_types.h"
+#include "video_core/nx2_profile.h"
 
 namespace VideoCommon {
 
@@ -134,7 +135,12 @@ template <class Runtime, class DeviceMemory>
         std::memcpy(slot.bytes.data(), guest, size);
     }
     const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
-    std::memcpy(span.data(), slot.bytes.data(), size);
+    {
+        const Nx2Profile::FineScope copy_scope{Nx2Profile::Zone::StreamCopy}; // TEST
+        Nx2Profile::Add(Nx2Profile::Counter::StreamCopies, 1);
+        Nx2Profile::Add(Nx2Profile::Counter::StreamCopyBytes, size);
+        std::memcpy(span.data(), slot.bytes.data(), size);
+    }
     slot.ref = runtime.LastStreamUniformRef();
     // After the allocation: the tick the stream region is tagged with is the one current now.
     slot.tick = runtime.CurrentTick();

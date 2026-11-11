@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #ifdef _MSC_VER
 #include <intrin.h>
 #elif defined(ARCHITECTURE_x86_64)
@@ -82,6 +83,11 @@ enum class Zone : u32 {
     ComputeSync,     ///< Buffers synchronized and bound (BindHostComputeBuffers)
     ComputeRecord,   ///< The dispatch recorded, early downloads, list copies submitted
     ComputeFsr,      ///< The Ocarina upscaler replacement (TryOcarinaDlss: FSR 4)
+    // TEST: of fence and other, what their time is made of.
+    FenceSubmit,  ///< Of fence: queueing the fence and the deferred submit (QueueFence, Flush)
+    FenceCommit,  ///< Of fence and fence skipped: CommitCacheFlushes with its two cache locks
+    IdleHook,     ///< The split's back's idle hook (the deferred flush) between entries
+    DeferredCall, ///< The bodies of deferred calls on the split's back (Kind::Call)
     // TEST: fine zones, EDEN_NX2_GPU_PROFILE=2 only (FineScope): they split the zones above.
     CbBind,          ///< Of method: constant buffer binds (Maxwell3D::ProcessCBBind)
     CbUpload,        ///< Of method: constant buffer words written to memory
@@ -95,6 +101,7 @@ enum class Zone : u32 {
     TickWork,        ///< Of draw and compute: the sync operations after them (GPU::TickWork)
     GeometryBuffers, ///< Of update buffers: index and vertex buffer binds
     StorageBindings, ///< Of read handles: storage buffer addresses from constant buffers
+    StreamCopy,      ///< Of uniform buffers and compute: bytes copied into the stream buffer
     GraphicsPipelineMiss, ///< A graphics pipeline built on the GPU thread
     ComputePipelineMiss,  ///< A compute pipeline built on the GPU thread
     PipelineWait,         ///< VulkanWorker: a draw or dispatch waits for its pipeline's build
@@ -120,9 +127,10 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "writer wait", "list submit wait", "list GPU wait", "acquire poll", "resnapshot",
     "compute lookup", "compute pointers", "compute views", "compute resolve",
     "compute synchronize", "compute record", "compute FSR",
+    "fence submit", "fence commit", "idle hook", "deferred call",
     "cb bind", "cb upload", "query report", "counter reset", "render enable", "sink",
     "macro end", "draw setup", "draw queries", "tick work", "geometry buffers",
-    "storage bindings", "graphics pipeline miss", "compute pipeline miss", "pipeline wait",
+    "storage bindings", "stream copy", "graphics pipeline miss", "compute pipeline miss", "pipeline wait",
     "shader capture", "texture cache", "GPU wait", "present", "worker idle", "present wait",
     "queue submit",
 };
@@ -278,8 +286,29 @@ enum class Counter : u32 {
     LandingChecksDispatch,  ///< Early download landing checks (a semaphore query) after dispatches
     LandingChecksDraw,      ///< ...and every 32nd draw
     ListCopySubmits,        ///< SubmitNx2ListCopies flushes after dispatches
+    // TEST: GPU::InvalidateGPUCache by outcome.
+    InvalidateNothingCollected, ///< Returned before the gather (nothing collected)
+    InvalidateGatheredNothing,  ///< Gathered, found nothing
+    InvalidateGathered,         ///< Gathered writes and applied them...
+    InvalidateGatheredRanges,   ///< ...these ranges
+    StreamCopies,     ///< Uniform buffers copied into the mapped stream buffer...
+    StreamCopyBytes,  ///< ...and their bytes
     Count,
 };
+
+/// TEST: the fencing thread's holds of the caches' locks while it lands downloads
+/// (FenceManager::ReleaseThreadFunc), in time stamp ticks, and the time PendingCpuWriteRanges
+/// took on any thread. Logged with the GPU back thread's zones.
+struct LockHolds {
+    std::atomic<u64> buffer_ticks{};
+    std::atomic<u64> buffer_holds{};
+    std::atomic<u64> buffer_pops{};
+    std::atomic<u64> texture_ticks{};
+    std::atomic<u64> texture_holds{};
+    std::atomic<u64> pending_writes_ticks{};
+    std::atomic<u64> pending_writes_calls{};
+};
+inline LockHolds g_lock_holds;
 
 struct ThreadData {
     std::array<u64, static_cast<size_t>(FineCounter::Count)> fine_counters{}; ///< TEST
@@ -694,6 +723,48 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
     }
     if (const std::string reads = TopMethods(t_dma_reads, nullptr, window); !reads.empty()) {
         LOG_INFO(HW_GPU, "{} MME DMA reads per second by macro:{}", thread_name, reads);
+    }
+    if (report_all_contention) {
+        // TEST: who holds the caches' locks the back spins on.
+        auto& holds = g_lock_holds;
+        const auto take = [](std::atomic<u64>& value) {
+            return static_cast<double>(value.exchange(0, std::memory_order_relaxed));
+        };
+        const double ms_per_tick = 1000.0 / static_cast<double>(window_ticks);
+        const double buffer_ms = take(holds.buffer_ticks) * ms_per_tick;
+        const double buffer_holds = take(holds.buffer_holds) * 1e9 / window_ns;
+        const double buffer_pops = take(holds.buffer_pops) * 1e9 / window_ns;
+        const double texture_ms = take(holds.texture_ticks) * ms_per_tick;
+        const double texture_holds = take(holds.texture_holds) * 1e9 / window_ns;
+        const double pending_ms = take(holds.pending_writes_ticks) * ms_per_tick;
+        const double pending_calls = take(holds.pending_writes_calls) * 1e9 / window_ns;
+        LOG_INFO(HW_GPU,
+                 "Fencing thread cache locks per second: buffer cache held {:.1f} ms in {:.0f} "
+                 "holds ({:.0f} landings), texture cache held {:.1f} ms in {:.0f} holds | "
+                 "PendingCpuWriteRanges {:.1f} ms ({:.0f}/s, any thread)",
+                 buffer_ms, buffer_holds, buffer_pops, texture_ms, texture_holds, pending_ms,
+                 pending_calls);
+    }
+    if (counter(Counter::InvalidateNothingCollected) != 0 ||
+        counter(Counter::InvalidateGatheredNothing) != 0 || counter(Counter::InvalidateGathered) != 0 ||
+        counter(Counter::StreamCopies) != 0) {
+        const auto rate = [&](Counter which) { return counter(which) * 1e9 / window_ns; };
+        const double copy_ms = static_cast<double>(
+                                   data.exclusive_ns[static_cast<size_t>(Zone::StreamCopy)]) *
+                               1000.0 / static_cast<double>(window_ticks);
+        const double copy_bytes = counter(Counter::StreamCopyBytes) * 1e9 / window_ns;
+        LOG_INFO(HW_GPU,
+                 "{} TEST per second: InvalidateGPUCache nothing collected {:.0f}, gathered "
+                 "nothing {:.0f}, gathered writes {:.0f} ({:.0f} ranges) | stream copies {:.0f}, "
+                 "{:.2f} MiB{}",
+                 thread_name, rate(Counter::InvalidateNothingCollected),
+                 rate(Counter::InvalidateGatheredNothing), rate(Counter::InvalidateGathered),
+                 rate(Counter::InvalidateGatheredRanges), rate(Counter::StreamCopies),
+                 copy_bytes / (1024.0 * 1024.0),
+                 Fine() && copy_ms > 0.0
+                     ? fmt::format(" in {:.2f} ms ({:.2f} GB/s)", copy_ms,
+                                   copy_bytes / 1e6 / copy_ms)
+                     : std::string{});
     }
     if (counter(Counter::EntryEngines) != 0 || counter(Counter::Entry3dDirect) != 0 ||
         counter(Counter::EntryOtherExecutable) != 0) {

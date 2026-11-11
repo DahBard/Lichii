@@ -2237,8 +2237,15 @@ template <class P>
 Common::RangeSet<DAddr> BufferCache<P>::PendingCpuWriteRanges() {
     Common::RangeSet<DAddr> ranges;
     if (pending_cpu_writes) {
+        const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0; // TEST
         pending_cpu_writes(
             [&ranges](DAddr device_addr, size_t size) { ranges.Add(device_addr, size); });
+        if (start != 0) {
+            auto& holds = Nx2Profile::g_lock_holds;
+            holds.pending_writes_ticks.fetch_add(Nx2Profile::Ticks() - start,
+                                                 std::memory_order_relaxed);
+            holds.pending_writes_calls.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     return ranges;
 }
@@ -2623,6 +2630,9 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             runtime.PushFastUniformBuffer(stage, binding_index, std::span<const u8>(data.data(), copied));
         } else {
             const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
+            const Nx2Profile::FineScope copy_scope{Nx2Profile::Zone::StreamCopy}; // TEST
+            Nx2Profile::Add(Nx2Profile::Counter::StreamCopies, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::StreamCopyBytes, size);
             std::memset(span.data(), 0, span.size());
             std::memcpy(span.data(), words.data(), copied);
         }
@@ -2807,6 +2817,9 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         }
         if (!streamed) {
             const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
+            const Nx2Profile::FineScope copy_scope{Nx2Profile::Zone::StreamCopy}; // TEST
+            Nx2Profile::Add(Nx2Profile::Counter::StreamCopies, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::StreamCopyBytes, size);
             device_memory.ReadBlockUnsafe(device_addr, span.data(), size);
             Nx2Profile::AddFine(Nx2Profile::FineCounter::UniformStreamed, 1);
         }
@@ -3205,7 +3218,12 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
             if (use_fast_buffer) {
                 const std::span<u8> span =
                     runtime.BindMappedUniformBuffer(0, binding_index, size);
-                device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
+                {
+                    const Nx2Profile::FineScope copy_scope{Nx2Profile::Zone::StreamCopy}; // TEST
+                    Nx2Profile::Add(Nx2Profile::Counter::StreamCopies, 1);
+                    Nx2Profile::Add(Nx2Profile::Counter::StreamCopyBytes, size);
+                    device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
+                }
                 const auto stream = runtime.LastStreamUniformRef();
                 runtime.Nx2PatchComputeUniform(binding.device_addr, size, stream.buffer,
                                                stream.offset, guest_word);
