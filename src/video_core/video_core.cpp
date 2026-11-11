@@ -4,14 +4,20 @@
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <iterator>
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/device_memory.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
+#include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/nx2_async_readback.h"
@@ -19,12 +25,14 @@
 #include "video_core/nx2_download_trace.h"
 #include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_entry_check.h"
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_indirect.h"
 #include "video_core/nx2_list_indirect_stats.h"
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/nx2_test_switches.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_null/renderer_null.h"
 #ifdef HAS_OPENGL
@@ -51,6 +59,33 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
     default:
         return nullptr;
     }
+}
+
+/// Every TEST switch as the code applies it, once the renderer latched its own: a launcher whose
+/// switch did not take effect shows here, not as a null A/B result.
+void LogTestSwitches(const Core::System& system) {
+    namespace Test = VideoCommon::Nx2Test;
+    namespace FastDraw = VideoCommon::Nx2FastDraw;
+    const std::array<std::pair<const char*, bool>, 12> switches{{
+        {"EDEN_NX2_TEST_QUICK", Test::QuickWins()},
+        {"EDEN_NX2_TEST_CONTIG", Test::ContiguousResolve()},
+        {"EDEN_NX2_TEST_1161_DRAWS", FastDraw::g_test_1161_draws.load(std::memory_order_relaxed)},
+        {"EDEN_NX2_TEST_1161_HANDLES", Test::Handles1161()},
+        {"EDEN_NX2_TEST_BANK_BITS", Test::BankBits()},
+        {"EDEN_NX2_TEST_1161_REPORTS", Test::Reports1161()},
+        {"EDEN_NX2_TEST_DRAW_TRIMS", Test::DrawTrims()},
+        {"EDEN_NX2_TEST_XLATE_CACHE", Test::TranslationCache()},
+        {"EDEN_NX2_TEST_1306", Test::Collector1306()},
+        {"EDEN_NX2_TEST_1216", FastDraw::g_test_1216.load(std::memory_order_relaxed)},
+        {"EDEN_NX2_FOLD_INSTANCES", Tegra::Engines::Maxwell3D::FoldInstancesEnabled()},
+        {"EDEN_NX2_ZERO_TRIM", system.DeviceMemory().ZeroTrimRunning()},
+    }};
+    std::string line;
+    for (const auto& [name, on] : switches) {
+        fmt::format_to(std::back_inserter(line), "{}{} {}", line.empty() ? "" : ", ", name,
+                       on ? "on" : "off");
+    }
+    LOG_INFO(HW_GPU, "TEST switches in effect: {}", line);
 }
 
 } // Anonymous namespace
@@ -83,6 +118,7 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     try {
         auto renderer = CreateRenderer(system, emu_window, *gpu, std::move(context));
         gpu->BindRenderer(std::move(renderer));
+        LogTestSwitches(system);
     } catch (const std::runtime_error& exception) {
         scope.Cancel();
         LOG_ERROR(HW_GPU, "Failed to initialize GPU: {}", exception.what());

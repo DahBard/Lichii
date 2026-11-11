@@ -3329,6 +3329,8 @@ public:
     /// A vertex attribute format, when vertex input is dynamic state.
     static bool IsFastDrawVertexFormat(u32 method);
     void NoteFastDrawConstantData(GPUVAddr begin, GPUVAddr end);
+    /// Whether the front counts an instance loop's later instances (FrontWrite).
+    static bool FoldInstancesEnabled();
 
     /// Handles a write to the CB_DATA[i] register.
     void ProcessCBData(u32 value);
@@ -3532,8 +3534,6 @@ private:
     bool FrontSkipsLoopWrite(FrontState& state, u32 method, u32 value, bool shadow_kept);
     /// GpuSplit::FoldInstance's flush, `engine` a Maxwell3D.
     static void FlushFoldedInstances(void* engine, u32 count);
-    /// Whether the front counts an instance loop's later instances (FrontWrite).
-    static bool FoldInstancesEnabled();
     void FrontNoteWrites(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
                          u32 amount);
     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,

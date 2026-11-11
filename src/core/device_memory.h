@@ -69,6 +69,15 @@ public:
         return reinterpret_cast<T*>(buffer.BackingBasePointer() + addr);
     }
 
+    /// Whether the zero-page passes run (Windows, unless EDEN_NX2_ZERO_TRIM=0).
+    [[nodiscard]] bool ZeroTrimRunning() const {
+#ifdef _WIN32
+        return zero_trim_thread.joinable();
+#else
+        return false;
+#endif
+    }
+
     Common::HostMemory buffer;
 
 #ifdef _WIN32
