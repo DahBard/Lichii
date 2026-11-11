@@ -621,8 +621,9 @@ void RasterizerVulkan::InitFastDrawBreakClasses() {
 GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_indirect) {
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
-    // Only the entries in use: the delta is ~540 bytes, a few of them used.
-    std::optional<FastDraw::Delta> whole; // TEST: EDEN_NX2_TEST_DRAW_TRIMS=0
+    // TEST: EDEN_NX2_TEST_DRAW_TRIMS=1 copies only the entries in use (the delta is ~540 bytes,
+    // a few of them used).
+    std::optional<FastDraw::Delta> whole;
     if (VideoCommon::Nx2Test::DrawTrims()) {
         FastDraw::Delta& source = FastDraw::g_delta;
         taken_delta.binds = std::exchange(source.binds, {});
@@ -1108,7 +1109,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     {
         Profile::Scope scope{Profile::Zone::FlushWork};
         FlushWork();
-        // TEST (EDEN_NX2_TEST_DRAW_TRIMS): the buffer cache's invalidations wait for the draw's
+        // TEST (EDEN_NX2_TEST_DRAW_TRIMS=1): the buffer cache's invalidations wait for the draw's
         // cache lock below. The texture, query and shader caches' run here, before the pipeline
         // lookup: an invalidated shader can delete the pipeline it would return.
         defer_buffer_invalidation = VideoCommon::Nx2Test::DrawTrims();

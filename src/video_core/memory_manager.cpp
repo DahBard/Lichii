@@ -324,7 +324,8 @@ std::optional<DAddr> MemoryManager::GpuToCpuAddress(GPUVAddr gpu_addr) const {
     // The same few pages are looked up over and over (every draw rebinds its buffers and
     // textures): a small per-thread cache of page translations, dropped whenever any entry
     // changes (map_serial moves after each map or unmap). Eglantine b1e650849e by kraibse (back
-    // thread 13.64 -> 13.25 ms a frame), via Fritchii EXP63, with its switch read once.
+    // thread 13.64 -> 13.25 ms a frame), via Fritchii EXP63, with its switch read once. TEST:
+    // only with EDEN_NX2_TEST_XLATE_CACHE=1 since r55 (neutral here).
     struct CachedPage {
         u64 owner;
         u64 serial;

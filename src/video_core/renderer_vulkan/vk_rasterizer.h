@@ -303,8 +303,8 @@ private:
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaDlssEnabled() const;
-    /// OcarinaDlssEnabled, read once a frame for the per-draw trackers (TEST:
-    /// EDEN_NX2_TEST_DRAW_TRIMS=0 reads it every call). A failure clears it.
+    /// OcarinaDlssEnabled for the per-draw trackers: every call, or once a frame with TEST
+    /// EDEN_NX2_TEST_DRAW_TRIMS=1 (a failure clears it then).
     bool OcarinaDlssEnabledThisFrame();
     /// The invalidations defer_buffer_invalidation kept, with buffer_cache.mutex held.
     void ApplyDeferredBufferInvalidations();
@@ -549,7 +549,7 @@ private:
     VideoCommon::Nx2FastDraw::Delta taken_delta;
     /// PrepareDraw: the buffer cache's part of FlushCaching's invalidations, applied under the
     /// draw's cache lock, or before a download the drawing thread makes first (TEST:
-    /// EDEN_NX2_TEST_DRAW_TRIMS).
+    /// EDEN_NX2_TEST_DRAW_TRIMS=1; without it nothing is kept).
     bool defer_buffer_invalidation{};
     std::vector<std::pair<DAddr, std::size_t>> deferred_buffer_invalidations;
     FastDrawStats fast_draw_stats;
