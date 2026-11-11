@@ -1454,6 +1454,32 @@ Own changes:
      The merge runs on branch `r22-merge-nx2`.
    - Analyze the newest Fritchii builds (tags up to fritchii-v5.7; we last read v5.5) for
      anything worth taking.
+0b. Fritchii v5.6-v5.8.2 review (2026-11-11). Workflow `wug5im6pd`: 146 commits, four area
+   analysts and four skeptics. Details in `lichii-tuned/fritchii-v58-review.json`.
+   - Confirmed (awaiting the owner's go-ahead):
+     1. Zero-page trim fixes on upstream #961's code: 81ab48f7d's early-exit page check, a
+        300 s backoff, every pass over 100 ms logged with its phases, EDEN_NX2_ZERO_TRIM=0 for
+        an A/B, and optionally the bulk-mapping wait. In r49 each pass takes 1.33-1.37 s at
+        7.5-8.5 GB resident and lines up with 1-2 s windows of 25-30 ms frames.
+     2. Water ripples at fractional frame steps: merge upstream's OPEN PR #1180 (e7ea60c2b +
+        1169d58c5), not Fritchii's d389685a4/063dbb741. At 43-58 fps the ripples run at
+        72-97% speed.
+   - Watch upstream:
+     - #1161, cheaper reports and fences: ~1%, unmeasured.
+     - #1186/#1181, register shadowing: no rejection seen in the owner's logs; they change the
+       SPIR-V.
+     - #1225, the JIT warm-up.
+     - #1129, the texture cache's critical threshold.
+     - The mesh fallback setting.
+     - EXP48 and EXP63.
+   - Rejected:
+     - EXP61: our 500 us flush batch already avoids the empty submits.
+     - EXP58: it conflicts with upstream #976, which we carry.
+     - EXP56: it would undo upstream #311.
+     - JIT_FAST_COMPILE / #1266: verification is already off in all_safe_optimizations.
+     - Fritchii's translator-hash stamp: it would invalidate the owner's preparation.
+     - AMD_APP_CACHE, the high refresh mode (it competes with AMD frame generation), and the
+       settings revisions (FXAA None: the owner already runs AA None).
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

@@ -1,0 +1,1000 @@
+{
+ "reviewed": "2026-11-11",
+ "fritchii": "v5.5 (4012e5271) .. v5.8.2 (6649abc4f), 146 commits",
+ "ours": "tuned4 36948bc36",
+ "inventory": {
+  "areas": {
+   "cpu": [
+    "cef673c58",
+    "81ab48f7d",
+    "c99790b87",
+    "c338269b9",
+    "0d9dc6e36",
+    "ed74cb008",
+    "3965ffbd0",
+    "5944a098a",
+    "0add1e56a",
+    "419622329",
+    "68b9815db",
+    "b0d0ff43f",
+    "7147facb7",
+    "0f0e8470c",
+    "6a29460f5",
+    "93423cd43",
+    "85a33019b",
+    "d20c32704",
+    "289ffeb16",
+    "1c8474ee9"
+   ],
+   "gpu": [
+    "99910c062",
+    "b4b6240de",
+    "2bf439836",
+    "115e2dbbe",
+    "a2cf026b2",
+    "25984e0e0",
+    "f253d02aa",
+    "eba45b151",
+    "571023fcc",
+    "f00e2692f",
+    "f37d573b9",
+    "d0fa67cd9",
+    "f8fed26ab",
+    "626997885",
+    "8b85ce1bc",
+    "acd2cce6e",
+    "a567ca378",
+    "a506cd318",
+    "669751e2a",
+    "ec3df1fb7",
+    "208cb2579",
+    "f93124a6b",
+    "6129793a6",
+    "cd1582e0d",
+    "8921f9ba7",
+    "f549632af",
+    "39b54e91e",
+    "c0fa5c090",
+    "7df8caa2b",
+    "984d0ba92",
+    "f84b9056c",
+    "506a5ca59",
+    "709c7ff67",
+    "ad94953db",
+    "3c09b1276",
+    "1b65dfe83"
+   ],
+   "ocarina": [
+    "b14d20aa4",
+    "f34a4dff5",
+    "31e81b4cc",
+    "5ee1a7a01",
+    "e6e0a8083",
+    "2d476b683",
+    "cb0c4252c",
+    "30bddb3d7",
+    "9b767005f",
+    "f40398a7c",
+    "363832faf",
+    "868597700",
+    "7a6fcd3a3",
+    "d389685a4",
+    "906b15402",
+    "573163502",
+    "ef1ba9c2e",
+    "7ade2db46",
+    "9d216debc",
+    "056be33ad",
+    "4429e53ca",
+    "dfac3c45e",
+    "60377e080",
+    "5885850c6",
+    "e1c7514de",
+    "28a71116d",
+    "063dbb741"
+   ],
+   "prep": [
+    "a7226727c",
+    "59fed79d5",
+    "24b65791b",
+    "824123205",
+    "413d853f0",
+    "0fd9d9e25",
+    "0fa67cd9",
+    "1edd5dbf0",
+    "229417e30",
+    "d4bbab070",
+    "f28d17136",
+    "5b970411a",
+    "5f8b265ec",
+    "d03cd4cd5",
+    "6e11fee51",
+    "0fa67cd9"
+   ],
+   "skip": [
+    "40872ee01",
+    "4562af17f",
+    "87a50046b",
+    "253761862",
+    "a645ac3e1",
+    "672d8b36e",
+    "37deb507b",
+    "bc6f39158",
+    "9f6bdb46f",
+    "58f55cb7d",
+    "8627ff423",
+    "a26b26339",
+    "1521079e9",
+    "8100a67d2",
+    "b3c795852",
+    "7876c856c",
+    "031f0741c",
+    "d041752bc",
+    "696a45664",
+    "9f6d59591",
+    "169bb1f19",
+    "6c4e3eed1",
+    "dde155e33",
+    "3ae8122cf",
+    "a85e7344b",
+    "3d2bcbb89",
+    "753c422e1",
+    "45e164c15",
+    "ad4b2efe2",
+    "c43b29327",
+    "25892ea15",
+    "5d1eb3819",
+    "c1c1ccbc1",
+    "2f4c1d100",
+    "330c1e4bb",
+    "d00273c78",
+    "f3ba26cfe",
+    "52317bf0e",
+    "d9f6b81f8",
+    "db3fdb292",
+    "919d5b0d5",
+    "3236102f6",
+    "ef961c0ce",
+    "416bfed00",
+    "909be315f",
+    "08b95c876",
+    "d042bdd73",
+    "6649abc4f"
+   ]
+  },
+  "skip_reasons": "Skip holds version/notes/updater/Discord/data-folder/overlay/log/hitch-log/diagnostic commits, NX archive support, library-title display fixes, tests, Linux build, and ports of upstream PRs verified merged in 17baed716 via git log grep: #957, #961, #951, #1199, #1210, #1245, #784, #941, #1168, #1249, #984, #923, #1078. Not verified as merged, so kept in areas: #969 (f253d02aa, gpu), #1051 (eba45b151, gpu), #695/#914/#915 FSR (prep). 1521079e9 (ParamPackage empty values) and 2d476b683 placement are low-confidence. 0fa67cd9 is listed in prep (a duplicate entry, harmless)."
+ },
+ "results": [
+  {
+   "area": "cpu",
+   "analysis": {
+    "area": "cpu",
+    "summary": "I read all 20 assigned commits (Fritchii v5.6 to v5.8) and checked them against tuned4 36948bc36 and the upstream PR refs. I also checked them against the owner's r49 log (/root/.claude/uploads/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/2bcb3130-eden_log.txt), which was recorded with the GPU profile on.\n\nThree groups are worth taking:\n\n1. **Zero-page trim fixes: the clearest win for this setup.** The trim itself is upstream #961, merged and in our tree, but our copy has none of Fritchii's fixes.\n   - In r49, every pass takes 1.33-1.37 s at 7.5-8.5 GB resident (log at 62.2, 68.5 and 107.3 s).\n   - The passes the log doesn't record can be placed from tuned4's timing (5 s, doubling to 60 s): about 74-75, 85-86, 112-114, 124-125 and 145-147 s.\n   - Each of those 1-2 s windows raises the average frame from about 17-21 ms to 25-30 ms, with 5-18 frames over 30 ms. Examples: 107.8 s averages 29.1 ms (16 frames over 30), 113.9 s averages 29.1 (16 over 30), 146.2 s averages 29.8 (18 over 30).\n   - So the trim is a recurring hit to the 1% lows. Fritchii's early-exit page check (81ab48f7d) and its longer backoff (6a29460f5) address exactly this. ZERO_TRIM=0 (68b9815db) gives the A/B. The owner has 32 GB of RAM.\n2. **EXP61: skip empty FlushCommands submits.**\n   - Fritchii measured Castle Town at 43.0 -> 45.6 fps (3 of 4 pairs), with empty submits down from 4,600/s to 145/s.\n   - It must be ported with the uploads_pending check Fritchii added later (in 25892ea15), since tuned4 has #1245.\n   - In r49 the Vulkan worker submits 2,400-2,700 times a second, and every empty flush also costs the back thread (SubmitExecution, InvalidateState, AllocateNewContext). The back thread is busy 830-862 ms/s.\n3. **The report and fence allocation cuts from open upstream PR #1161.**\n   - Port them from upstream's commit 792e12a47, not from Fritchii's rewrite. Upstream's ReportOp keeps NoteReportPending, split_entry and mirrored, which our query_cache.h has and Fritchii's tree lacks.\n   - With fake occlusion on, Ocarina's ~1,400 reports a frame still build a heap-allocated std::function at query_cache.h:318. With clang-cl and MSVC's STL, the deque<size_t> of free query ids also allocates every two pushes.\n\nEverything else, to watch or skip:\n- **JIT warm-up (EDEN_NX2_JIT_WARM, on in Fritchii v5.7).** Upstream PR #1225 does the same cross-core queue and also saves the block list per title, so watch it. Port Fritchii's budgeted version only if #1225 stalls.\n- **JIT_FAST_COMPILE (93423cd43) and upstream #1266 do nothing.** DisableVerification (0x80) is already inside all_safe_optimizations (0xFFFF), which is the default config. Only Paranoid accuracy clears it, and both patches keep verification there.\n- **Memory probe heap walk (cef673c58).** Not applicable: tuned4 has no memory probe.\n- **IR pool cap (c99790b87).** A RAM-only A/B switch, off and never measured.\n- **EXP63, EXP48, EXP53.** Ports from Eglantine (kraibse). Off by default in Fritchii v5.8.2 and never measured by Fritchii. EXP48 overlaps the hot pages in upstream #717. EXP53 targets a front-thread \"macro dma read\" wait that doesn't appear in our r49 profile: the front's waits there are acquire, list writers and map.\n\nNone of these touch the shader cache or pipeline keys, so the \"tuned 1\" preparation stamp is unaffected.",
+    "items": [
+     {
+      "commits": [
+       "81ab48f7d",
+       "6a29460f5",
+       "68b9815db",
+       "0f0e8470c"
+      ],
+      "title": "Zero-page trim: early-exit page check, wait out bulk mapping, 5-minute backoff, ZERO_TRIM=0 switch, phase logging",
+      "what": "81ab48f7d: IsZeroPage checks 64-byte lines and returns at the first non-zero one, instead of OR-ing all 512 words of every resident page. 6a29460f5: a pass waits (500 ms at a time, at most 5 s) while the guest maps, unmaps or protects more than 32 MiB per 0.5 s. A pass that trims under 64 MiB backs off up to 300 s instead of 60 s; EDEN_NX2_ZERO_TRIM_IDLE=0 restores the old timing. 68b9815db: EDEN_NX2_ZERO_TRIM=0 turns the pass thread off at boot. 0f0e8470c: logs pass phases (working set query, page reads, VirtualUnlock runs); diagnostic only.",
+      "in_our_tree": "no",
+      "relevance": "high",
+      "risk": "low",
+      "recommendation": "port",
+      "why": "tuned4 has upstream #961 unchanged. src/common/host_memory.cpp:1285 reads every word of each page. src/core/device_memory.cpp:39-84 runs a pass every 5 s while a pass trims at least 64 MiB, otherwise doubling up to 60 s. The owner's r49 log shows each pass costs 1.33-1.37 s (lines 1977, 2248, 3018) and lines up with 1-2 s windows of 25-30 ms average frames and 5-18 frames over 30 ms: 107.8 s, 113.9 s, 124.98 s, 146.2 s, and 75.4 s. The surrounding frames are 17-21 ms. That is a recurring 1% low hit on a CPU-bound laptop: ~7.5 GB of page reads plus a working set query that locks the process working set and ~20k VirtualUnlock calls. The early exit is identical in behaviour and tiny. The 300 s backoff is trivial. The bulk-mapping wait needs a mapped-bytes counter: Fritchii reads Nx2Hitch::g_counters (HostMap/HostUnmap/HostProtect), which tuned4 doesn't have, so add a plain atomic byte counter in HostMemory Map/Unmap/Protect. Keep ZERO_TRIM=0 for an A/B on the owner's PC. 0f0e8470c is optional diagnostics. Worth proposing upstream too, since #961 is upstream code.",
+      "benefit_evidence": "Fritchii: a full-read pass took 1.35-1.47 s at ~6 GB resident (fable52_answer_1). After the early exit, the phases measured were a 250-270 ms working set query plus ~20,000 VirtualUnlock calls in 170-300 ms (longest 48 ms during a load); passes trimmed only 1-2 MiB after boot. Guest map/unmap/protect calls stalled 10-14 ms during a pass, in 84-126 ms Peahat-kill hitches. Area loads showed ~180k page faults (the reason for the ZERO_TRIM A/B). Not measured as an fps or 1% low change. Owner's r49: frame-time windows above.",
+      "conflicts": "Low. host_memory.cpp IsZeroPage is upstream text in tuned4, so 81ab48f7d applies as is. device_memory.cpp: tuned4 has the EDEN_NX2_SEC_RESERVE commit-stats block inside the loop (lines 54-67); the backoff and busy-wait go around it. No shader cache or preparation stamp involvement.",
+      "upstream_equivalent": "Base is merged upstream #961 (tuned4 fbf12eafd/2b30c2cb1). No upstream PR in the fetched refs changes IsZeroPage or the pass timing."
+     },
+     {
+      "commits": [
+       "c338269b9",
+       "0d9dc6e36"
+      ],
+      "title": "EXP61: FlushCommands skips the submit when nothing was recorded since the last Flush/Finish",
+      "what": "Scheduler counts Record calls (record_serial) and stores the count at each Flush/Finish (submitted_serial, set after AllocateNewContext). RasterizerVulkan::FlushCommands returns early when nothing new was recorded. This catches the case where InnerFence::Queue already flushed and SignalFence's FlushCommands flushed again with an empty command buffer. Fritchii made it the default (EXP61=1) in v5.6. At Fritchii HEAD, RecordedSinceSubmit also returns true while uploads_pending (added with its #1245 port, 25892ea15).",
+      "in_our_tree": "no",
+      "relevance": "high",
+      "risk": "low",
+      "recommendation": "port",
+      "why": "tuned4 has the same structure. vk_fence_manager.cpp:22 InnerFence::Queue flushes or defers. vk_rasterizer.cpp:3048 FlushCommands only checks draw_counter/pending_native_work, so the empty second submit happens here too. In r49 the Vulkan worker submits 2,408-2,687/s (39-40 ms/s), and the back thread spends 24.7-31.2 ms/s in fence work (10-14.6k fences/s) while busy 830-862 ms/s. Each skipped empty flush saves back-thread work: SubmitExecution, EndPendingOperations, InvalidateState (forcing rebinding on the next draw), NextTick and AllocateNewContext. It also saves an AMD vkQueueSubmit on the worker. Port it with the HEAD form of RecordedSinceSubmit (`uploads_pending || record_serial != submitted_serial`), because tuned4 has upstream #1245 (4d7412ac7) and its uploads_pending. Ship it unconditionally with a kill switch for one A/B, and confirm with EDEN_NX2_GPU_PROFILE (queue submit count, back fence ms).",
+      "benefit_evidence": "Fritchii, Castle Town live toggle: empty submits at FlushCommands 4,600 -> 145/s, 43.0 -> 45.6 fps (3 of 4 pairs, the 4th a tie), GPU thread split drain 432 -> 396 ms/s. The v5.6 notes credit this together with the #1161 allocation cuts with 45 -> 50 fps in Castle Town (RTX 4080).",
+      "conflicts": "Small. vk_scheduler.h: the Record and RecordWithUploadBuffer templates (tuned4 lines ~213-235). vk_scheduler.cpp: Flush and Finish are the only SubmitExecution callers (lines 242, 320). vk_rasterizer.cpp: FlushCommands. Use a plain env switch rather than Nx2Debug::Experiment(61) if tuned4's experiment table differs. No shader cache or stamp involvement.",
+      "upstream_equivalent": "none"
+     },
+     {
+      "commits": [
+       "ed74cb008",
+       "3965ffbd0",
+       "5944a098a",
+       "0add1e56a"
+      ],
+      "title": "Cheaper reports and fences from upstream #1161: inline report operation, recycled fence lists, vector FIFO of free query ids, master semaphore ticks on their own cache lines",
+      "what": "The report operation is small enough for std::function's inline storage (no heap allocation per report). Fence operation lists go back to a spare pool with their capacity. Free query ids are a vector read from a head index instead of std::deque<size_t>. gpu_tick, current_tick and wait_mutex are alignas(64), and Refresh skips storing an unchanged value. Fritchii ported these from #1161 (792e12a47b). Its report functor differs from upstream: it owns an EXP30 'report owed' bit and has no NoteReportPending.",
+      "in_our_tree": "partly",
+      "relevance": "medium",
+      "risk": "low",
+      "recommendation": "port",
+      "why": "tuned4 already has vector OperationList (fence_manager.h:462-467) but rebuilds a 64-entry reserve at every fence (fence_manager.h:123-125). It still uses std::deque<size_t> old_queries (query_stream.h:127-149), which allocates every two pushes under clang-cl with MSVC's STL. It builds a ~130-byte lambda std::function for every report (query_cache.h:318), including the immediate payload path that fake occlusion sends Ocarina's ~1,400 occlusion reports through (query_cache.h:261-264, fake_occlusion.h). The master semaphore atomics share a cache line (vk_master_semaphore.h:76-78). These are back-thread allocator and cache-line costs, and the back thread is a limiter. Port from upstream's 792e12a47, not Fritchii's version: upstream's ReportOp carries split_entry, mirrored and report_noted (NoteReportPending/FinishReport), which match tuned4's query_cache.h; Fritchii's tree doesn't have those. Take only the 'Reports and fences' bullets of that commit, not its fast-draw changes. Our earlier merge plan rated #1161 as 'skip, cherry-pick only the water commit', and this is that commit's CPU half.",
+      "benefit_evidence": "No separate measurement. Fritchii v5.6 notes: 'About 5 fps more in Castle Town (45 to 50 on an RTX 4080)' for EXP61 plus 'reports and fences no longer allocate memory'. EXP61 alone was 43.0 -> 45.6, so roughly +2-3 fps is left for these, unproven.",
+      "conflicts": "query_cache.h CounterReport: tuned4 adds payload, delayed_release, the immediate path and FakeOcclusion on top of upstream, so upstream's ReportOp needs 1-2 more fields (stay within the 48-byte static_assert, or build the functor only after the immediate path returns as Fritchii does). fence_manager.h: tuned4 has a SignalFence hand-over point; check the inline-fold paths Fritchii lists before adding KeepSpareOperations. vk_master_semaphore.h and query_stream.h: clean. No stamp involvement.",
+      "upstream_equivalent": "open PR #1161, commit 792e12a47 (Lucas Borges), not merged in 17baed716"
+     },
+     {
+      "commits": [
+       "419622329"
+      ],
+      "title": "Samples query bank host reset recorded on the Vulkan worker (from #1161)",
+      "what": "SamplesQueryBank::Reset records vkResetQueryPool for the Vulkan worker instead of calling it on the recording thread (~100 us a bank on AMD's driver per zortos).",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Relevant to AMD in general, but tuned4 runs Ocarina with fake occlusion by default (fake_occlusion.h:21-33). CounterEnable/CounterReset return early for ZPassPixelCount64 (query_cache.h:197, 226), so the samples streamer and its banks are idle and vk_query_cache.cpp:66 doesn't run in Ocarina. Take it only as part of a wholesale #1161 cherry-pick, or if fake occlusion is ever turned off.",
+      "benefit_evidence": "~100 us per bank reset on AMD (zortos's number, quoted by Fritchii); not measured by Fritchii.",
+      "conflicts": "None (vk_query_cache.cpp unchanged in that spot).",
+      "upstream_equivalent": "open PR #1161 (792e12a47)"
+     },
+     {
+      "commits": [
+       "b0d0ff43f",
+       "7147facb7"
+      ],
+      "title": "EDEN_NX2_JIT_WARM: idle guest cores compile blocks other cores compiled (budget 20 ms per 100 ms per core)",
+      "what": "Each on-demand compile queues its LocationDescriptor for every other core that hasn't compiled it. The queue is process-wide: a key -> core-mask map plus per-core queues of up to 400k keys, kept in Nx2Hitch. PhysicalCore::Idle takes 16 keys at a time and calls the new Jit::PrecompileBlock (x64 only; skipped while executing, if already compiled, or with under 256 MiB of code space left). Code is read straight from memory while warming. Interrupts are checked between blocks. 7147facb7 caps it at 20 ms per 100 ms per core. Built in as on in Fritchii v5.7 (yuzu/main.cpp BuiltinSwitches).",
+      "in_our_tree": "no",
+      "relevance": "medium",
+      "risk": "medium",
+      "recommendation": "watch-upstream",
+      "why": "It targets post-load compile bursts (1% lows), which matter for the owner. Upstream open PR #1225 (333688177, 144000a5c by ne1i) does the same cross-core queue ('blocks any core compiles are queued for the others'). It also saves a per-title block list (<cache>/jit/<program id>-<build id>.blocks, 646k blocks for Ocarina) and warms in 2 ms slices, keeping 128 MiB of code cache free. By policy upstream's version wins. Our merge plan already lists #1225 as its own step after the merge (17 files, +1085 lines, overlapping core.cpp, physical_core.cpp, the x64 a64_interface.cpp and arm_dynarmic_64.cpp, which we changed). #1225 has no per-window budget beyond its 2 ms slices. Fritchii found that unbudgeted warming starves the GPU thread and shader workers at boot (hitch time 2.6 -> 3.7 s), so add a budget like 7147facb7's if we take #1225. On a 255H laptop, idle-core compiles also take package power from the GPU threads. Fallback if #1225 stalls: port Fritchii's budgeted version opt-in. That needs a standalone key/core-mask map, because tuned4 has no common/nx2_hitch.* (NoteCompiled/CompileCause).",
+      "benefit_evidence": "Fritchii night tests: repeat compiles after reloads 294 -> 33 ms (unbudgeted) and 294 -> 8 ms (v5.7 notes); reloads 1.64 -> 1.34 s; first load 761 -> 811 ms; first-100 s hitch time 2.6 -> 3.7 s before the budget (not re-measured after it). Their owner reported 'Kakariko felt much better'. Before the change: 100-210 ms per frame summed over cores in the 4 frames after the first load. No fps or 1% low numbers.",
+      "conflicts": "physical_core.cpp Idle (tuned4:279, 115 lines changed vs upstream in tuned4). The x64 a64_interface.cpp (18 lines changed in tuned4, the #717 dynarmic port). arm_dynarmic_64.cpp MemoryReadCode's cached_code_page. The arm/loongarch/riscv a64_interface stubs. Nx2Hitch is missing. Doesn't touch the shader cache or preparation stamp; #1225's .blocks file is separate from it.",
+      "upstream_equivalent": "open PR #1225 (JIT warm-up from a per-title block list, includes the cross-core queue)"
+     },
+     {
+      "commits": [
+       "93423cd43"
+      ],
+      "title": "EDEN_NX2_JIT_FAST_COMPILE: skip dynarmic's IR verification pass",
+      "what": "Sets OptimizationFlag::DisableVerification in ArmDynarmic64::MakeJit outside Debugging and Paranoid accuracy (cherry-pick of ne1i 8ac35d383, the same change as upstream #1266 0e806dbf1).",
+      "in_our_tree": "yes",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "It already behaves this way. In tuned4, DisableVerification = 0x80 (src/dynarmic/src/dynarmic/interface/optimization_flags.h:41) is inside all_safe_optimizations = 0xFFFF (line 62). A64::UserConfig::optimizations defaults to all_safe_optimizations (A64/config.h:165). Auto, Accurate, Unsafe and Debugging never clear that bit; Debugging clears only specific flags (arm_dynarmic_64.cpp:451-485). Only Paranoid sets no_optimizations (arm_dynarmic_64.cpp:522), and both patches keep verification there. So VerificationPass (opt_passes.cpp:1477) already doesn't run at the owner's accuracy, and both 93423cd43 and upstream #1266 are no-ops. Our merge plan rated #1266 a 'cheap CPU win'; that was wrong.",
+      "benefit_evidence": "none measured",
+      "conflicts": "none",
+      "upstream_equivalent": "open PR #1266 (0e806dbf1); equally a no-op"
+     },
+     {
+      "commits": [
+       "cef673c58"
+      ],
+      "title": "Memory probe stops walking the process heaps every 10 s (EDEN_NX2_MEM_HEAPS=1 to re-enable)",
+      "what": "Fritchii's 'Memory owners' probe called Common::SampleHeapUsage (HeapWalk) every 10 s. That locked the ~2.5 GB CRT heap for ~250 ms and froze every allocating thread. It now runs only with EDEN_NX2_MEM_HEAPS=1.",
+      "in_our_tree": "no",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "tuned4 has no memory probe: no ProbeMemory, SampleHeapUsage, HeapWalk or EDEN_NX2_MEM_OWNERS anywhere in src. There is nothing to fix. If a Fritchii memory probe is ever ported, take it with this fix.",
+      "benefit_evidence": "Fritchii: removed a 266-279 ms hitch in every 10 s window (Castle Town, 2026-11-09).",
+      "conflicts": "none (the code doesn't exist in tuned4)",
+      "upstream_equivalent": "none"
+     },
+     {
+      "commits": [
+       "c99790b87"
+      ],
+      "title": "EDEN_NX2_IR_POOL_CAP_MIB: shader IR pools return oversized chunks after each job",
+      "what": "Shader::ObjectPool::ReleaseContents frees the pool instead of squashing it into one high-water chunk when that chunk would exceed N MiB. Off unless set.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "A RAM experiment, off by default and never measured. It costs re-allocation per shader job when on. The owner has 31.4 GiB of host RAM (r49 log line 7) and the game is CPU-bound, so trading CPU for heap isn't wanted.",
+      "benefit_evidence": "none measured (hypothesis: part of ~1.2 GB of process heap above the game's needs, fable52_answer_2 Q1)",
+      "conflicts": "object_pool.h is upstream text in tuned4; it would apply cleanly.",
+      "upstream_equivalent": "none"
+     },
+     {
+      "commits": [
+       "85a33019b",
+       "289ffeb16"
+      ],
+      "title": "EXP63: per-thread cache of GPU page translations in MemoryManager::GpuToCpuAddress (Eglantine b1e650849e, kraibse)",
+      "what": "A 2048-entry thread_local table (4 KiB pages, tagged with the manager id and map_serial) answers repeated GpuToCpuAddress lookups. 289ffeb16 fixes Fritchii's first port, which called getenv on every lookup and ran Castle Town at 3 fps. Off by default (EXP63=0) in Fritchii v5.8.2.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "watch-upstream",
+      "why": "tuned4's GpuToCpuAddress (memory_manager.cpp:318) is already just two page-table array reads plus a range check. The cache swaps that for a hash slot in a 64 KiB thread-local table that competes for L1/L2 with the back thread's hot data. The only measurement is Eglantine's: ~3% of the back thread. Fritchii never A/B'd it, and it comes from a third fork, so it doesn't meet the 'large benefit, heavily vetted' bar. tuned4 already has map_serial (memory_manager.cpp:172, 236), so the port is mechanically easy if upstream Lichii or a measurement on the owner's PC justifies it.",
+      "benefit_evidence": "Eglantine (kraibse): back thread 13.64 -> 13.25 ms per frame (OoT Kokiri). Fritchii: none (off by default).",
+      "conflicts": "memory_manager.cpp has 50 lines of tuned4 changes, but GpuToCpuAddress is clean. It must use a static env read (289ffeb16's lesson). No stamp involvement.",
+      "upstream_equivalent": "none in upstream Lichii PR refs (Eglantine b1e650849e only)"
+     },
+     {
+      "commits": [
+       "d20c32704"
+      ],
+      "title": "EXP48: hot pages, guest pages the CPU rewrites every frame stay modified and unprotected (Eglantine f27522bfb9, kraibse)",
+      "what": "WordManager gets four more word arrays (Hot, Flip, NoHot, HotClean). A page the CPU modifies twice while tracked within 128 frames becomes hot. It isn't write-protected again and is uploaded at most once a frame. Pages the GPU ever wrote are never hot, and all hot state resets every 128 frames. Off by default (EXP48=0) in Fritchii v5.8.2.",
+      "in_our_tree": "no",
+      "relevance": "medium",
+      "risk": "high",
+      "recommendation": "watch-upstream",
+      "why": "Protect-call churn is real for Ocarina. But a hot page the CPU writes again after its upload reaches the GPU a frame late (Fritchii's own flicker caveat). It also adds per-frame O(num_words) clears for every touched WordManager (RefreshHotEpoch) and 4x more word memory. Fritchii never measured or enabled it. Upstream's open #717 has its own 'hot pages compared instead of protected' design (DemoteHotPages and SyncSkippedHotPages in buffer_cache.h). We carry #717 only as selected CPU pieces, without the hot pages. By policy, prefer upstream's design if it merges, rather than a third-fork port.",
+      "benefit_evidence": "Eglantine (kraibse): frame 25.9 -> 24.7 ms, back thread 14.5 -> 13.8 ms per frame, protect calls -71% (~25k protect calls and ~130k pages/s in OoT before). Fritchii: none (off).",
+      "conflicts": "word_manager.h is upstream text in tuned4 (no diff vs 17baed716), but buffer_cache.h is heavily changed by our EXP9 bank-page ports and #717 pieces, so ForEachModifiedRange and DirtyWords interplay needs care. No stamp involvement.",
+      "upstream_equivalent": "open PR #717 (eb3553bcb): hot pages compared instead of protected"
+     },
+     {
+      "commits": [
+       "1c8474ee9"
+      ],
+      "title": "EXP53: the back evaluates NVN's conditional render macro (Eglantine d3612f82b1 part 1)",
+      "what": "The front dry-runs each native macro against 8 test vectors to recognise NVN's conditional render macro. For it, the front skips the 6-word DMA read (feeding zeros), writes render_enable.address and mode IfNotEqual, and lets the back evaluate the condition after flushing the query cache region. Off by default (EXP53=0).",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "high",
+      "recommendation": "skip",
+      "why": "Fritchii's motive is its front-thread 'macro dma read' wait (116-246 ms/s in fights and Lake Hylia). The owner's r49 profile shows no such wait. Front waits by site are only acquire 184-231 ms/s, list writers 81-277 ms/s and map ~0-2 ms/s (log lines at 174.3 s and 184.4 s), and MME DMA reads happen on the back (413-777 KiB/s). Our earlier DMA-read work (front shadow of answered reports, the v3 DMA snapshots) already removes that drain. Getting it wrong means objects drawn or skipped wrongly, it's unmeasured, and it comes from a third fork.",
+      "benefit_evidence": "none measured (Fritchii off by default; Eglantine gave no numbers in the cited commit)",
+      "conflicts": "maxwell_3d.cpp FrontRunMacro and FrontState carry 1,145 lines of tuned4 changes vs upstream, so this would be a hand port. ProcessQueryCondition also differs (DKB_CONDITION tracing at tuned4 maxwell_3d.cpp:1031).",
+      "upstream_equivalent": "none in upstream Lichii PR refs (Eglantine d3612f82b1 only)"
+     }
+    ],
+    "uncovered": []
+   },
+   "verdicts": {
+    "area": "cpu",
+    "verdicts": [
+     {
+      "title": "Zero-page trim: early-exit page check, wait out bulk mapping, 5-minute backoff, ZERO_TRIM=0 switch, phase logging",
+      "verdict": "confirm",
+      "final_recommendation": "port",
+      "reason": "I could not refute this one. The owner's r49 log backs it. tuned4 still has upstream #961 unchanged: tuned4:src/core/device_memory.cpp:38-89 doubles the interval only up to 60 s and logs a pass only when it trims at least 64 MiB, and tuned4:src/common/host_memory.cpp:1285 IsZeroPage ORs all 512 words. No upstream ref changes these files (I diffed all fetched upstream-pr/* refs against 17baed716), and Fritchii has not reverted the change since. The passes that are logged end at 62.18, 68.55 and 107.31 s and take 1.33-1.37 s at 7.5-8.5 GB resident. From the code, the passes that are not logged then run at about 73.5, 84.9, 112.3, 123.7 and 145.0 s. Each lines up with a slow 1 s window: 74.4-75.4 (24.7 ms average, 3 frames over 30 ms), 84.5-85.6 (24.9 ms, 4), 106.8-107.8 (29.1 ms, 16), 112.9-113.9 (29.1 ms, 16), 124.0-125.0 (25.1 ms, 5) and 145.2-146.2 (29.8 ms, 18). The clearest is 145-146 s: steady 17-18 ms play, then one window with 18 frames over 30 ms, then steady again. A likely mechanism on a CPU-bound 255H is that streaming about 7.5 GB through the cores flushes the shared L3 the guest cores rely on, on top of the working set query and VirtualUnlock. Keeping the trim matters: the host has 31.4 GiB, and the first pass trims 7.7 GB at boot, so the switch that turns the thread off is for an A/B only. The bulk-mapping wait is the weak part: it is unmeasured and needs a new counter that tuned4 doesn't have (Fritchii reads Nx2Hitch::g_counters), so it stays optional. Nothing here touches shaders, the preparation stamp, the FSR/FG port or the defaults.",
+      "port_notes": "Take 81ab48f7d unchanged onto tuned4:src/common/host_memory.cpp:1285 (IsZeroPage stops at the first non-zero 64-byte line).\n\nIn tuned4:src/core/device_memory.cpp TrimZeroPages:\n- raise the backoff cap from 60 s to 300 s; keep the 5 s reset after a pass that trims at least 64 MiB, and keep the EDEN_NX2_SEC_RESERVE commit block (lines 54-67) where it is;\n- take cd1582e0d's log line for every pass over 100 ms, so all passes show up in the log, not only the large trims;\n- take 0f0e8470c's ZeroTrimPhases (host_memory.h/.cpp: query_us, scan_us, unlock_us, unlock_runs, longest), so the owner's log shows which phase is left after the early exit.\n\nTake 68b9815db's EDEN_NX2_ZERO_TRIM=0 for one A/B launcher; it is an experiment switch, so it does not go upstream.\n\nThe 6a29460f5 bulk-mapping wait is optional. If you take it, add a plain std::atomic<u64> byte counter to HostMemory Map/Unmap/Protect (not the Nx2Hitch counters), and drop it unless the phase log shows guest map/protect calls stalling while a pass runs.\n\nTo verify on r50, in the same Ocarina route as r49, check that:\n- the 'Zero-page pass ... page reads N ms' lines show page reads falling from about 1 s to tens of ms;\n- the next pass is 300 s after a quiet one;\n- the 1 s windows that contain a pass no longer show 5-18 frames over 30 ms (compare with the 74, 85, 107, 113, 125 and 146 s windows above);\n- the 10 s '1% low' lines improve, against an EDEN_NX2_ZERO_TRIM=0 run as the ceiling.\n\nThe early exit is also worth offering upstream, since #961 is upstream code."
+     },
+     {
+      "title": "EXP61: FlushCommands skips the submit when nothing was recorded since the last Flush/Finish",
+      "verdict": "reject",
+      "final_recommendation": "skip",
+      "reason": "Fritchii's gain comes from a submit pattern that tuned4 mostly doesn't have. Fritchii's DeferFlush defaults to 0 µs, the 'EvilOOT flash fix' (c338269b9:src/video_core/renderer_vulkan/vk_scheduler.cpp:227-236). So InnerFence::Queue's Flush followed at once by FlushCommands' Flush made about 4,600 empty vkQueueSubmit calls a second, on an RTX 4080. tuned4 keeps the 500 µs batch (tuned4:vk_scheduler.cpp:249-268, EDEN_NX2_FENCE_FLUSH_US default 500, and no launcher overrides it). When FlushCommands (tuned4:vk_rasterizer.cpp:3048-3058) runs right after Queue's Flush, DeferFlush sees last_flush under 500 µs old and only sets flush_pending. There is no immediate empty submit. The deferred flush usually picks up later work, so it isn't empty either. This matches r49: 2,200-2,700 submits a second in total, about the most the 500 µs batching allows from the back thread, against Fritchii's ~9,000+. So there is no evidence of a large empty-submit rate here. The Castle Town +2.6 fps (43.0 to 45.6) can't be transferred to this setup. The change also carries a correctness risk: any command recorded outside Scheduler::Record/RecordWithUploadBuffer, or any deferred-flush interplay, would let FlushCommands skip a submit that is needed. That would mean late fences or waits, and it would need vetting for a benefit nobody has shown here. No upstream PR covers it.",
+      "port_notes": "Not ported. If anyone wants to look again, first add a diagnostic counter in Scheduler::Flush for flushes where nothing was recorded since the last submit, and run it in Ocarina on tuned4 with the 500 µs batch. Reconsider only if that shows hundreds of empty submits a second."
+     },
+     {
+      "title": "Cheaper reports and fences from upstream #1161: inline report operation, recycled fence lists, vector FIFO of free query ids, master semaphore ticks on their own cache lines",
+      "verdict": "downgrade",
+      "final_recommendation": "watch-upstream",
+      "reason": "The analyst's code findings hold:\n- tuned4:src/video_core/fence_manager.h:121-124 does reserve(64) at every fence it makes;\n- query_stream.h:149 uses std::deque<size_t> old_queries;\n- the report std::function in query_cache.h allocates on the heap.\n\nThe benefit is small, though, and not measured. In r49 the back thread spends 37.8 ms/s in 'fence' (14,477/s), of which 23.3 ms/s is 'fence skipped' (9,440/s), where no list is made. About 4,500-5,300 fences a second are made (fence_manager.h:439 lines at 85-105 s). One 4 KiB reserve each, plus a deque block every two query-id pushes and one allocation per report, adds up to a few ms/s of back-thread time against 887 ms/s busy. That is about 1% at best, not a large benefit. Fritchii never measured these on their own: its v5.6 '+5 fps' credits them together with EXP61, which explains about half of it on its own, on an RTX 4080 with a different flush setup. The code is upstream Lichii's: 792e12a47 in open PR #1161 (upstream-pr/1161), not merged in 17baed716. It is bundled with fast-draw changes that our merge plan rated skip. Policy says to prefer upstream's version, or wait for it, when the same thing is in an open upstream PR. A hand cherry-pick of only the report/fence bullets also needs ReportOp adapted to tuned4's CounterReport payload, delayed_release, immediate path and FakeOcclusion, which is a moderate merge risk for a ~1% gain.",
+      "port_notes": "Not ported now. Watch upstream #1161, or a split-out 'reports and fences' PR. When it merges into nx2, take it through the normal upstream merge and reconcile ReportOp with tuned4's query_cache.h additions (payload, delayed_release, the immediate path, FakeOcclusion), staying within the 48-byte static_assert. If the owner wants it sooner, the two isolated pieces are the vector FIFO for old_queries (query_stream.h:127-149) and the alignas(64) on the master semaphore ticks (vk_master_semaphore.h:76-78). They have the lowest risk, but they are unmeasured, so verify them with the EDEN_NX2_GPU_PROFILE 'fence' ms/s and back-thread busy before keeping them."
+     }
+    ]
+   }
+  },
+  {
+   "area": "gpu",
+   "analysis": {
+    "area": "gpu",
+    "summary": "I checked all 36 assigned commits against tuned4 (36948bc36) and the owner's r49 log (/root/.claude/uploads/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/2bcb3130-eden_log.txt, tuned-r49-pgo-lto). Only one is worth porting soon: EXP58, which deletes superseded guarded render targets (8921f9ba7 plus f549632af). One more is worth an A/B: EXP56, which skips the upload of a cleared depth target (part of f93124a6b, plus 6129793a6). Neither touches shaders, so the \"tuned 1\" preparation stamp stays valid.\n\nEXP58 fits a problem the r49 log shows. From 64 s on, the texture cache sits at or above its expected line: device memory 8728-10488 MiB against expected 8831 MiB. The cold sweep also kept up to 4,508 GPU-written guarded images in one window (177 s). Fritchii measured a 150 s Castle Town A/B with EXP58: device memory 7.8-10.5 GB went to 5.2-5.7 GB, collector evictions went from 83-1915 per window to 0, worst frames went from 140-180 ms to 30-48 ms, and the median rose from 42.2 to 46.9 fps. Our SweepColdImages (texture_cache.h:861-975) is the same code it patches.\n\nEXP49 duplicates what we already have. It is a partial port of #1028, behind a switch. Our tree has the merged upstream #1028 (0b83798bf), always on, and fuller: it keeps the read check, the early downloads and the macro DMA changes that EXP49 leaves out.\n\nMost of the rest is already in our tree from upstream: #353, #1143, #1199/#1236, and our own port of #969. Three are still open upstream PRs: #1129 (texture cache ceiling), #1051 (changes the generated shader code, so it would need a new preparation stamp) and #814 (mesh shaders through the compute fallback on AMD). The pipeline-lookup and eviction experiments (EXP50-55) are off by default in Fritchii and not measured. The eviction changes do nothing with our EDEN_NX2_PRELOAD_ALL_PIPELINES=1, which never evicts. EXP42=2's pooling of dedicated-allocation render targets is already covered by our image recycler, which never filled its 512 MiB cap in r49. The compute write-extent checks never found a shader at fault; Fritchii's own v5.7 notes credit the glowing geometry fix to #1199/#1236, which we have.",
+    "items": [
+     {
+      "commits": [
+       "8921f9ba7",
+       "f549632af",
+       "39b54e91e"
+      ],
+      "title": "EXP58: the cold sweep deletes guarded render targets that a newer target of another shape replaced",
+      "what": "SweepColdImages kept every GPU-written image of a guarded (sampled or loaded) shape for the whole session. With EXP58=1, such an image is deleted without a download once it has gone 60 frames untouched and a newer registered image of another shape, touched since, covers its memory (ColdSuperseded). EXP58=2 (39b54e91e) also deletes images the CPU read once and CPU-read shapes. Fritchii turns on only =1 by default.",
+      "in_our_tree": "no",
+      "relevance": "high",
+      "risk": "medium",
+      "recommendation": "port-opt-in",
+      "why": "Our r49 log shows the problem this targets. From 64 s on, device memory is 8728-10488 MiB against expected 8831 MiB, so the collector runs at its line. Up to 4508 images were 'kept as GPU-written and guarded' in one window (177 s; 1526 at 131 s). Back-thread texture cache time reached 26.4 ms/s and GPU waits 7-14 ms/s. Worst frames outside loads were 43-55 ms. The change is small and applies directly to our ported cold sweep. Plan: put mode 1 behind an env switch in one A/B build, run Castle Town and a fight, compare the Cold sweep lines and 1% lows, then make it unconditional if it holds (per AGENTS.md). Leave =2 out: Fritchii measured it only by memory, it is off by default there, and it deletes images the CPU already read.",
+      "benefit_evidence": "Fritchii f549632af (150 s Castle Town A/B): device memory 7.8-10.5 -> 5.2-5.7 GB, collector evictions per window 83-1915 -> 0, worst frames 140-180 -> 30-48 ms, moving median 42.2 -> 46.9 fps. Skeleton fight: 5.1-5.5 GB instead of 10.9 GB, 0 evictions. Two owner playtests without visual faults.",
+      "upstream_equivalent": "none (the cold sweep is Fritchii's, ported in round 20)",
+      "conflicts": "tuned4 texture_cache.h:921-940 matches Fritchii's code before EXP58. RelocationShapeKey, relocation_shapes guards, lru_cache, MaxWatchFrames and ForEachImageInRegion all exist. Add a cold_superseded counter to texture_cache_base.h (~line 740). Our experiments are read once with getenv (e.g. texture_cache.h:87 for EXP43), not Fritchii's live Nx2Debug::Experiment, so the toggle applies per launch. No shader or pipeline change, so the PreparationVersion stays. No conflict with the FSR/FG port."
+     },
+     {
+      "commits": [
+       "f93124a6b",
+       "6129793a6"
+      ],
+      "title": "EXP56: a cleared depth target larger than its colour targets skips the guest upload",
+      "what": "In JoinImages' overwritten_by_clear rule, the clear's own depth target follows IsFullClear and no longer fails the 'a smaller colour target' test. Ocarina binds a 1920x1024 depth buffer under 1280x720 colour, so before this its 7.5 MiB was uploaded from guest memory each time the target was created. The same commit's EXP57 (cap collector GPU waits) is off in Fritchii; our collector already downloads with one GPU wait (#376 port), so skip that part.",
+      "in_our_tree": "no",
+      "relevance": "medium",
+      "risk": "low",
+      "recommendation": "port-opt-in",
+      "why": "About 10 lines, and it lowers back-thread work, which limits this setup. r49 shows the same pattern: 4 slow clears with exactly 7680 KiB uploaded, one with 15360 KiB. But r49's back-thread clear zone is only 6-9 ms/s, against the NVIDIA player's 54.7 ms/s, so expect a small gain outside Castle Town. Put it in the same A/B build as EXP58. overwritten_by_clear also decides EXP43 relocation (texture_cache.h:3685) and the clear skip (3987), so watch depth-dependent effects in that A/B.",
+      "benefit_evidence": "Fritchii 6129793a6: Castle Town live toggle 41.3 -> 43.8 fps, clear zone 54.7 -> 36.3 ms/s, screenshots identical with it off and on. Fritchii v5.7 notes: about +2.5 fps in Castle Town.",
+      "upstream_equivalent": "none",
+      "conflicts": "tuned4 texture_cache.h:3631-3676 differs a little (a ClearCovers helper, rt_control.Map in the colour case), but the colour-target size loop at 3647-3653 takes the same depth_follows_full_clear bypass. Do not port the clear_refusal strings (diagnostics for Fritchii's EXP7). No shader or stamp change."
+     },
+     {
+      "commits": [
+       "f00e2692f"
+      ],
+      "title": "EXP49 async read-back (Fritchii's port of #1028's core)",
+      "what": "The GPU thread records and submits read-back copies without waiting; the reading guest thread waits for that tick and writes the bytes to guest memory. In Fritchii it sits behind EDEN_NX2_EXP49 and leaves out #1028's early downloads, NoteReportPending, READ_CHECK, the macro DMA read changes and the tests.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "high",
+      "recommendation": "skip",
+      "why": "It duplicates ours. tuned4 has upstream #1028 merged (0b83798bf), unconditional and more complete: gpu.cpp:339-380, buffer_cache.h:889-897 FinishReadDownloads, WriteReadDownloads at buffer_cache.h:1187, the EDEN_NX2_READ_CHECK verifier and tests in src/tests/video_core/buffer_cache_ports.cpp. Porting EXP49 would replace a fuller implementation with a partial one.",
+      "benefit_evidence": "Fritchii v5.7 notes: Stalchild fight 51.9 -> 56.9 fps on an RTX 4080 (that gain is already in our tree through #1028).",
+      "upstream_equivalent": "zortos293/Lichii#1028, merged (0b83798bf, in tuned4)",
+      "conflicts": "It would collide with our #1028 code in buffer_cache.h, gpu.cpp and nx2_async_readback.h."
+     },
+     {
+      "commits": [
+       "669751e2a"
+      ],
+      "title": "#1129: texture cache critical threshold = budget - 2.5 GiB on cards with 10+ GiB",
+      "what": "On cards with 10 GiB or more, the collector's ceiling becomes max(5/8 of the budget, budget - 2560 MiB) instead of 5/8 of the budget.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "low",
+      "recommendation": "watch-upstream",
+      "why": "It is an open upstream PR: refs/pull/1129/head 49a1cd23f has a merge ref, and nx2 is still 17baed716. For the owner it would raise critical from 9656 MiB (r49 LogThresholds; 5/8 at texture_cache.h:466) to about 12.9 GiB. Its gain was measured on a 12 GB RX 6700 XT, whose 7.3 GiB ceiling sat under Kokiri's live set; our 9.6 GiB is already above that. r49's memory pile is dead render targets, which EXP58 removes; a higher ceiling would only let them pile higher. Fritchii itself went the other way afterwards: 5b970411a builds in a 7680 MiB ceiling, citing a 16 GB card going from 10 to ~6 GB VRAM at 58.8 fps over 30 min. Take it through a merge if upstream merges it.",
+      "benefit_evidence": "Ryzen 7 3800X + RX 6700 XT (RADV), Kokiri Forest, 30 s: 41.98 -> 42.28 fps, 1% low 21.83 -> 30.75, 0.1% low 18.12 -> 29.37, stalls over 50 ms 4 -> 0.",
+      "upstream_equivalent": "zortos293/Lichii#1129 (open)",
+      "conflicts": "tuned4 texture_cache.h:455-490 ApplyThresholdOverrides has its own budget_critical/budget_expected clamps for the TC env overrides. Small merge."
+     },
+     {
+      "commits": [
+       "3c09b1276",
+       "1b65dfe83"
+      ],
+      "title": "EXP42=2: pool dedicated-allocation render targets, pool cap 1.5 GiB",
+      "what": "Fritchii's VkImage pool also takes dedicated allocations (a 1280x720 target was remade up to 282 times), and its cap rises from 512 MiB to 1536 MiB in that mode.",
+      "in_our_tree": "partly",
+      "relevance": "low",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Our vk::ImageRecycler already recycles dedicated images: KeyOf mixes `dedicated` (vulkan_wrapper.cpp:665), Put has no dedicated exclusion, and vulkan_memory_allocator.cpp:321 passes the flag. Only the cap differs (RecyclerCap 512 MiB, vulkan_wrapper.cpp:576). In r49 the recycler held 5-361 MiB in every 600-frame window and never reached the cap. Its drops come from the 10 s keep time (RecycleKeepTime), so a 1.5 GiB cap would change nothing.",
+      "benefit_evidence": "None measured in fps. Only pool counters: Stalchild fight, 2,295 asks and 309 given back per 600 frames; Castle Town, 1,150-1,400 evictions per 600 frames at 512 MiB.",
+      "upstream_equivalent": "none",
+      "conflicts": "Fritchii's pool (Image::ReleaseToPool, TextureCacheRuntime::PoolImage) is a different mechanism from our recycler. It doesn't apply."
+     },
+     {
+      "commits": [
+       "f37d573b9",
+       "626997885",
+       "ec3df1fb7",
+       "208cb2579"
+      ],
+      "title": "Pipeline clean-lookup experiments EXP50/52/54/55 and the 'other state' miss split",
+      "what": "Faster clean lookups when only some key inputs change: blend compared by value (EXP50), only attribute types re-keyed when the programs change (EXP52), topology class (EXP54), vertex-input-only patch (EXP55). Also per-part miss counters on the EDEN_NX2_PIPELINE_CLEAN line.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "All of them are off by default in Fritchii (its head's LoadExperiments turns on 8, 9, 10, 14, 18, 21, 29, 34, 35, 39, 42, 43, 49, 56, 58 and 61), and 626997885 says 'not measured yet'. EXP54 'never fired' in Castle Town (208cb2579). They build on Fritchii's EDEN_NX2_PIPELINE_CLEAN/EXP19 path, which tuned4 doesn't have (no match in src). In r49 the back thread's pipeline lookup zone is 15.6-23.7 ms/s, under 2.5% of the thread, which caps the possible gain. A blend-key mistake would silently pick the wrong pipeline.",
+      "benefit_evidence": "none measured",
+      "upstream_equivalent": "none (EXP50 builds on #717, which is in our tree)",
+      "conflicts": "vk_pipeline_cache.cpp and fixed_pipeline_state, plus the PIPELINE_CLEAN infrastructure we lack. Wrong keys would also touch the prepared-pipeline lookup."
+     },
+     {
+      "commits": [
+       "d0fa67cd9",
+       "f8fed26ab"
+      ],
+      "title": "Pipeline eviction: graphics threshold by RAM size, compute eviction (EXP51)",
+      "what": "The graphics eviction threshold scales with RAM, but only on PCs under 24 GB after f8fed26ab. EXP51 (off) evicts compute pipelines unused for 9000 frames.",
+      "in_our_tree": "no",
+      "relevance": "none",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "Our owner runs EDEN_NX2_PRELOAD_ALL_PIPELINES=1 and LICHII_KEEP_PIPELINES. EvictUnusedPipelines returns early under PRELOAD_ALL (vk_pipeline_cache.cpp:3055-3068), so neither threshold applies. The owner has well over 24 GB (r49: 21264 MiB of commit left), so f8fed26ab would keep 8000 anyway. Fritchii's own note warns that evicting cost 14 s of stalls in 25 minutes.",
+      "benefit_evidence": "none measured (f8fed26ab notes the downside: 3,400 evictions in 25 min, 14 s of rebuild stalls)",
+      "upstream_equivalent": "none",
+      "conflicts": "vk_pipeline_cache.cpp eviction and keep-pipelines logic."
+     },
+     {
+      "commits": [
+       "c0fa5c090"
+      ],
+      "title": "Keep an evicted graphics pipeline's storage buffer pointers when it is translated again (#1143)",
+      "what": "Remembers MappedStoragePointerKeys by key hash when a pipeline is evicted, and answers those slots as pointers when the key is translated again.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Upstream's version is in tuned4 (d2eaae4f3 #1143, 610bd0873 #1154). EvictUnusedPipelines calls evicted_pointer_slots.Remember (vk_pipeline_cache.cpp:3094). Fritchii lacks d2eaae4f3, which is why it ported this. With PRELOAD_ALL nothing is evicted anyway.",
+      "benefit_evidence": "none measured (v5.6 notes: long sessions no longer slowly break some meshes)",
+      "upstream_equivalent": "zortos293/Lichii#1143, merged (d2eaae4f3)",
+      "conflicts": "none; take upstream's"
+     },
+     {
+      "commits": [
+       "f253d02aa"
+      ],
+      "title": "Keep dispatching while a native compute pipeline is rebuilt (#969)",
+      "what": "A StaleNullPointerSlot rebuild waits in entry.pending while the current pipeline keeps dispatching. This avoids freezes of up to 2.8 s in Ocarina.",
+      "in_our_tree": "yes",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Already in tuned4 as 523999e17 (cherry-picked from the #969 head): vk_pipeline_cache.cpp:1240-1267, with entry.pending and retired_compute_pipelines.",
+      "benefit_evidence": "Fritchii v5.6 notes: no more freezes of up to 3 s (2.8 s measured in the PR).",
+      "upstream_equivalent": "zortos293/Lichii#969 (no merge ref; ours is a port of its head)",
+      "conflicts": "none"
+     },
+     {
+      "commits": [
+       "571023fcc"
+      ],
+      "title": "Don't write render target components the fragment shader doesn't output (#353)",
+      "what": "Masks colour write components that the fragment shader doesn't output. This fixes the 'disco' outline at the horizon on AMD.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Upstream #353 is merged in tuned4 (79c151694, also in upstream nx2 17baed716).",
+      "benefit_evidence": "visual fix on AMD (v5.6 notes); no fps numbers",
+      "upstream_equivalent": "zortos293/Lichii#353, merged (79c151694)",
+      "conflicts": "none"
+     },
+     {
+      "commits": [
+       "eba45b151"
+      ],
+      "title": "Keep signed F32 to S32 conversion within range (#1051)",
+      "what": "Shader translator change: F2I F32->S32 converts only in-range values, restores INT32_MAX exactly and replaces NaN before the clamp. Fritchii raised its kept-file stamp for it.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "watch-upstream",
+      "why": "An edge-case correctness fix with no Ocarina symptom tied to it. It changes the SPIR-V we emit, so the driver's cache and our prepared pipelines would miss: per nx2_precompile.h:66-70, PreparationVersion 'tuned 1' would have to be raised, and that needs the owner's agreement. It is an open upstream PR (refs/pull/1051/head 16b2c8f38). Take it when upstream merges it, together with any other translator change, under one re-preparation.",
+      "benefit_evidence": "none measured (tests only)",
+      "upstream_equivalent": "zortos293/Lichii#1051 (open)",
+      "conflicts": "floating_point_conversion_integer.cpp; the preparation stamp (PreparationVersion 'tuned 1') and the driver pipeline cache."
+     },
+     {
+      "commits": [
+       "8b85ce1bc",
+       "acd2cce6e",
+       "a567ca378",
+       "a506cd318"
+      ],
+      "title": "Mesh Shaders setting; compute mesh fallback by default on RADV and AMD's own driver",
+      "what": "A new Mesh Shaders setting (Automatic/Native/Compute). Automatic turns off VK_EXT_mesh_shader on RADV, AMD_PROPRIETARY and AMD_OPEN_SOURCE, so task/mesh draws take the compute fallback (#569). This is meant to avoid GPU hangs (#316, #871: RADV resets, a Radeon 780M timeout on Windows).",
+      "in_our_tree": "no",
+      "relevance": "medium",
+      "risk": "medium",
+      "recommendation": "watch-upstream",
+      "why": "This would change the owner's RX 9070 XT on the AMD Windows driver from native mesh to the compute fallback. Nobody reported it hanging (HANDOFF has no TDR or device loss entries; r49 is the best the game has felt). The Windows evidence is one 780M report. The fallback can be slower in foliage scenes and skips some mesh programs. Its task/mesh pipelines differ from the prepared native ones, so it risks new builds or stutter in mesh-heavy areas. Upstream #814 is open and still being changed: head 0c793dabc keeps native mesh on fixed RADV and RDNA3+, and still falls back on AMD's own driver. Wait for its final form. If the owner ever gets a TDR, EDEN_NX2_FORCE_MESH_FALLBACK=1 is already in our tree (vulkan_device.cpp:1821) for an A/B.",
+      "benefit_evidence": "none measured in fps. Stability reports only: RADV resets on Navi 21/23/31/32/33/48; AMD Windows TDR on a Radeon 780M.",
+      "upstream_equivalent": "zortos293/Lichii#814 (open, head 0c793dabc)",
+      "conflicts": "vulkan_device.cpp RemoveUnsuitableExtensions (~1821), settings.h, shared_translation.cpp, the GraphicsExtra UI. It may change which prepared task/mesh records are used."
+     },
+     {
+      "commits": [
+       "f84b9056c",
+       "506a5ca59",
+       "709c7ff67",
+       "ad94953db"
+      ],
+      "title": "nvdrv: refresh reused Switch 2 device ranges, release ranges that sub 102 destroys",
+      "what": "When a device (SMMU) range is reused after nx2:gpu 102 destroys its memory, it is remapped to the current CPU pages, and the destroyed range is released. This fixes meshes reading game files as vertices (white or stretched geometry after area changes).",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "These are Fritchii's cherry-picks of the commits that upstream squashed into #1236 (9d90f25bf, in tuned4), on top of #1199 (bcb37c49f, in tuned4). Fritchii's v5.7 notes credit these, not the extent checks, for the stretched or glowing geometry.",
+      "benefit_evidence": "correctness (v5.7 notes); no fps numbers",
+      "upstream_equivalent": "zortos293/Lichii#1236 (9d90f25bf) and #1199 (bcb37c49f), merged",
+      "conflicts": "none"
+     },
+     {
+      "commits": [
+       "115e2dbbe",
+       "a2cf026b2",
+       "25984e0e0",
+       "99910c062",
+       "b4b6240de",
+       "2bf439836"
+      ],
+      "title": "Compute write-extent self-check, the 64 KiB written-SSBO cap removed, and the reverted CPU-write guard",
+      "what": "Each native compute program's binding is marked fully GPU-written until one dispatch's tail past the store-extent proof (up to 2 MiB) has been compared with guest memory from before it. A program that wrote past the proof is marked in full for the session. 99910c062 drops Fritchii's built-in EDEN_NX2_WRITTEN_SSBO_MARK_KIB=64. b4b6240de was reverted by 2bf439836.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "99910c062 doesn't apply: tuned4 never had the WRITTEN_SSBO_MARK_KIB cap. Our marks come from upstream #816 (ee155a555) with the native_compute_write_mark setting, Auto or Full (buffer_cache.h:2024-2054). Fritchii's own check never found a culprit: '313, 45 and 155 checks held' (25984e0e0). Its first version cost 44.5 vs 46.7 fps in Castle Town (a2cf026b2). v5.7 then credits the glowing geometry to the stale device ranges that #1199/#1236 fix, and both are in tuned4. Total diff is about 300 lines in buffer_cache.h for an unconfirmed gain. If glowing triangles ever show up, set native_compute_write_mark=Full as the diagnostic.",
+      "benefit_evidence": "Fritchii reports glowing triangles 'much rarer' (v5.6). Cost: Castle Town 44.5 vs 46.7 fps before a2cf026b2. No culprit named after 313+45+155 checks. Cap removal: 43.4/45.0 vs 44.6/43.0 fps (free); EXP1=1 cost 12 fps.",
+      "upstream_equivalent": "none (our write marks are upstream #816)",
+      "conflicts": "buffer_cache.h BindComputeStorageBuffer / BindMultiRangeStorage (tuned4 2898-2930, 3227-3241), buffer_cache_base.h, vk_compute_pipeline.cpp. They overlap with our async read-back and preflush code."
+     },
+     {
+      "commits": [
+       "7df8caa2b",
+       "984d0ba92"
+      ],
+      "title": "EXP59 dirty-word walk for compute storage synchronizes; recorded storage read extents",
+      "what": "EXP59 &4 walks only the dirty tracker-word window for compute storage synchronizes, and &8 verifies it. 984d0ba92 records proven read extents per storage buffer (nothing uses them yet) and bumps the kept magic NX2KEPT3 -> NX2KEPT4.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "EXP59 is off in Fritchii and unmeasured beyond 'skipped N of M'. 984d0ba92 does nothing at runtime and changes the kept-info serialization, which would force a re-preparation, so it conflicts with the owner's stamp.",
+      "benefit_evidence": "none measured",
+      "upstream_equivalent": "none",
+      "conflicts": "buffer_cache.h ForEachDirtyUploadRange (tuned4 has the CleanWords path), the shader info serialization and kept files (preparation stamp)."
+     },
+     {
+      "commits": [
+       "cd1582e0d"
+      ],
+      "title": "EXP7 clear-rule refusal logging, a NUL char literal fix, logging slow zero-page passes",
+      "what": "Diagnostics: split refusal reasons and scissor numbers in Fritchii's EXP7 new-image line, a '\\0' literal fix inside that Fritchii-only log code, and every zero-page pass over 100 ms logged (device_memory.cpp).",
+      "in_our_tree": "no",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Diagnostic only. The literal it fixes is in code we don't have.",
+      "benefit_evidence": "none measured",
+      "upstream_equivalent": "none",
+      "conflicts": "none of consequence"
+     }
+    ],
+    "uncovered": []
+   },
+   "verdicts": {
+    "area": "gpu",
+    "verdicts": [
+     {
+      "title": "EXP58: the cold sweep deletes guarded render targets that a newer target of another shape replaced",
+      "verdict": "reject",
+      "final_recommendation": "skip",
+      "reason": "(1) Upstream-first conflict. tuned4 already carries upstream PR #976 (e6a4a2ef1, cherry-pick of db0c346e0, open PR ref upstream-pr/976, not in 17baed716) at texture_cache.h:355-386. In RunGarbageCollector, it deletes any BadOverlap image that a newer GPU-modified overlap covers once the image has gone 4 frames unused, without a readback and with no relocation-guard check. It runs every frame above minimum_memory (texture_cache.h:756), which r49 always is. Fritchii has no such pass (`bad_overlap_age` does not appear on frizti/oot-gather-fix), so its A/B baseline (350k kept a window, 10.9 GB, 718 evictions in 10 s, 140-180 ms worst frames) was measured without the mechanism upstream already offers. EXP58 is a Fritchii-only answer to the same problem. The cold sweep only acts on BadOverlap images (texture_cache.h:906), so EXP58's candidates are mostly the ones #976 already frees. (2) r49 does not show the pile-up. From 79 s to 177 s the image count holds at 1700-2113. Device memory stays at 8728-9592 MiB, under the critical 9656 MiB, apart from the 10488 MiB spike during the scene load at 64 s. That level is just the cache filling to the expected line (8888 MiB, set from the device budget) on a 16 GB card, not a leak. The 'kept as GPU-written and guarded' figure (1526, 4508) counts images dropped from the cold watch per window, not images that survive. The collector or #976 can still free them, and the flat image count shows they do not accumulate. (3) No large benefit is left to win here. In r49's steady windows the worst frames are already 37-60 ms, which is Fritchii's after-EXP58 range (30-48 ms), not its 140-180 ms before. Back-thread texture cache time is 1.2-6.8 ms/s and GPU waits 0.5-14.5 ms/s, all in the 'other' zone. The 26.4 ms/s the analyst cites is the 64 s scene load: texture upload 67 ms/s, relocations starting. Fritchii's 5.2-5.7 GB figure comes from different hardware and collector thresholds. (4) Risk: it deletes GPU-written images of guarded shapes without downloading them, and the guard exists for correctness. 39b54e91e shows Fritchii immediately needed a riskier mode (=2) for the next pile. tuned4 can already test the question without a port: EDEN_NX2_TC_COLD_GUARDED=1 (texture_cache.h:867) sweeps every guarded image, a superset of EXP58=1. If that A/B shows no device-memory, eviction or 1%-low gain in Castle Town, EXP58 cannot do better.",
+      "port_notes": "Do not port. If a future log shows a real pile-up (the image count climbing, device memory above critical, collector GPU waits in the tens of ms/s), first A/B the existing EDEN_NX2_TC_COLD_GUARDED=1 live in Castle Town and a fight. Compare the 'Cold sweep' lines (texture_cache.h:971 in the r49 log), the back thread's 'texture cache' and 'GPU waits by zone', and the frame-time 1% lows. Then check upstream #976's state before writing anything new. The PreparationVersion stamp and the FSR/FG port are unaffected either way."
+     },
+     {
+      "title": "EXP56: a cleared depth target larger than its colour targets skips the guest upload",
+      "verdict": "reject",
+      "final_recommendation": "skip",
+      "reason": "(1) It contradicts upstream's merged #311 (18ca0259b/aa0acb3ed, in 17baed716). Fritchii's premise (f93124a6b) is that 'IsFullClear drops an existing depth target's contents the same way'. That is true only in Fritchii, which lacks #311: there is no ClearCovers or surface_clip test in its texture_cache.h. In tuned4, #311 made IsFullClear and the new-image rule both go through ClearCovers (texture_cache.h:5580-5593, 5691-5711), which needs the surface clip, i.e. the render area, to cover the whole image. #311 fixed exactly the bug this item would bring back: 'a target larger than the clip lost the upload of the texels the clear never wrote'. A 1920x1024 depth buffer cleared through a 1280x720 render area keeps texels the clear never touches. Skipping its upload is the case upstream ruled out. (2) In tuned4 the port is either a no-op or a regression. ClearCovers(width, height) at texture_cache.h:3644 runs before the colour-target loop (3647-3653). With a 1280x720 clip it already refuses, so bypassing only the colour loop changes nothing. Bypassing ClearCovers as well would undo #311 and also change EXP43 relocation (3685) and clear_skip (3987). (3) The benefit is negligible on this setup. In ~180 s, r49 has only 5 slow clears that uploaded 7680/15360 KiB, four of them during the 61-64 s scene load and one at 175 s, each costing about 1.8-5.4 ms of upload. The back-thread clear zone stays at 6-9 ms/s. Fritchii measured its +2.5 fps on an NVIDIA player's Castle Town log, where the depth target was created every frame. r49 does not show that pattern, even in the 177 s window with 722 relocation candidates.",
+      "port_notes": "Do not port (and do not take EXP57 or the clear_refusal strings). If the per-frame 7.5 MiB depth upload ever appears in an owner log (repeated 'Slow clear texture cache ... 7680 KiB uploaded' with zeta fmt 0xa under 1280x720 colour), check the surface_clip at that clear first. A correct fix has to stay within #311's ClearCovers contract, and should go upstream as an issue or PR, not as a Fritchii port."
+     }
+    ]
+   }
+  },
+  {
+   "area": "ocarina",
+   "analysis": {
+    "area": "ocarina",
+    "summary": "I reviewed all 27 assigned commits against tuned4 36948bc36 and the owner's r49 log (/root/.claude/uploads/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/2bcb3130-eden_log.txt). Two items are worth taking, and both are upstream Lichii open PRs that Fritchii either copied or reimplemented:\n\n1. **Water ripple fix: upstream open PR #1180 (e7ea60c2b + 1169d58c5). This is high relevance.**\n   - Our default FPS Unlock built-in (upstream #655, cc3bfb931) is applied in r49 (log lines 287-289). It runs with per-frame raw timing (TuneDynamicFps smoothing 1, patch_manager.cpp:450-472), so the step sits near or below 1.0 at the 60 Hz cap and between 1.03 and 1.39 at the owner's 43-58 fps.\n   - The game runs 6*trunc(step) ripple passes per frame (main+0x475F8). Ripples therefore freeze on some frames and run 72-97% slow on the rest, and the player-following grid shifts without a pass.\n   - #1180 measured simulation running on 4/10 frames at 60 fps before and 10/10 after.\n   - Port upstream #1180, not Fritchii's #1152-derived accumulator (d389685a4 / 063dbb741). #1180 merges cleanly into tuned4, uses the free cave at main+0x3C46300, and touches no shaders, so the PreparationVersion \"tuned 1\" stamp is unaffected.\n\n2. **Register-shadowing cases: upstream open PRs #1186 and #1181.** Fritchii's 60377e080 and 5885850c6 are byte-identical cherry-picks of them. The third commit, dfac3c45e (#279), is already in tuned4 (c14905444).\n   - They restore skipped draws: two Kakariko graveyard objects, plus 15 mesh/vertex programs that fail to lower.\n   - Shader front-end flag: the new opcode cases are reached only when a program would otherwise fail with \"native register shadowing mode\" (lower_to_maxwell.h:308-331). Programs that already lowered keep identical SPIR-V, so AMD's driver cache and the \"tuned 1\" stamp stay valid. Only the newly lowered programs compile once at first use.\n   - Both merge cleanly into tuned4.\n\n**High refresh rate mode: skip the whole group** (363832faf 906b15402 573163502 ef1ba9c2e 056be33ad 4429e53ca, plus 7ade2db46 / 9d216debc).\n- tuned4 already has upstream's equivalent: the FPS Unlock built-in plus the Switch 2 frame rate limit slider (#655, settings.h:405-415, nx2_gsv.h:1731-1740).\n- The owner is CPU-bound at 43-58 fps, so the 60 cap is never reached.\n- The mode was built for Fritchii, which has frame generation disabled. Its \"monitor refresh\" cap would let FG output exceed 160 Hz, and it needs the host pacer's display refresh, which is off with FG in our tree. Its live code rewrite expects Dark's 120 bytes and would refuse our FPS Unlock / TuneDynamicFps layout.\n\n**Everything else is already in tuned4 from upstream or does not apply:**\n- Movie A/V sync: #659/#809/#879. r49 plays the title movie in real time (log line 1719: frame 600 at pts 10.27 s, 10.25 s after frame 1, -19 ms behind, 17 late dropped).\n- No 40 MB/s read throttle for Switch 2 titles (fs_i_storage.cpp:40-51).\n- Microphone: #497 and #881.\n- ADPCM sign fix: #1196.\n- NUP metadata: #499.\n- 31e81b4cc (user overrides on prepatched records) does not apply to our PatchNSO.\n- The speed-limit pin is moot because the owner runs with the speed limit on.\n\n**Movie upscaler setting (7a6fcd3a3): skip.** On Automatic it would switch the owner's RX 9070 XT to the game's own movie network, because cooperative matrices are enabled (log lines 313 and 327). Fritchii measured its cost only on an RTX 4080. It is cosmetic, movies only.",
+    "items": [
+     {
+      "commits": [
+       "d389685a4",
+       "063dbb741"
+      ],
+      "title": "Water ripples keep running when the frame step is fractional (FPS patches)",
+      "what": "The water renderer runs its ripple simulation trunc(step)*substeps times a frame (fcvtzs w9,s0 at main+0x475F8). With a Dynamic FPS / FPS Unlock step below 1 no pass runs: ripples freeze, and the grid that follows the player shifts without a pass. Fritchii hooks the fcvtzs to an accumulator ported from #1152 (per water object, 8 round-robin slots in BSS at main+0x4E9FE10, state 0xA0). It started in its high refresh cave (d389685a4). v5.8 (063dbb741) adds it as a separate built-in, \"Water ripples at any frame rate\", after Dark's routine, so the default mode gets it too.",
+      "in_our_tree": "no",
+      "relevance": "high",
+      "risk": "low",
+      "recommendation": "port",
+      "why": "Port upstream open PR #1180 (upstream-pr/1180: e7ea60c2b, 1169d58c5), not Fritchii's version; owner policy prefers upstream's version.\n\nWhy it matters here:\n- tuned4 applies \"FPS Unlock (built-in)\" by default (r49 log lines 287-289; patch_manager.cpp:397-407) with per-frame raw timing (TuneDynamicFps, patch_manager.cpp:450-472; log line 288: 'averages the frame time over 1 frame(s)').\n- At the 60 Hz vsync cap the step jitters around 1.0, so frames that land just under 1.0 run zero passes. In the owner's 43-58 fps range (step 1.03-1.39) trunc gives 1, so ripples run at about 72-97% speed.\n- Raw per-frame timing makes sub-1.0 steps more frequent than Dark's 8-frame average, so we are more exposed than Fritchii.\n\nWhat #1180 does: it runs round(6*step) passes with a per-object remainder (8 slots) and at least one pass while time moves, and NOPs the mul at main+0x4760C.\n\nPorting notes:\n- `git merge-tree tuned4 upstream-pr/1180` is clean. Its records go into FPS_UNLOCK_RECORDS and DYNAMIC_FPS_RECORDS. Its cave main+0x3C46300-0x3C46393 is free in tuned4: FPS Unlock ends at 0x3C46280 and Texture Pool x2 sits at 0x3C462C0-0x3C462CC. Its state grows 16 to 0x98 bytes at 0x4E9FE00, which is in BSS.\n- It patches guest code only: no shader or SPIR-V change, so the PreparationVersion 'tuned 1' stamp (nx2_precompile.h:70) is untouched.\n\nVerify in-game in Zora's Domain or Lake Hylia water with the debug server's screenshot.",
+      "benefit_evidence": "Fritchii (063dbb741): 'at a 60 fps cap (step 0.998-1.003) some frames ran none and below 60 they ran slow (1.33 -> 1)'; checked live in castletown, no fps numbers. Upstream #1180 (e7ea60c2b): 'In a Zora's Domain save, frames running the simulation went from 0/10 to 10/10 at ~99 fps with FPS Unlock, and from 4/10 to 10/10 at 60'; 1169d58c5: 'remainders stay within +-0.5, 3-4 passes per frame at ~100 fps and 6 at 60'.",
+      "upstream_equivalent": "Open PR zortos293/Lichii#1180 (head 1169d58c5; merge-base d2eaae4f3 is in tuned4). Fritchii's code is the #1152 algorithm (trunc(step+rest)), relocated to its own cave.",
+      "conflicts": "Fritchii's version does not fit our tree. It assumes Dark's 120-byte routine at 0x3C46200 plus its own cave at 0x3C46E00. Our FPS Unlock routine is 128 bytes and TuneDynamicFps rewrites +0x24/+0x44.\n\nUpstream #1180 has no conflicts with tuned4 code. Two notes:\n- The Hyrule Cheat Menu mod writes main+0x3C46280..0x3C46398 (per Fritchii 4429e53ca). With that mod our user-mod rule would skip FPS Unlock entirely; it already overlaps Texture Pool x2. The owner's log shows no ExeFS mods (lines 284-292).\n- No effect on the CheezyEmu FSR/FG port or the preparation stamp."
+     },
+     {
+      "commits": [
+       "dfac3c45e",
+       "60377e080",
+       "5885850c6"
+      ],
+      "title": "Shader register shadowing for IMAD/FFMA/FMUL/SHF uniform forms, R2UR, P2R, FMNMX imm, I2FP, LDC",
+      "what": "Adds operand lists to PrepareRegisterPressure for opcodes that named registers in the uniform-bank mirror or scratch range:\n- dfac3c45e (#279): 0xc24.\n- 60377e080 (#1186): 0x3c2, 0x803, 0x809, 0xc20, 0xc23, 0xc45, 0xb82.\n- 5885850c6 (#1181): 0xc19.\n\nThose programs previously failed with 'native register shadowing mode' and their draws were skipped.",
+      "in_our_tree": "partly",
+      "relevance": "medium",
+      "risk": "low",
+      "recommendation": "port",
+      "why": "Coverage in tuned4:\n- #279 is in tuned4 (c14905444 / 83a721d3c; register_pressure.h has case 0xc24).\n- 60377e080 and 5885850c6 are identical cherry-picks of the open upstream PRs #1186 (0c757afb5) and #1181 (87ac53a29). The diff only differs in index and hunk offsets. Take the upstream PR heads, not Fritchii's commits.\n- Both merge cleanly into tuned4 (git merge-tree, sequentially as well).\n\nBenefit: Fritchii v5.7 notes credit #279/#1186/#1181 with restoring two skipped objects at the Kakariko graveyard. #1186 also lowers 15 Ocarina mesh/vertex programs that were rejected.\n\nSHADER FRONT-END FLAG:\n- The new cases are reached only when requires_shadow is set and PrepareRegisterPressure would otherwise return invalid ('native register shadowing mode', lower_to_maxwell.h:308-331).\n- Programs that lowered before produce identical code and SPIR-V, so AMD's driver cache stays valid and the 'tuned 1' stamp should NOT be raised.\n- The newly lowered programs were never built during preparation. Each compiles once on first use, which is a small one-time hitch per pipeline, and is then cached.\n- #1008 (write_count additions) is the same kind of change. Fritchii has it (a202ae1d5) and tuned4 does not; that is outside this area.",
+      "benefit_evidence": "No fps numbers; correctness only. 'Ocarina of Time rejected two native pixel programs at the Kakariko graveyard ... their draws were skipped' (dfac3c45e); 'Lowering every program in Ocarina of Time's shader archives rejects 15 mesh and vertex programs' (60377e080); 'rejected two native mesh programs ... draws were skipped' (5885850c6). The r49 log runs at *:Info, where the rejection is not visible.",
+      "upstream_equivalent": "#279 merged (c14905444, in tuned4); open PRs #1186 (0c757afb5) and #1181 (87ac53a29), which are what Fritchii carries.",
+      "conflicts": "None with the tuned4 code or the CheezyEmu FSR/FG port. No preparation stamp change needed (see why)."
+     },
+     {
+      "commits": [
+       "363832faf",
+       "906b15402",
+       "573163502",
+       "ef1ba9c2e",
+       "056be33ad",
+       "4429e53ca"
+      ],
+      "title": "OoT high refresh rate mode (Dark's routine + #655 tail, speed-scale word, cap, Ctrl+U live switch)",
+      "what": "An opt-in built-in, 'High refresh rate (built-in, experimental)'. It has three parts:\n\nThe routine:\n- Dark's Dynamic FPS head (8-frame average, 50 ms delta cap) with #655's tail: the real-time step is always returned, clamped to [0.02, 3.0].\n- The result is multiplied by a speed-scale word that nx2_gsv writes from the speed limit, so Turbo and Slow still work.\n- Since 4429e53ca it lives in its own cave at main+0x3C46E00, and the call is flipped between Dark's routine and this one.\n\nPacing and settings:\n- PaceToVblank paces frames at the cap (Monitor/90/120/144/165, never faster than the display), and the vsync event follows the cap (240 Hz when unlocked).\n- Settings::SpeedLimitEnabled is Fritchii's Ocarina pin.\n\nLive switch:\n- 906b15402 rewrites guest code while the game runs: it stalls the application, retries if a thread's PC is inside the cave, and invalidates the JIT icache.\n- 573163502 binds the switch to Ctrl+U, ef1ba9c2e refuses it during shutdown and adds a debug server method, and 056be33ad adds an env override.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "low",
+      "risk": "high",
+      "recommendation": "skip",
+      "why": "Already covered upstream:\n- tuned4 has upstream #655 (cc3bfb931): 'FPS Unlock (built-in)', applied by default with the same #655 tail (clamp [0.02, 6.0], 100 ms cap), and the 'Frame rate limit (Switch 2)' slider (30-240, settings.h:405-415) that sets the vsync event rate (Nx2VsyncRateHz, nx2_gsv.h:1731-1740).\n- The routine gains nothing over what we have. The cap is our slider. Fritchii built this because it lacks #655.\n\nNo benefit on the owner's setup:\n- The game is CPU-bound at 43-58 fps (r49 frame_ms 21-27 ms) and never reaches the 60 cap. Raising the cap adds no game frames.\n- AMD frame generation already turns those frames into 86-116 output frames on the 160 Hz FreeSync monitor.\n\nIt conflicts with frame generation:\n- Fritchii designed it without FG: Fritchii's FrameGenActive() is false for Fritchii, and its PaceFrame excludes FG.\n- 'Monitor refresh' caps the guest at 160 Hz. With FG x2 (log lines 112 and 319) that would ask for up to 320 Hz from the FFX swapchain, which runs in IMMEDIATE present mode (log line 1003).\n- Its display-refresh cap reads g_display_refresh_ns from Fritchii's host pacer. In tuned4 the host pacer is opt-in and is not allowed while frame_gen is on (vk_present_manager.cpp:517), so the cap would fall back to 60.\n- It has no interaction with the CheezyEmu FSR or HUD masks beyond the frame rate, but the higher rate gains nothing.\n\nIt is unsafe to port:\n- The live switch rewrites guest code under a stall. Its layout check expects Dark's 120 bytes at 0x3C46200, so it would report our FPS Unlock / TuneDynamicFps bytes as Unknown and refuse.\n\nDynamic FPS versus our patches:\n- Our FPS Unlock is applied by default with raw per-frame timing (smoothing 1) and a 100 ms cap. That is better suited to the owner's 1% lows of 21-33 fps (30-48 ms frames) than Dark's 8-frame average, which overshoots after slow frames.\n- Max Resolution, Texture Pool x2, Native zstd, Fast lookup and Resource poll backoff (main+0x14ABC / 0x17088) do not overlap any cave Fritchii uses.\n\nThe only piece that matters for Ocarina is the water ripple fix, which is covered separately via #1180.",
+      "benefit_evidence": "none measured (no fps numbers in any of these commits or in the v5.6/v5.7 notes; 'It's new: tell us if a timer, cutscene or minigame acts weird with it on').",
+      "upstream_equivalent": "Merged #655 (cc3bfb931): FPS Unlock built-in plus the frame_rate_limit slider.",
+      "conflicts": "tuned4 code:\n- It would duplicate FPS Unlock at the same call site, main+0x6E6CC4.\n- It needs Settings::SpeedLimitEnabled and OotHighRefreshPatched, KProcess scale/code-address fields and PaceToVblank changes in nx2_gsv.h, which collide with our Nx2VsyncRateHz and frame_rate_limit.\n- Its live switch needs Dark's layout.\n\nFSR/FG port: its cap logic assumes no FG and uses Fritchii's host pacer refresh. With AMD FG it could push FG output above the 160 Hz display. Ctrl+U would also change meaning from toggling the speed limit.\n\nPreparation stamp: no shader change, so no stamp impact."
+     },
+     {
+      "commits": [
+       "7ade2db46",
+       "9d216debc"
+      ],
+      "title": "Skip and hide Dark's standalone Dynamic FPS mod while the built-in applies",
+      "what": "PatchNSO detects an IPS/IPSwitch mod that writes into the Dynamic FPS call or routine (main+0x6E6CC4, main+0x3C46200), drops it, and hides it in Add-Ons. It does this only while the built-in is on (9d216debc). It adds GetIPSWriteRanges and IPSwitchCompiler::GetWriteRanges.",
+      "in_our_tree": "no",
+      "relevance": "none",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "It exists mainly so Fritchii's high refresh live switch finds its own bytes. The owner has no ExeFS mods: r49 lines 284-292 show only built-ins applied. In tuned4 a user mod over a built-in's records already wins cleanly ('a user mod already patched', patch_manager.cpp:979-984). The change touches IPS parsing for no gain on this setup.",
+      "benefit_evidence": "none measured",
+      "upstream_equivalent": "none",
+      "conflicts": "patch_manager.cpp: CollectPatches/ModPatchFiles refactor and IPS range helpers. Built around Fritchii's DYNAMIC_FPS_RECORDS, not our FPS Unlock."
+     },
+     {
+      "commits": [
+       "30bddb3d7",
+       "9b767005f",
+       "f40398a7c",
+       "2d476b683"
+      ],
+      "title": "Movie decoding robustness, A/V drift trace and timestamp-based frame selection",
+      "what": "30bddb3d7 adds a GPU-to-CPU decoder fallback, a Windows fault guard around FFmpeg, per-frame copy-back, kept timestamps, and creates the hardware device only for codecs that have one (libdav1d has none).\n9b767005f converts frames before the image wait, wakes on the syncpoint and adds the EDEN_NX2_VIDEO_TRACE drift trace.\nf40398a7c (EDEN_NX2_VIDEO_PTS_SYNC, on) writes the newest frame due by the audio clock and drops older ones.\n2d476b683 names SDL3 sink streams for the trace.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "Fritchii lacks upstream's movie fixes; tuned4 has them:\n- #659 (72e9429da): A/V sync, a three-thread AM server, and no FS throttle on Switch 2.\n- #809 (89fecaa57): Nx2MovieClock drops late frames (src/core/hle/service/nx2_movie_clock.h).\n- #879 (64b962aa1) and #912 (a957980a4): explicit libdav1d.\n\nThe r49 log shows the problem Fritchii fixed does not occur in our tree:\n- libdav1d opens in 1 ms with no GPU device probing (line 1063).\n- The title movie plays in real time: frame 1 at 42.17 s, frame 600 (pts 10.267 s) at 52.42 s, '17 late dropped, -19 ms behind' (lines 1064, 1719).\n\nThe fault guard only matters for GPU decoders; Ocarina's AV1 decodes on the CPU.",
+      "benefit_evidence": "Fritchii (9b767005f): menu movie reached frame 600 (pts 9.98 s) 17.9 and 18.9 s after frame 1, about 32 fps, half speed. v5.6 notes: 'almost 7 seconds behind after 12 seconds'; 30bddb3d7: ~0.6 s device creation per movie. All absent in tuned4 r49.",
+      "upstream_equivalent": "#659 (72e9429da), #809 (89fecaa57), #879 (64b962aa1), #912 (a957980a4), all in tuned4",
+      "conflicts": "Heavy overlap in nx2_gsv.h DecodeLoop and nx2_video_decoder.cpp with upstream's clock; porting would mean two competing sync mechanisms."
+     },
+     {
+      "commits": [
+       "868597700",
+       "7a6fcd3a3"
+      ],
+      "title": "'Ocarina of Time movies' setting: game's own movie upscaler vs bilinear copy",
+      "what": "Bypasses the #721 bilinear stand-in for Ocarina's movie network (1080p to 1440p, de-banding). It is a boot env switch (868597700), then a setting, Automatic/Bilinear/Game (7a6fcd3a3). Automatic picks the game's network when VK_KHR_cooperative_matrix is enabled.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "Cosmetic and only affects pre-rendered movies (title screen, some cutscenes).\n\nOn the owner's RX 9070 XT, cooperative matrices are enabled (r49 lines 313, 327), so Automatic would switch the owner to the game's HMMA network. That is untested on AMD:\n- Fritchii measured it only on an RTX 4080.\n- The network's pipelines would compile at the first movie.\n- The emulated-tensor cost is ~33 ms a frame.\n\nThis does not meet the owner's large-benefit bar. If wanted later, port it with Bilinear as the default and measure the title movie fps on the 9070 XT first.",
+      "benefit_evidence": "Fritchii 7a6fcd3a3: on RTX 4080 'title movie 60 fps both ways, ~820 compute dispatches a second' and crisper; ~33 ms a frame where tensor ops are emulated. Nothing measured on AMD.",
+      "upstream_equivalent": "none (upstream #721 aae0b063f is the bilinear copy we have)",
+      "conflicts": "kepler_compute.cpp:664-668 (the #721 replacement next to the dlss_chain logic that the CheezyEmu FSR port relies on), settings, and vulkan_device.cpp. No shader front-end change; the network's own HMMA pipelines would be new live compiles."
+     },
+     {
+      "commits": [
+       "e1c7514de",
+       "28a71116d"
+      ],
+      "title": "EDEN_NX2_READ_THROTTLE=0: no 40 MB/s game file read pacing",
+      "what": "An env switch, built in on Fritchii, that skips IStorage::Read's 40 MB/s sleep.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "tuned4 already skips the throttle for every Switch 2 title. It came with upstream #659 (72e9429da, 'fsp: no SD card read throttle for Switch 2 titles'); see fs_i_storage.cpp:40-51, the `if (!Settings::CurrentProgramIsSwitch2())` guard. Ocarina never sleeps there in our build.",
+      "benefit_evidence": "Fritchii: 'slept 36-151 ms at boot and area loads, and 47 ms when a killed Peahat loaded its effects'; 672 ms of sleeps in 4 minutes with it on; title video 59.6-59.8 fps with it off; 'Hitch totals didn't move much, so it's a small win'.",
+      "upstream_equivalent": "#659 (72e9429da), in tuned4",
+      "conflicts": "none (already covered)"
+     },
+     {
+      "commits": [
+       "cb0c4252c"
+      ],
+      "title": "Ocarina stays at its speed when the speed limit is unlocked (Settings::SpeedLimitEnabled)",
+      "what": "Adds a SpeedLimitEnabled() that is always true for Ocarina in Fritchii builds and replaces use_speed_limit reads in the conductor, speed limiter, present manager, scheduler, swapchain, nx2_gsv and status bar.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "It guards against a user error the owner doesn't make: r49 has Core.use_speed_limit true and speed_limit 100 (log lines 65-66). With our FPS Unlock built-in the step already follows real time. The change touches every pacing reader, including the frame-gen swapchain choice (vk_swapchain.cpp) that the CheezyEmu FG port depends on.",
+      "benefit_evidence": "none measured",
+      "upstream_equivalent": "none",
+      "conflicts": "vk_swapchain.cpp/vk_present_manager.cpp FG-related present-mode and pacing conditions, conductor.cpp, perf_stats.cpp, nx2_gsv.h; it is keyed to g_build_name == \"Fritchii\"."
+     },
+     {
+      "commits": [
+       "5ee1a7a01",
+       "e6e0a8083"
+      ],
+      "title": "Switch 2 microphone capture with silent fallback (ocarina panic) and the ADPCM nibble sign fix (Song of Time crackle)",
+      "what": "5ee1a7a01 ports #497 (microphone capture and settings) and #881 (a silent capture stream when the host mic can't open; Ocarina panicked when opening the ocarina).\ne6e0a8083 fixes the inverted ADPCM step sign that crackled at buffer starts.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Both are already in tuned4 from upstream:\n- #497 (1d86dd61e) and #881 (bbf3e6297): src/audio_core/sink/silent_input_stream.h and configure_microphone.cpp exist.\n- #1196 (314e1d946): decode.cpp:152 returns r for the positive half.\n\nFritchii's extra 'output streams keep their checks' is only its merge resolution.",
+      "benefit_evidence": "Fritchii notes: 'Opening the ocarina without a microphone no longer crashes'; 'The Song of Time no longer ends with a loud crackle'. Both already fixed in tuned4.",
+      "upstream_equivalent": "#497 (1d86dd61e), #881 (bbf3e6297), #1196 (314e1d946)",
+      "conflicts": "none"
+     },
+     {
+      "commits": [
+       "b14d20aa4",
+       "f34a4dff5",
+       "31e81b4cc",
+       "2d476b683"
+      ],
+      "title": "Small loader/patch fixes: NUP base-package metadata, prepatched built-in overrides",
+      "what": "b14d20aa4 and f34a4dff5 take NUP title, icon and publisher from the base package field by field.\n31e81b4cc stops a user mod over an already-prepatched built-in record from being dropped.\n2d476b683 (SDL3 sink stream names, for Fritchii's video trace) is grouped here as trivial.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "- The NUP metadata change is already in tuned4 via upstream #499 (146705185); see nup.cpp:137-163, the same per-field merge.\n- 31e81b4cc fixes Fritchii's tolerance of prepatched input. tuned4's PatchNSO requires record.original to match (patch_manager.cpp:973-984), so that case cannot arise.\n- 2d476b683 only serves Fritchii's EDEN_NX2_VIDEO_TRACE.",
+      "benefit_evidence": "none measured",
+      "upstream_equivalent": "#499 (146705185) for NUP metadata; none needed for the rest",
+      "conflicts": "none"
+     }
+    ],
+    "uncovered": []
+   },
+   "verdicts": {
+    "area": "ocarina",
+    "verdicts": [
+     {
+      "title": "Water ripples keep running when the frame step is fractional (FPS patches)",
+      "verdict": "confirm",
+      "final_recommendation": "port",
+      "reason": "I tried to refute this and could not. Port upstream's open PR #1180, not Fritchii's code.\n\nNot in tuned4. There is no ripple, 0x475F8 or 0x3C463xx record: tuned4's patch_manager.cpp:135-141 has only the call and the routine at 0x3C46200, and FPS Unlock declares state_size 16 at :404.\n\nIt matters for this setup. The r49 log (2bcb3130, lines 287-289) shows FPS Unlock applied with per-frame timing ('averages the frame time over 1 frame(s)'). The game runs passes = 6*(int)step:\n- Any frame whose step stays in [1,2) runs exactly 6 passes, so in the owner's 43-58 fps range (step about 1.03-1.40) the ripples run at 1/step speed, roughly 72-97%.\n- Any frame shorter than 16.67 ms runs zero passes. The ripples freeze and the grid that follows the player shifts without a pass, which shows as the jagged edge around Link. Raw per-frame timing with lows of 21-33 fps means such frames occur.\n- Upstream measured it: Zora's Domain frames that ran the simulation went from 4/10 to 10/10 at a 60 cap and from 0/10 to 10/10 at about 99 fps (e7ea60c2b, 1169d58c5).\n- Fritchii found it worth taking too (063dbb741).\n\nIt is a correctness fix, not a performance gain. The extra cost is 1-2 extra 256x256 compute passes (shaders fb4203a7d928ed42 and e2ce39e630ce65f3) per frame below 60 fps. That is negligible on the 9070 XT, adds a handful of dispatches on the back thread, and has not been measured.\n\nUpstream first: #1180 is upstream's own code. Its head 1169d58c5 is dated 2026-11-10 and is a review follow-up, so the PR is still being reviewed. A competing upstream PR, #1152 by atk3001, is the one Fritchii ported, so upstream may merge either. The merge is clean, so either way the next upstream merge reconciles a single file.\n\nNo conflicts:\n- `git merge-tree tuned4 upstream-pr/1180` is clean, tests included. The merged builtin_patches.cpp uses state size 0x98 and the water records.\n- The cave 0x3C46300-0x3C46393 is free: FPS Unlock ends at 0x3C46280 and Texture Pool x2 sits at 0x3C462C0-0x3C462CC. The other records are at 0x805BD0, 0xC2A36C, 0x6E6CC4, the zstd and lookup sites, and 0x14ABC/0x17088.\n- TuneDynamicFps (patch_manager.cpp:450-472) rewrites only +0x24/+0x44 of the 0x3C46200 routine, which this does not touch.\n- It changes guest code only, so the 'tuned 1' preparation stamp (nx2_precompile.h:70, vk_pipeline_cache.cpp:2463-2466) and the CheezyEmu FSR/FG path are unaffected.\n\nFritchii's version does not fit our tree: it assumes Dark's 120-byte routine plus its own cave at 0x3C46E00.",
+      "port_notes": "1. Merge `upstream-pr/1180` (e7ea60c2b + 1169d58c5) into tuned4, or cherry-pick both. Do not take d389685a4 or 063dbb741. Files: src/core/file_sys/patch_manager.cpp (WATER_STEPS_* arrays; records added to DYNAMIC_FPS_RECORDS and FPS_UNLOCK_RECORDS; state_size 16 -> 0x98 for both built-ins), src/tests/core/builtin_patches.cpp, docs/nx2/ocarina-dynamic-fps.md.\n2. Build and run the builtin_patches tests. Confirm the 'wrong original word or non-zero cave skips them' cases still pass alongside TuneDynamicFps.\n3. Log check: the line 'Applying built-in patch \"FPS Unlock (built-in)\" (5 records)' replaces '(2 records)', followed by the same TuneDynamicFps line. There must be no line skipping it as a user mod. With the Hyrule Cheat Menu mod (writes 0x3C46280-0x3C46398) the whole FPS Unlock built-in is skipped, as today; the owner runs no ExeFS mods.\n4. In game: Zora's Domain or Lake Hylia, debug server `screenshot` while moving Link through water. The ripples should spread and the edge around Link should not jag.\n5. Use `frame_times` for a 30 s A/B in the same water spot (FPS Unlock with and without the water records, or r49 against the new build) to confirm there is no measurable fps cost from the 1-2 extra compute passes.\n6. When upstream merges #1180 (or #1152 instead), take upstream's version at the next merge and drop ours if they differ.\n7. Do not touch PreparationVersion."
+     },
+     {
+      "title": "Shader register shadowing for IMAD/FFMA/FMUL/SHF uniform forms, R2UR, P2R, FMNMX imm, I2FP, LDC",
+      "verdict": "downgrade",
+      "final_recommendation": "watch-upstream",
+      "reason": "The changes are cheap and safe, but nothing shows they help the owner, and upstream is likely to merge them anyway.\n\n1. #279 (0xc24) is already in tuned4: c14905444 is an ancestor, register_pressure.h:82. Fritchii's whats-new.md:21 credits the 'two objects at the Kakariko graveyard' to #279, #1186 and #1181 together. The commit that actually names the graveyard is #279 (dfac3c45e), which we already have.\n\n2. #1186 (0c757afb5) found its 15 programs with an offline sweep ('Lowering every program in Ocarina of Time's shader archives'), not in play. #1181 (87ac53a29) names no scene.\n\n3. The analyst's claim that 'the r49 log runs at *:Info, where the rejection is not visible' is wrong:\n- tuned4 logs each rejected graphics program once at LOG_ERROR (shader_cache.cpp:219 'Rejected program ... is bound to stage', :273 'Native graphics shader rejected'), and the compute path logs at kepler_compute.cpp:830. These are visible at Info.\n- The r49 log (2bcb3130) has zero such lines; the only skipped draws are 'skipped=4' and 'skipped=12' in two frame-window summary lines.\n- The r35, Fritchii v5.5 and build 132 logs also have zero rejections.\n- The Fritchii preparation log (19a352ed) reports '41216 programs (... 0 not lowered)' for the whole recipe.\n- So no 'native register shadowing mode' rejection has been seen in the owner's sessions.\n\n4. They are correctness-only and have no fps effect. The new cases are reached only inside `if (requires_shadow)` once PrepareRegisterPressure would otherwise fail (lower_to_maxwell.h:320-331). Programs that already lower produce identical code, so the 'tuned 1' stamp and the driver cache are untouched.\n\n5. Upstream first: both are open upstream PRs by the same author as #279, which upstream merged. Both merge cleanly (`git merge-tree` against tuned4). Expect them with the next upstream merge.\n\nThere is no conflict and no stamp risk, so this is not a reject. Port immediately only if a log shows a 'native register shadowing mode' rejection in a scene the owner plays. #1008 (write_count) is out of scope here.",
+      "port_notes": "Only if a rejection is seen, or with the next upstream merge:\n- Merge upstream-pr/1186 (0c757afb5) and upstream-pr/1181 (87ac53a29), not Fritchii's cherry-picks 60377e080 and 5885850c6. Both touch only src/shader_recompiler/frontend/ampere/register_pressure.h and src/tests/video_core/ampere_logged_numeric.cpp.\n- Keep PreparationVersion 'tuned 1'. Newly lowered programs build once at first use.\n- Verify that the 'Native graphics shader rejected: ... native register shadowing mode' line no longer appears in the affected scene, and take a debug server screenshot there to confirm the restored draws render correctly."
+     }
+    ]
+   }
+  },
+  {
+   "area": "prep",
+   "analysis": {
+    "area": "prep",
+    "summary": "Nothing in this area is worth porting by default. One small optional change: make FXAA off the default (port-opt-in).\n\n1. The translator-hash stamp (d03cd4cd5) conflicts with the owner's rule. Our preparation stamp holds a hand-set PreparationVersion \"tuned 1\" (tuned4 src/video_core/nx2_precompile.h:70, used at vk_pipeline_cache.cpp:2463-2466). Fritchii's stamp instead hashes all of src/shader_recompiler plus the pipeline and precompile sources. On our tree those sources changed on 9 different days between 2026-11-03 and 2026-11-10, so the owner's 45-minute preparation (HANDOFF r43: 2690.9 s) would run again with almost every build, and switching the stamp format would invalidate \"tuned 1\" right away. Its hash also keeps CR line endings, which upstream's GenerateShaderLoweringStamp.cmake strips. Upstream does the same thing more narrowly: its cache v2 already has a build-time LoweringStamp (tuned4 src/video_core/CMakeLists.txt:546-563), and open PR #1174 (upstream-pr/1174 e812d981c) adds an EmissionStamp for the compute precache marker. So: skip, and watch #1174 and #1188/#1183. If we ever automate the stamp, use upstream's EmissionStamp only as a log line saying \"translator changed since this preparation\". The owner keeps the call on raising PreparationVersion.\n\n2. EDEN_NX2_AMD_APP_CACHE (1edd5dbf0) is an unmeasured switch that is off by default. It answers a different player's problem (AMD's driver cache kept about 44% of the preparation). The owner's r49 log shows the preparation stamp held (\"prepared for this driver already\" at 34.3 s), 3329 pipelines loaded at boot from cache v2, and 0 pipelines built on the GPU thread in any worst frame. Skip.\n\n3. d0fa67cd9 (a RAM-scaled graphics eviction limit, plus compute eviction behind EXP51, off) does not fit our tree. Upstream's own eviction uses LICHII_KEEP_PIPELINES=4096 (vk_pipeline_cache.cpp:973, 3055). Fritchii's limit would come to about 4,500 on the owner's 31.4 GiB, and each eviction later costs a rebuild on the GPU thread (~8.5-10 ms). Skip.\n\n4. Diagnostics only: d4bbab070 (upstream already logs VK_KHR_pipeline_binary at vulkan_device.cpp:1940-1947) and f28d17136 (depends on storage_read_extents and #896's EDEN_NX2_PRECOMPILED_FAST, neither of which is in tuned4). Skip.\n\n5. FSR/DLSS: 59fed79d5, 24b65791b and 824123205 are upstream #1060, #1061 and #1062. They were merged into tuned4 (c215653cc, 6cec8cb9a, 7afad5494) and then replaced by the CheezyEmu port (a205b1f07). 413d853f0 (settings UI), 0fd9d9e25 (the \"Inc.\" signer check in ffx_runtime, a file our tree removed) and 229417e30 (NVIDIA DLSS jitter) do not apply. Nothing here would improve the CheezyEmu port.\n\n6. Settings revisions 6-8 (a7226727c, 5f8b265ec, 6e11fee51): the r49 log shows the owner already has every value Fritchii sets that matters, or a deliberate alternative (FXAA off, Low GPU accuracy, Docked, GPU video decoding, async shaders on, EDS2, vsync Immediate instead of Mailbox, 12 GB instead of 8 GB). Fritchii's revision mechanism re-applies its values to every player on each revision, which we should not adopt. FXAA off as the default (settings.h:443) is harmless and fits FSR 4 and frame generation, but the owner already has it.\n\n7. 5b970411a makes three Fritchii switches default:\n- EXP49 is upstream #1028, already unconditional in tuned4 (0b83798bf).\n- EDEN_NX2_JIT_WARM: watch upstream's open #1225, and assess it in the CPU/JIT area.\n- TC_CEILING 7680: Fritchii measured VRAM going from 10 to about 6 GB with no fps change. The owner had 21 GB of commit left in r49, so skip unless commit pressure appears.",
+    "items": [
+     {
+      "commits": [
+       "d03cd4cd5"
+      ],
+      "title": "Preparation stamped with a build-time hash of the shader translator",
+      "what": "CMakeModules/Nx2ShaderStamp.cmake hashes every file in src/shader_recompiler plus fixed_pipeline_state.*, vk_graphics_pipeline.*, vk_compute_pipeline.* and nx2_precompile.* (264 inputs) into NX2_SHADER_STAMP. The precompiled_prepared stamp uses it in place of the release version, so a release that changes none of these keeps the preparation.",
+      "in_our_tree": "partly",
+      "relevance": "medium",
+      "risk": "high",
+      "recommendation": "skip",
+      "why": "It solves Fritchii's problem: it stamped the release version, so every release re-ran the preparation. Our stamp already ignores the build (Precompile::PreparationVersion \"tuned 1\", nx2_precompile.h:70; vk_pipeline_cache.cpp:2463-2466, from 5f428467d). Auto-hashing would re-run the owner's ~2690 s (45 min) preparation for nearly every build: tuned4 changed emission sources on 9 days between 2026-11-03 and 2026-11-10, and on 12 days since 2026-10-27. Fritchii's input set is also wider than needed: the GLSL/GLASM backends and the pipeline .cpp files, comments included. It hashes raw bytes, so CRLF and LF checkouts (PC vs CI) stamp differently; upstream's GenerateShaderLoweringStamp.cmake strips \\r. Changing the stamp format invalidates \"tuned 1\", which needs the owner's agreement. A stale stamp costs only driver-cache misses, which show up as builds at runtime, not wrong images. The r49 log shows 0 pipelines built on the GPU thread in every worst frame. A useful middle ground is log-only: compute upstream #1174's EmissionStamp and log when it differs from the one recorded at preparation time, so we know when to raise PreparationVersion.",
+      "benefit_evidence": "Fritchii's message gives no timing for its v5.7 re-preparation; it only says 5.7 re-ran \"Preparing shaders\" for every player. Our cost if adopted: about 45 min per build on the owner's laptop (HANDOFF r43: 'Shader precache: finished ... 2690.9 s').",
+      "upstream_equivalent": "Partly merged: #1036 cache v2 has a build-time LoweringStamp of the native lowering sources (tuned4 src/video_core/CMakeLists.txt:546-563; CMakeModules/GenerateShaderLoweringStamp.cmake). Open PR #1174 (upstream-pr/1174 e812d981c) adds an EmissionStamp (shader_recompiler without GLASM/GLSL, native lowering, pipeline_shader_emission.h), plus the SPIR-V-affecting settings, to the compute precache marker. #1188 does the same for the graphics warm-up marker.",
+      "conflicts": "vk_pipeline_cache.cpp AddPrecompiledJobs (tuned4 2440-2520): our stamp line format, StampWithoutTime, the copied-profile rule and the progress or resume key all embed PreparationVersion. Changing it invalidates the 'tuned 1' preparation once. The video_core/CMakeLists.txt custom command would sit next to upstream's lowering-stamp command. If #1174 merges, reuse its EmissionStamp rather than a second hashing script."
+     },
+     {
+      "commits": [
+       "1edd5dbf0"
+      ],
+      "title": "EDEN_NX2_AMD_APP_CACHE: our own VkPipelineCache on AMD's driver for pipelines built in play",
+      "what": "Boot env switch, off by default. On AMD's proprietary driver it turns our VkPipelineCache file back on for play and boot rebuilds, while preparation builds go to no cache. New pipelines stop going in past 512 MiB. Adds PlayPipelineCache() and a boot log line.",
+      "in_our_tree": "no",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "In tuned4 use_vulkan_pipeline_cache is false on AMD (vk_pipeline_cache.cpp:608-609 with Device::DriverCachesPipelines, vulkan_device.h:1291-1294), and upstream's VK_KHR_pipeline_binary store is also off there (vulkan_device.cpp:1948-1950), so AMD's own cache does all the work. Fritchii's motivation is another player whose driver cache kept about 44% of a preparation and nothing across a restart. The owner's driver cache works: r44 held its preparation, and r49 logged 'precompiled.fork-v54.nx2prep was prepared for this driver already' (log line 447). r49 also loaded 3329 pipelines from cache v2 and built 0 on the GPU thread in any worst frame. Nothing was measured, and the code patches Fritchii's structure (CreatePrecompiled*Pipeline, WarmPipelineCache), not upstream's cache v2 plus PipelineBinaries path.",
+      "benefit_evidence": "none measured (the commit only cites a third-party player's 44% driver-cache retention)",
+      "upstream_equivalent": "none for AMD proprietary. Upstream's #1036 PipelineBinaries covers drivers without their own cache. Open #1103 lets RADV keep its own cache, which is not the owner's driver.",
+      "conflicts": "vk_pipeline_cache.cpp: our creation sites pass vulkan_pipeline_cache plus pipeline_binaries.get() (tuned4 lines 3806, 4533, 4548), so it would need re-plumbing through cache v2. The preparation itself is untouched, so no stamp impact."
+     },
+     {
+      "commits": [
+       "d0fa67cd9"
+      ],
+      "title": "Graphics eviction threshold by RAM size; EXP51 compute eviction (off)",
+      "what": "EvictAbovePipelines is set to RAM/16 at about 460 KB per pipeline, clamped to 2,000..8,000 (fixed 8,000 before). EXP51, live and off by default, evicts compute pipelines unused for 9000 frames while more than 500 are held, and rebuilds them without a new disk record.",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "low",
+      "risk": "medium",
+      "recommendation": "skip",
+      "why": "Our tree has upstream's eviction instead: KeptPipelines()/LICHII_KEEP_PIPELINES=4096 and EvictUnusedPipelines with a 2000 budget for unused prebuilt pipelines (tuned4 vk_pipeline_cache.cpp:973-982, 3055-3116). On the owner's 31.43 GiB, Fritchii's formula gives about 4,500, nearly upstream's 4096, so there is no gain. Each eviction risks a later rebuild on the GPU thread (~8.5-10 ms), which a CPU-bound laptop should avoid. EXP51 is unmeasured.",
+      "benefit_evidence": "none measured. The commit cites Ocarina holding 3,657 graphics and 1,803 compute pipelines 6 min in, and a ~17.5 GB working set after an hour on a 32 GB PC, but gives no before/after numbers.",
+      "upstream_equivalent": "upstream LICHII_KEEP_PIPELINES / used-and-evicted logic in #1036; open #313 and #652 (keep pipelines within a RAM budget)",
+      "conflicts": "Fritchii's EvictAbovePipelines and EvictUnusedComputePipelines do not exist in tuned4; this would be a rewrite against upstream's eviction."
+     },
+     {
+      "commits": [
+       "d4bbab070",
+       "f28d17136"
+      ],
+      "title": "Preparation and driver-cache diagnostics",
+      "what": "d4bbab070 logs the NVIDIA GLCache / AMD VkCache folder (files, MiB, newest write) at boot, after preparation and at exit, adds a pipeline_cache_open.flag unclean-stop warning, adds the full-speed or background mode and thread count to progress lines, and logs whether VK_KHR_pipeline_binary is offered. f28d17136 logs read-extent coverage at the end of a kept preparation.",
+      "in_our_tree": "partly",
+      "relevance": "low",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "Only diagnostics. Upstream already logs VK_KHR_pipeline_binary capabilities (tuned4 vulkan_device.cpp:1940-1947; r49 log line 309). The VkCache folder scan walks a large AMD cache recursively at every boot and exit, with no switch to turn it off. f28d17136 needs Shader::Info::storage_read_extents and EDEN_NX2_PRECOMPILED_FAST (closed #896), neither of which is in tuned4. The unclean-stop marker could become useful if the owner ever reports a preparation re-running. Revisit then.",
+      "benefit_evidence": "none measured (diagnostic)",
+      "upstream_equivalent": "VK_KHR_pipeline_binary logging is merged upstream (#1036). The rest: none.",
+      "conflicts": "Written against Fritchii's PreparePrecompiled loop; ours is AddPrecompiledJobs plus the precache journal. No effect on the stamp."
+     },
+     {
+      "commits": [
+       "59fed79d5",
+       "24b65791b",
+       "824123205",
+       "413d853f0",
+       "0fd9d9e25",
+       "229417e30"
+      ],
+      "title": "Ocarina FSR 3.1 / FSR 4 / DLSS jitter stack",
+      "what": "Fritchii's cherry-picks of upstream #1060 (FSR 3.1 replacing the AA network), #1061 (camera jitter and texture LOD bias with no switch) and #1062 (FSR 4 via AMD's downloaded runtime). Also its own UI change folding them into 'Ocarina of Time anti-aliasing' (413d853f0), an 'Advanced Micro Devices Inc.' signer-name fix for the downloaded runtime (0fd9d9e25), and EDEN_NX2_DLSS_JITTER for NVIDIA DLSS (229417e30).",
+      "in_our_tree": "equivalent-upstream",
+      "relevance": "none",
+      "risk": "low",
+      "recommendation": "skip",
+      "why": "#1060, #1061 and #1062 were merged in tuned4 (c215653cc, 6cec8cb9a, 7afad5494) and then removed by a205b1f07 in favour of CheezyEmu's FSR 4 and frame generation, because the #1061 jitter caused the border shimmer the owner objected to. The signer fix targets ffx_runtime.cpp's WinVerifyTrust check, which our tree no longer has: CheezyEmu's vk_ffx_runtime.cpp loads AMD's DLLs from the exe folder. The DLSS jitter is NVIDIA-only. Nothing here would improve the CheezyEmu port. Re-adding jitter would bring back the shimmer.",
+      "benefit_evidence": "none measured for this setup",
+      "upstream_equivalent": "#1060, #1061, #1062 (merged upstream)",
+      "conflicts": "Would collide with a205b1f07's vk_fsr4_upscaler/vk_ffx_runtime, oot_fsr_preset and the amd_fsr4 settings."
+     },
+     {
+      "commits": [
+       "a7226727c",
+       "5f8b265ec",
+       "6e11fee51"
+      ],
+      "title": "Settings revisions 6-8 (FXAA off by default; version bumps)",
+      "what": "Revision 6 makes anti_aliasing default to None, since Ocarina's own AA or DLSS already smooths edges. Revisions 7 and 8 only bump Settings::Frizti::Revision, which re-applies Fritchii's tuned values once to every player. Its full tuned list: Low GPU accuracy, Mailbox, async presentation, async shaders, Docked, 8 GB, GPU video decoding, ScaleForce, 1x, no AA, Auto CPU, disk and driver caches on, EDS2, dynamic vertex input.",
+      "in_our_tree": "partly",
+      "relevance": "low",
+      "risk": "low",
+      "recommendation": "port-opt-in",
+      "why": "Our settings.h:443-444 still defaults to FXAA, but the owner's r49 config already has anti_aliasing None, oot_anti_aliasing NoSharpening and FSR 4 with AMD frame generation. Their other values are deliberate: Low GPU accuracy, Docked, GPU video decoding, async shaders and presentation on, EDS2 and dynamic vertex input as defaults, vsync Immediate (not Mailbox, which goes with Fritchii's host pacer), and 12 GB memory. Fritchii's revision mechanism, which overwrites user values on each bump, should not be adopted. Making None the default is harmless with FSR 4 and frame generation; it only matters for a fresh profile. Note that upstream's game_presets test asserts FXAA, so the change carries a test edit.",
+      "benefit_evidence": "none measured (image-quality call by Fritchii's owner: 'yeah we can drop fxaa probably')",
+      "upstream_equivalent": "none (upstream default is FXAA)",
+      "conflicts": "src/common/settings.h anti_aliasing default; src/tests/common/game_presets.cpp expectation. No effect on the preparation stamp."
+     },
+     {
+      "commits": [
+       "5b970411a"
+      ],
+      "title": "Fritchii v5.7 built-in defaults: EXP49, texture-cache ceiling 7680 MiB, JIT warm-up",
+      "what": "Turns on EXP49 (async read-back) by default, adds EDEN_NX2_TC_CEILING_MIB (a ceiling on the collector's critical threshold, expected = ceiling - 1.5 GiB) set to 7680, and makes EDEN_NX2_JIT_WARM=1 a built-in switch.",
+      "in_our_tree": "partly",
+      "relevance": "medium",
+      "risk": "medium",
+      "recommendation": "watch-upstream",
+      "why": "EXP49 is the core of upstream #1028, which tuned4 has unconditionally (0b83798bf, nx2_async_readback.h), so nothing to take. The TC ceiling: the owner's r49 thresholds are expected 8888 / critical 9656 MiB on 14.09 GiB of available VRAM, with 21264 MiB of commit left (log lines 324, 335, 936), so RAM is not the limit in that session. Fritchii's numbers show less memory used but no fps gain; skip unless a long session shows commit pressure. JIT warm-up is the possible real benefit for Ocarina on a CPU-bound laptop, but it belongs to the CPU/JIT area and upstream has an open #1225 for the same goal. Assess it there and prefer upstream's.",
+      "benefit_evidence": "EXP49: Stalchild fight 51.9 -> 56.9 fps, the back's read flushes 35 -> 6 ms/s. TC ceiling: VRAM 10 -> ~6 GB, 4-6 GB RAM kept free instead of ~1.5, 58.8 fps over 30 min (no fps change claimed). JIT warm: 'Kakariko felt much better', repeat compiles after reloads 294 -> 8 ms.",
+      "upstream_equivalent": "EXP49 = #1028 (merged, in tuned4). JIT warm-up: open #1225 (JIT warm-up from a per-title block list). TC ceiling: none.",
+      "conflicts": "texture_cache.h ApplyThresholdOverrides (VRAM Aggressive mode thresholds); main.cpp BuiltinSwitches does not exist in tuned4. No effect on the preparation stamp."
+     }
+    ],
+    "uncovered": []
+   },
+   "verdicts": {
+    "area": "prep",
+    "verdicts": [
+     {
+      "title": "Settings revisions 6-8 (FXAA off by default; version bumps)",
+      "verdict": "reject",
+      "final_recommendation": "skip",
+      "reason": "Not worth porting. (1) The only code change, a7226727c, swaps one default value: AntiAliasing::Fxaa to None in src/common/settings.h, with a matching edit to src/tests/common/game_presets.cpp. On tuned4 the default is still Fxaa (src/common/settings.h:443-444). Upstream chose it on purpose in 405adb698 ('settings: default to ScaleForce and FXAA'), and its test asserts it (src/tests/common/game_presets.cpp:7,10, 'Display filter defaults use ScaleForce and FXAA'). The policy puts upstream first, so overriding a deliberate upstream default needs a large measured benefit. There is none: the commit is an image-quality preference with no measurement. (2) The owner gets nothing from it. Their r49 config already sets anti_aliasing None, with FSR 4 and AMD frame generation, so the change only affects a fresh profile. It has no effect on the CPU-bound frame rate, the 1% lows, Ocarina's image or the preparation stamp. (3) Revisions 7 and 8 (5f8b265ec, 6e11fee51) only bump Settings::Frizti::Revision in src/common/frizti_settings.h. That file and its revision mechanism do not exist on tuned4, and adopting the mechanism would overwrite the owner's deliberate values (Immediate vsync rather than Mailbox, 12 GB rather than 8 GB, tuned defaults) with Fritchii's list. That is a regression risk, not a benefit. (4) Porting it would mean diverging from upstream on a default and editing upstream's test, which is merge friction for every later upstream sync. If the owner wants None as the default, it should be proposed to upstream rather than carried as a fork delta.",
+      "port_notes": "Do not port. If the owner later asks for None as the default anyway, change only src/common/settings.h:444 and the expectation in src/tests/common/game_presets.cpp:7,10. Do not bring over src/common/frizti_settings.* or its revision bumps."
+     }
+    ]
+   }
+  }
+ ]
+}
