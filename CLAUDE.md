@@ -45,7 +45,8 @@ Then (owner, 2026-11-12; the options are in HANDOFF's next steps), in this order
 2. Merge with upstream Lichii right after that stable build. Don't wait for Zortos's
    multithreaded GPU back thread; option 2 (the same thing) is dropped, and his version comes
    in with a later merge once it is released. The owner had it started on 2026-11-12, before
-   option 3's verdict (nx2 `2eb5f081c`, branch `r22-merge-nx2b`).
+   option 3's verdict: done that day with nx2 `2eb5f081c` (merge `bd1ce62ff` on branch
+   `r22-merge-nx2b`, now tuned4 and the base under the patch).
 3. After the merge, critically review Fritchii's new commits for anything worth adding.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent

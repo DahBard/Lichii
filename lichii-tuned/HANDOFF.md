@@ -34,14 +34,15 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Since round 22 (2026-11-10): branch `tuned` = upstream Lichii nx2 `17baed716` (build 132 plus
-  31 commits, merged in `2d9ea59c5`) + the workflow + this folder. Round 21's Fritchii tree
-  (branch `tuned5`) stays in the history. The patch is `git diff --binary 17baed716 tuned4`
-  (393 files, 2.9 MB), backed up in `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle
-  tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to `17baed716`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
+- Since 2026-11-12: branch `tuned` = upstream Lichii nx2 `2eb5f081c` (merged in `526c0ab1c`;
+  `17baed716`, build 132 plus 31 commits, since round 22, merged in `2d9ea59c5`) + the workflow +
+  this folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
+  `git diff --binary 2eb5f081c tuned4` (390 files, 2.9 MB), backed up in `tuned4.bundle` (`git
+  fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
+  `2eb5f081c`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `17baed716` (round 22's merge; `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
+- Branch `tuned` of DahBard/Lichii = upstream nx2 `2eb5f081c` (2026-11-12; `17baed716` = round 22's merge, `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
@@ -96,10 +97,11 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 - Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
   `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
   `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`, builds A, B and r54 up to
-  `cbe51e88a`, and r55 up to `3bf40a3c2`; pushing it doesn't trigger builds).
+  `cbe51e88a`, r55 up to `3bf40a3c2`, and nx2 `2eb5f081c` merged in `bd1ce62ff` with follow-ups up
+  to `61c0d882b`, branch `r22-merge-nx2b`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `17baed716`, as `tuned` does). The patch is `git diff --binary 17baed716 tuned4` (393 files,
+  `2eb5f081c`, as `tuned` does). The patch is `git diff --binary 2eb5f081c tuned4` (390 files,
   2.9 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
@@ -2081,6 +2083,48 @@ Own changes:
        upstream commits that change shaders. PreparationVersion stays: new builds have started
        with a cold AMD driver cache anyway, which the owner accepted on 2026-11-10 ("Loading
        shaders slowly once per build upgrade is a fine price to pay").
+     - Done (2026-11-12): merge `bd1ce62ff`, every area but memory/CPU/build reviewed by a second
+       agent (that one by hand); no conflict markers, `git diff --check` clean, the round-22
+       checkpoint greps unchanged, and all 92 changed C/C++ files compile with the Windows CI
+       flags (MinGW clang, syntax only). The only failures are upstream-only files whose
+       headers or defines this environment lacks (OpenSSL, nxformat, a test fixture
+       directory), plus the shadow warning at vk_pipeline_cache.cpp:1774 that base, ours and
+       upstream all have. Follow-ups:
+       - `04e116b2b`: round 7's barrier switch removed (LICHII_JIT_TSO and its config fields):
+         #1327 does the same unconditionally; trace-old-jit.bat keeps only the inline counter.
+       - `3880800d0`: a failed graphics pipeline keeps no stages on eviction. #1337 stored its
+         empty stages and would rebuild the key with no shaders (invalid
+         vkCreateGraphicsPipelines); it is translated again as before. Upstream has no fix (nx2
+         and its pull requests checked); worth offering upstream.
+       - `61c0d882b`: ab-11 without LICHII_KEEP_PIPELINES (#1334 retired it), the
+         nx2_switches.txt and README-tuned texts, the Registration comment.
+       - On tuned: `lichii_log_summary.py` reads the new 'empty flushes skipped' field;
+         check_patch_warnings.py's base is `2eb5f081c`.
+     - What changes for the owner (the next CI build, r56 = r55 + this merge, before the r56
+       cleanup):
+       - #1329 (Fritchii EXP61, which our v5.8 review had skipped at 0-10 empty flushes a second
+         here) is in through upstream. The 'Scheduler per second' line's empty-flush field is
+         upstream's 'empty flushes skipped' (FlushCommands only), so it doesn't compare one to
+         one with r55's.
+       - EDEN_NX2_PRELOAD_ALL_PIPELINES=1 (nx2_switches.txt) still builds every cached pipeline
+         at boot and overrides the new "Build all cached shaders before game start" checkbox.
+         Built pipelines are kept up to a quarter of the RAM (~28k on 32 GB) instead of
+         LICHII_KEEP_PIPELINES; an evicted one used again is built from its kept SPIR-V.
+       - The first boot re-lowers every shader cache v2 program record (the lowering stamp
+         changed with #1347/#1363/#851; a few seconds, logged) and the AMD driver cache starts
+         cold, as with every new build.
+       - The overlay is upstream's redesign (#1345) with our yellow FSR/FG line under its
+         footer; generated frames show as 'FG +N'. The first launch switches the theme to
+         Lichii Dark and shows a What's new dialog, once each (#1365).
+       - HDR output (#1326) is Off by default; AMD frame generation is off while HDR presents
+         (the status bar then misreads it as RESTART; cosmetic). With HDR Off the game is now
+         told the monitor's peak and Windows' SDR white level instead of 400 and 203 nits:
+         worth a glance at Ocarina's HUD brightness.
+       - AMD drivers may overallocate device memory (#1335): a full 16 GB heap spills over
+         OCuLink instead of failing allocations. nxformat is linked statically (#1232).
+     - The owner's power-mode sitting stays on r55 (no new build), so it compares with the
+       earlier r55 runs. The r56 cleanup (r55 defaults, the decided switches made permanent)
+       goes on top of this merge.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

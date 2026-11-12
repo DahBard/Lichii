@@ -139,8 +139,8 @@ def main(path):
                     busy = part.split("=")[1].split()[0]
                     if busy != "unavailable":
                         zones[(m.group(1), "(CPU busy)")].append(float(busy))
-        m = re.match(r"Scheduler per second: (\d+) submits, (\d+) render passes, (\d+) finishes "
-                     r"waiting ([\d.]+) ms", msg)
+        m = re.match(r"Scheduler per second: (\d+) submits, (?:\d+ empty flushes skipped, )?(\d+) render "
+                     r"passes, (\d+) finishes waiting ([\d.]+) ms", msg)
         if m:
             sched.append(tuple(float(x) for x in m.groups()))
         m = re.match(r"Staging traffic per second: ([\d.]+) MiB uploaded through the stream buffer, "
