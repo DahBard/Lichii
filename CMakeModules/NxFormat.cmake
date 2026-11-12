@@ -23,9 +23,15 @@ function(lichii_find_nxformat)
     set(tag V1.0.3)
     set(root "${LICHII_NXFORMAT_ROOT}")
     if (NOT root)
-        if (WIN32 AND ARCHITECTURE_x86_64)
+        if (WIN32 AND ARCHITECTURE_x86_64 AND MSVC)
             set(platform windows-x64)
             set(sha256 f96148cf062adaa0aed3069945f08e1d7537e38d490f714f3bb27767fc297066)
+        elseif (WIN32)
+            # The Windows release is a static library for the MSVC runtime (type_info, __chkstk,
+            # _fltused), which a MinGW link can't resolve.
+            message(WARNING "NX converter disabled: nxformat's Windows library is built for MSVC "
+                            "and doesn't link with MinGW. Loading .nx games is not affected.")
+            return()
         elseif (APPLE)
             set(platform macos-universal)
             set(sha256 b61fecfad224d2f0b6a040c23663e5f6915eb500be9fc36016e3ffcb0aa66e52)
