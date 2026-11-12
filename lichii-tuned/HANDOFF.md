@@ -1972,6 +1972,23 @@ Own changes:
      or also its slowest 1% of frames at 45+ (nothing passes; that needs a stutter hunt, not
      option 1). If the first: r56 with the defaults (ab-40 only if it beats them beyond the
      noise), then the merge.
+   - Upstream merge 2 (started 2026-11-12; the owner asked for it while the full-power analysis
+     ran): nx2 `2eb5f081c` (30 commits on `17baed716`) into r22-r55 `91968a4dd` on branch
+     `r22-merge-nx2b`. Among them: #1095 (3D state registers in one call), #1332 (GpuSplit front
+     and back cache lines), #1329 (Fritchii EXP61), #1334 and #1337 (pipelines kept to a RAM
+     limit, rebuilt from kept SPIR-V), #1325, #1333, #1335 (AMD memory overallocation), #1327 and
+     #1331 (dynarmic), #1320, #1347, #1363 and #851 (shader translator), #1326 (HDR output),
+     #1345, #1365 and #1371 (overlay, theme, game list), #1313 (Ocarina guard house freeze
+     patch), #852, #889. The trial merge leaves 25 conflicted files (52 hunks:
+     vk_pipeline_cache.cpp 12, vk_scheduler.cpp 5, vk_swapchain.cpp 4, performance_overlay.cpp 3)
+     and 41 more files changed on both sides that merged cleanly. Resolved by area (pipeline
+     cache; GPU threads and 3D engine; memory, CPU and build; presentation and HDR; frontend and
+     settings), each but the small memory/CPU/build area reviewed by a second agent; notes in the
+     session scratchpad (merge2/).
+     - Owner (2026-11-12): adopt upstream's shader translator changes, and by default merge
+       upstream commits that change shaders. PreparationVersion stays: new builds have started
+       with a cold AMD driver cache anyway, which the owner accepted on 2026-11-10 ("Loading
+       shaders slowly once per build upgrade is a fine price to pay").
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

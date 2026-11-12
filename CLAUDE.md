@@ -14,6 +14,9 @@ build 132 has no graphics shader preparation.
 Priorities (owner, 2026-11-10):
 - Upstream Lichii (zortos293/Lichii: nx2 and its pull requests) comes first. Where our code and
   upstream's do the same thing, upstream's wins.
+- Upstream's shader translator changes are merged by default (owner, 2026-11-12). They don't raise
+  PreparationVersion: new builds have started with a cold AMD driver cache anyway, and the owner
+  accepts slow shader loading once per build (2026-11-10).
 - Fritchii (Frizti/Lichii, branch `oot-gather-fix`, tags `fritchii-v*`): only features with a large
   benefit for this setup or for Ocarina.
 - CheezerWheezer/CheezyEmu: its FSR, FSR frame generation and Radeon optimizations, if they meet our
@@ -41,7 +44,8 @@ Then (owner, 2026-11-12; the options are in HANDOFF's next steps), in this order
    do option 1 first.
 2. Merge with upstream Lichii right after that stable build. Don't wait for Zortos's
    multithreaded GPU back thread; option 2 (the same thing) is dropped, and his version comes
-   in with a later merge once it is released.
+   in with a later merge once it is released. The owner had it started on 2026-11-12, before
+   option 3's verdict (nx2 `2eb5f081c`, branch `r22-merge-nx2b`).
 3. After the merge, critically review Fritchii's new commits for anything worth adding.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
