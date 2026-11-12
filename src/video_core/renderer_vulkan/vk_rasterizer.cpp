@@ -4012,8 +4012,13 @@ void RasterizerVulkan::ReadOcarinaActors(std::vector<OcarinaActorMesh>& meshes) 
         const u64 key = OcarinaMeshKey(now.vertex, now.indices, now.index_count, now.base_vertex,
                                        now.layout);
         if (oot_live_dlss && oot_live_dlss->HasActorMesh(key)) {
-            meshes.push_back({now.layout, key, {}, {}, now.origin, before->origin, now.bones,
-                              before->bones});
+            OcarinaActorMesh& mesh = meshes.emplace_back();
+            mesh.layout = now.layout;
+            mesh.key = key;
+            mesh.current_origin = now.origin;
+            mesh.previous_origin = before->origin;
+            mesh.current_bones = now.bones;
+            mesh.previous_bones = before->bones;
             continue;
         }
         std::vector<u16> indices(now.index_count);
@@ -4033,8 +4038,15 @@ void RasterizerVulkan::ReadOcarinaActors(std::vector<OcarinaActorMesh>& meshes) 
         for (u16& index : indices) {
             index -= minimum;
         }
-        meshes.push_back({now.layout, key, std::move(vertices), std::move(indices), now.origin,
-                          before->origin, now.bones, before->bones});
+        OcarinaActorMesh& mesh = meshes.emplace_back();
+        mesh.layout = now.layout;
+        mesh.key = key;
+        mesh.vertices = std::move(vertices);
+        mesh.indices = std::move(indices);
+        mesh.current_origin = now.origin;
+        mesh.previous_origin = before->origin;
+        mesh.current_bones = now.bones;
+        mesh.previous_bones = before->bones;
     }
     static u64 logged_frame = 0;
     if (render_trace_frame >= logged_frame + 600) {
@@ -4256,7 +4268,9 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
     }
     depth_scope.reset();
     // Without Link's pose the mesh stays empty and the motion comes from the camera alone.
-    std::vector<OcarinaActorMesh> meshes;
+    std::vector<OcarinaActorMesh>& meshes = oot_meshes;
+    meshes.clear();
+    meshes.reserve(MaxOcarinaActors);
     {
         const VideoCommon::Nx2Profile::Scope actors_scope{VideoCommon::Nx2Profile::Zone::FsrActors};
         ReadOcarinaActors(meshes);

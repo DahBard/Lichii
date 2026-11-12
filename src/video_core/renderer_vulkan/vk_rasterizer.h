@@ -399,6 +399,8 @@ private:
     /// frame generation), at most MaxOcarinaActors a frame.
     std::vector<OcarinaActorPose> oot_actors;
     std::vector<OcarinaActorPose> oot_previous_actors;
+    /// This frame's meshes, kept between frames so their memory (two poses each) is reused.
+    std::vector<OcarinaActorMesh> oot_meshes;
     u64 oot_actors_frame{};
     static constexpr size_t MaxOcarinaActors = 64;
     u64 render_trace_frame = 0;
