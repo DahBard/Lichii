@@ -1972,6 +1972,98 @@ Own changes:
      or also its slowest 1% of frames at 45+ (nothing passes; that needs a stutter hunt, not
      option 1). If the first: r56 with the defaults (ab-40 only if it beats them beyond the
      noise), then the merge.
+   - Full-power sitting (2026-11-12, sitting 3): fn1 (N), fa1 (ab-40), fa2 (ab-40), fn2 (N) on the
+     right cord, then verify-r55. Four analysts and two challengers who recomputed every number
+     with their own code; dataset, scripts and notes in the session scratchpad (r55-full/).
+     - Not a clean full-power test. All four clock trace start lines read power mode "best power
+       efficiency" (user-configured), boost "efficient enabled" (3), E-core EPP 75; sittings 1-2
+       read "best performance", aggressive (2), EPP 33/33. The trace reads these from the active
+       plan (Balanced) itself, so something rewrote the plan's values with the mode (the owner,
+       Lenovo's software or Windows; the log can't tell). In play the package drew 36.5-37.2 W of
+       82-87 W and followed the clock (r +0.94): no power limit. P-cores 3.80-4.02 GHz (all six
+       4.43-4.46 at boot), E-cores 1.11-1.19 GHz (2.98-3.23 at 35 W, 3.9-4.3 at boot). Full power
+       with best performance has never been measured. Lichii already opts its process out of
+       power throttling at startup, so the E-core clock is the power mode's.
+     - Sitting 3 was slower, not faster: -3.2 fps on matched medium stretches (arms pooled, exact
+       p 0.012, 4 vs 7 runs; N -4.8, ab-40 -1.9). The back's work a frame stayed (N -0.2 +/- 0.9
+       ms) or fell (ab-40 -1.2 +/- 0.6), but it slept 1.9-2.0 ms more a frame: the guest cores run
+       ~25-30% of the time on E-cores (busiest guest core +6-12% work a frame, mostly its lower
+       clock), and map+unmap was slow (~370-580 us a call, 75 in base). Power mode and session
+       can't be separated.
+     - The back is still the slowest thread by work (63 of 65 steady windows, 191 of 202 medium
+       seconds), but sleeps 5-7 ms of each 18.5-21 ms medium frame (3.3-4.5 at 35 W). Its work
+       barely follows its clock: +10% clock, 0-7% less work.
+     - Medium bands re-set on fn1+fn2 come out the same (12.02/14.94 ms); no verdict changes.
+     - Reading 1 (every medium 10 s window at a median of 50+, in every run of the arm):
+       - N fails by 0.7: fn1 has 2 of 7 windows at 49.3 (map/unmap 135-193 ms/s); fn2 51.8.
+       - ab-40 passes by 1.0 (fa2 51.0, fa1 54.1), inside the window's 90% bootstrap (49.0-52.6)
+         and the 2.5-4 fps by which two runs of one arm differ. It fails with the per-second
+         median (48.1), mean fps (44.7), a draws band around 1700 (41.7) and on same-route
+         stretches (43.1 in fa1's post-load A+7, 48.5 elsewhere).
+       - At 35 W (best performance) the same window test passed base by 5.2 and ab-40 by 3.8:
+         nothing credits option 3.
+     - Reading 2 (also 1% lows at 45+): fails everywhere. No steady window of any intensity in
+       the 14 runs reaches 45 (best 40.2, light play at 35 W); medium windows 8.3-35.2 at full
+       power (base and ab-40 at 35 W: 10.4-38.3). The slowest 1% of medium frames (median
+       43-46 ms, 2.1x the median frame): 56-62% isolated spikes with no logged cause, 18-29%
+       runs of 3+ in back-heavy seconds, 10-17% during a zero-page pass (+4.2 ms a frame, se
+       1.1; ab-25 on r54 had put these hitches on the loads), none from pipeline builds.
+       Map+unmap time predicts them best; 5-13% of slow presents waited on the GPU. Option 1
+       would not fix most of them.
+     - ab-40 vs N: -3.7% frame time at matched content (95% -7.8..+0.4, df 4), -2.4% without
+       fn1, ~+1-2 fps at medium; all 60 model variants negative, but 2+2 runs can't reach
+       p < 1/3, and the gain sits in area C and fn1's slow area-B stretch only. With sitting 1:
+       -4.2% (-6.8..-1.5) only if the drift is modelled and ab-37/39 equal N (untested). The
+       gain is shorter waits (idle polls -44%, P-cores +0.28 GHz at equal busy share); the
+       back's own work change can't be told from 0. Not beyond the noise.
+     - Light: ab-40 holds 60 (lowest window 59.5), N dips to 55.9. Heavy: 41.7-44.8 fps.
+     - Noise: sigma ~1.5% (uncapped) / 2.0% (medium) per run with drift and mapping removed
+       (df 4), 3.9% without. A 4% effect needs ~4 runs per arm interleaved in one sitting (6 at
+       2% sigma), a 2% effect 10-17.
+     - verify-r55 (5.75 min, 2,770 frames, 2.92 M draws, 1.45 M delta draws): not clean as
+       written (r55-full/verify/verify_check.py).
+       - Uniform keeps (upstream #949, a4f628732; on since r52, never checked before: verify-r51
+         and -r52 resolved every delta draw in full): at least 81 mismatches in 3.23 M. Of the
+         53 logged, 52 'is no longer streamed' (vertex slot 14, 0x1b0/0x180 bytes; likely the
+         GPU-modified tracker's 4 KiB pages, unproven) and 1 'changed since the previous draw'
+         (stage 4 slot 4 at 0x3e83d200+0x70, 70.96 s: stale data unless the slot's address or
+         size differed). At least 28 were never logged.
+       - Nx2Perf: async_pipelines shader f4d442994f7f5eee worker SPIR-V differs (277.2 s; the
+         GPU thread's was used). The reference is emitted first from the same IR program, which
+         emission writes into, so the cause is unknown.
+       - Clean: delta descriptors 1,456,128 draws 0 mismatches (#16's textures); bank mode 2 0
+         missed, 0 bitsets missed (2.60 M binds); read downloads 0 bytes (183); geometry 0
+         (2.91 M). Not a criterion, but up: mode 3 'without the frame check' 14 page changes
+         after loads (verify-r52 1). No device loss, faults or memory traces.
+     - Decision: as measured, option 3 fails the rule under both readings, so option 1 comes
+       first, unless one power-mode sitting (the only part of option 3 not measured at full
+       power) passes reading 1. Asked the owner (2026-11-12) for, on r55 with no new build and
+       Windows' power mode on Best performance (plugged in; Lenovo Vantage/Fn+Q not in battery
+       saving): perf-trace-noprofile; then EPP 0 and boost aggressive (powercfg PERFEPP and
+       PERFEPP1 0, PERFBOOSTMODE 2, /setactive SCHEME_CURRENT) and perf-trace-noprofile twice;
+       then the noted values back and perf-trace-noprofile. Pass = both best-performance runs
+       hold every medium window at 50+ with the lowest ~53+ and the stretches at 50+: then r56
+       at once. The EPP 0 pair says whether the extra clock helps (its start line must read
+       "energy performance preference 0 (EfficiencyClass 1: 0)", and P-cores should reach
+       ~4.3 GHz, E-cores ~3+).
+       - r56: r55's defaults, no option-3 arm. ab-40 and ab-41 stay as launchers (off) for a
+         best-performance A/B; ab-38 goes with EDEN_NX2_PIN_GPU_THREADS=2; the ab-37/39
+         launchers go (their switches are ab-40's parts).
+       - The cleanup as planned: bank bitsets, #1306/#1311, QUICK, CONTIG and FoldInstance
+         unconditional; #1161 reports stay; the trims and the translation cache go; the
+         zero-page trim stays.
+       - #16, #1216 and #1161 draws stay on (neither failure is in their code; the delta
+         descriptor check passed); their switches go once a verify with all three off
+         (EDEN_NX2_TEST_1161_HANDLES=0, EDEN_NX2_TEST_1216=0, EDEN_NX2_TEST_1161_DRAWS=0) shows
+         the keep mismatches at the same rate (~2 per 100k keeps). If they vanish, the switches
+         stay (on) until the cause is found.
+       - Merge 2 is under way: do the cleanup on top of it so its conflicts are resolved once,
+         and option 1 on the merged tree (#1095 sets the 3D state registers in one call, the
+         path option 1 changes), after a look at Zortos's multithreaded back thread if public.
+     - Still open for the owner: which reading applies, and the optional verify with the three
+       ports off. Under reading 2, option 1 alone won't reach the target: it also needs a
+       stutter hunt (an EDEN_NX2_STUTTER_TRACE=1 run, the mapping cost, an unprofiled
+       EDEN_NX2_ZERO_TRIM=0 A/B); the owner orders the two.
    - Upstream merge 2 (started 2026-11-12; the owner asked for it while the full-power analysis
      ran): nx2 `2eb5f081c` (30 commits on `17baed716`) into r22-r55 `91968a4dd` on branch
      `r22-merge-nx2b`. Among them: #1095 (3D state registers in one call), #1332 (GpuSplit front
