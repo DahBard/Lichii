@@ -520,18 +520,9 @@ const WindowsCpuSets& CpuSets() {
         constexpr size_t MinPerformanceProcessors = 8;
         const bool few_performance = result.performance.size() < MinPerformanceProcessors;
         result.hybrid = !result.efficiency.empty() && !few_performance;
-        if (!result.efficiency.empty() && few_performance) {
-            LOG_INFO(Common,
-                     "Hybrid CPU with {} performance logical processors (fewer than {}): "
-                     "threads are left to Windows",
-                     result.performance.size(), MinPerformanceProcessors);
-        }
-        if (result.hybrid) {
-            LOG_INFO(Common,
-                     "Hybrid CPU: {} performance and {} efficiency logical processors, "
-                     "time-critical threads stay on the performance cores",
-                     result.performance.size(), result.efficiency.size());
-        }
+        // Upstream logs its placement here. This fork places threads in windows/hybrid_cpu.cpp,
+        // which logs the CPU itself, and only the GPU thread pinning plan reads these sets, so
+        // those lines would contradict what happens.
         return result;
     }();
     return sets;
