@@ -62,6 +62,19 @@ Then (owner, later on 2026-11-12):
   review took (CheezyEmu's kept FSR mesh list); the review's findings are in HANDOFF. The
   scheduled resume task that carried the work across the owner's usage windows is deleted.
 
+Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smoothest" build so far,
+"lets keep improving it"):
+- AMD FSR frame generation doesn't run while HDR output is active (r58 logs with HDR Auto and
+  Off): "Find out why and apply a patch."
+- Plan and execute a merge with upstream Lichii up to build 169, and to 170 if it is released
+  before the merge is finished. Build N is run #N of upstream's release-binaries workflow
+  ("169 is in the release binaries"); only some runs get a `build-N` tag.
+- The optional tests (verify-ports-off, the texture-cache session) are put off. A pgo-train
+  profile comes after upstream's multithreading update, not before.
+- A scheduled task ("Resume Lichii work") resumes this session at the owner's usage renewals
+  (minute 11 after 00:10, 05:10, 10:10, 14:10 and 19:10 UTC) until this work is done, as the
+  owner asked on 2026-11-12 ("When my usage runs out, resume when it renews ... etc.").
+
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
 
