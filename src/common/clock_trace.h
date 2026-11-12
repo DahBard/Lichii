@@ -4,6 +4,9 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #include "common/common_types.h"
 
@@ -15,7 +18,8 @@
 /// clock, CPU time split into polls and work, share on P-, E- and low-power E-cores and
 /// migrations, each core class's load, utility and clock, package power, the power mode and the
 /// battery. Read on first use, so nx2_switches.txt
-/// can set it too. With it unset each hook is a call that returns at once and nothing else runs.
+/// can set it too. With it unset each hook is a call that returns at once and nothing else of the
+/// trace runs.
 namespace Common::ClockTrace {
 
 /// Whether EDEN_NX2_CLOCK_TRACE is set and this host supports the trace (read once).
@@ -47,5 +51,30 @@ void UnregisterThread(Slot* slot);
 void StartSession();
 /// Stops and joins it (Core::System::ShutdownMainProcess): the next session starts clean.
 void StopSession();
+
+/// Windows' power settings as LogPowerMode reads them ("n/a", or nothing, where Windows doesn't
+/// say).
+struct PowerSettings {
+    std::string mode;      ///< The power mode in effect (Settings > System > Power & battery)
+    std::string user_mode; ///< The mode the user chose for the current power source
+    std::string_view ac;   ///< AC power: "on", "off" (battery) or "unknown"
+    std::string plan;      ///< The active power plan's name
+    std::optional<u32> boost_mode;   ///< The plan's base AC processor boost mode
+    std::optional<u32> preference;   ///< Its base AC energy performance preference
+    std::optional<u32> preference_1; ///< The same for EfficiencyClass 1 (the P-cores)
+};
+
+/// LogPowerMode's line for `settings`.
+[[nodiscard]] std::string PowerModeLine(const PowerSettings& settings);
+/// Whether `settings` are "best power efficiency" on AC power, the mode in which Windows held the
+/// laptop's E-cores at about a third of their clock (r55, sitting 3).
+[[nodiscard]] bool PowerModeSlowsCores(const PowerSettings& settings);
+
+/// Once per emulation start (VideoCore::CreateGPU), with or without the trace: one HW_GPU line
+/// with the power mode, the user-configured one for the current power source, AC power or
+/// battery, the plan's name and its base boost mode and energy performance preferences, read
+/// with the trace's own power code, and a warning when PowerModeSlowsCores. Windows on x86-64,
+/// as the trace; nothing elsewhere.
+void LogPowerMode();
 
 } // namespace Common::ClockTrace

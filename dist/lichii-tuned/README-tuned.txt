@@ -353,6 +353,10 @@ below), plus:
      longer) and ab-39 are gone; ab-40 and ab-41 stay for a later A/B in Best performance, and
      EDEN_NX2_PIN_GPU_THREADS=0 or 1 still overrides the "Pin GPU threads to their own cores"
      setting for one run.
+   - Each game start logs Windows' power mode next to the "TEST switches in effect" line: the
+     mode in effect and the one chosen in Settings, AC power or battery, the power plan and its
+     boost mode and energy performance preferences ("Windows power mode" line). In "best power
+     efficiency" on AC power a warning follows it (see the settings below).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines

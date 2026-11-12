@@ -145,6 +145,7 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
         auto renderer = CreateRenderer(system, emu_window, *gpu, std::move(context));
         gpu->BindRenderer(std::move(renderer));
         LogTestSwitches(system);
+        Common::ClockTrace::LogPowerMode();
     } catch (const std::runtime_error& exception) {
         scope.Cancel();
         LOG_ERROR(HW_GPU, "Failed to initialize GPU: {}", exception.what());

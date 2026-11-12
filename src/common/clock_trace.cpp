@@ -4,8 +4,11 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <mutex>
+
+#include <fmt/format.h>
 
 #include "common/clock_trace.h"
 #include "common/common_types.h"
@@ -24,7 +27,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
-#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -34,8 +36,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#include <fmt/format.h>
 
 #include <windows.h>
 #include <pdh.h>
@@ -101,6 +101,15 @@ void PublishTo(Slot& slot) {
         slot.migrations.store(slot.migrations.load(std::memory_order_relaxed) + 1,
                               std::memory_order_relaxed);
     }
+}
+
+std::string_view BoostModeName(u32 mode) {
+    static constexpr std::array<std::string_view, 7> names{
+        "disabled",           "enabled",
+        "aggressive",         "efficient enabled",
+        "efficient aggressive", "aggressive at guaranteed",
+        "efficient aggressive at guaranteed"};
+    return mode < names.size() ? names[mode] : "unknown";
 }
 
 #if LICHII_CLOCK_TRACE
@@ -185,15 +194,6 @@ std::string OverlayName(const GUID& overlay) {
         return "best performance";
     }
     return GuidText(overlay);
-}
-
-std::string_view BoostModeName(DWORD mode) {
-    static constexpr std::array<std::string_view, 7> names{
-        "disabled",           "enabled",
-        "aggressive",         "efficient enabled",
-        "efficient aggressive", "aggressive at guaranteed",
-        "efficient aggressive at guaranteed"};
-    return mode < names.size() ? names[mode] : "unknown";
 }
 
 /// powrprof.dll, loaded rather than linked: PowerGetEffectiveOverlayScheme is not in every SDK.
@@ -1314,6 +1314,65 @@ void StopSession() {
 #if LICHII_CLOCK_TRACE
     std::scoped_lock lock{g_session_mutex};
     g_sampler.reset();
+#endif
+}
+
+std::string PowerModeLine(const PowerSettings& settings) {
+    const std::string_view source = settings.ac == "on"    ? "on AC power"
+                                    : settings.ac == "off" ? "on battery"
+                                                           : "power source unknown";
+    const std::string boost =
+        settings.boost_mode
+            ? fmt::format("{} ({})", BoostModeName(*settings.boost_mode), *settings.boost_mode)
+            : std::string{"n/a"};
+    std::string preference = settings.preference ? fmt::format("{}", *settings.preference)
+                                                 : std::string{"n/a"};
+    if (settings.preference_1) {
+        fmt::format_to(std::back_inserter(preference), " (EfficiencyClass 1: {})",
+                       *settings.preference_1);
+    }
+    return fmt::format("Windows power mode \"{}\" (user-configured \"{}\"), {}, power plan "
+                       "\"{}\"; the plan's base AC values (the power mode may change them): "
+                       "boost mode {}, energy performance preference {}",
+                       settings.mode, settings.user_mode, source, settings.plan, boost,
+                       preference);
+}
+
+bool PowerModeSlowsCores(const PowerSettings& settings) {
+    // The mode in effect; the chosen one where Windows doesn't say which is.
+    const std::string& mode = settings.mode != "n/a" ? settings.mode : settings.user_mode;
+    return settings.ac == "on" && mode == "best power efficiency";
+}
+
+void LogPowerMode() {
+#if LICHII_CLOCK_TRACE
+    const auto start = std::chrono::steady_clock::now();
+    const PowerApi api;
+    const PowerState state = ReadPowerState(api);
+    PowerSettings settings{
+        .mode = state.mode, .user_mode = state.user_mode, .ac = state.ac, .plan = "n/a"};
+    if (const auto scheme = api.ActiveScheme()) {
+        const auto value = [&](const GUID& setting) -> std::optional<u32> {
+            if (const auto index = api.AcValue(*scheme, setting)) {
+                return static_cast<u32>(*index);
+            }
+            return std::nullopt;
+        };
+        settings.plan = api.SchemeName(*scheme);
+        settings.boost_mode = value(BoostModeSetting);
+        settings.preference = value(PreferenceSetting);
+        settings.preference_1 = value(PreferenceSetting1);
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    LOG_INFO(HW_GPU, "{}; read in {:.2f} ms", PowerModeLine(settings), ms);
+    if (PowerModeSlowsCores(settings)) {
+        LOG_WARNING(HW_GPU,
+                    "Windows power mode is \"best power efficiency\" on AC power: in that mode "
+                    "Windows runs the E-cores at about a third of their clock, and Lichii runs "
+                    "slower. Settings > System > Power & battery > Power mode > Best performance "
+                    "(plugged in) fixes it");
+    }
 #endif
 }
 
