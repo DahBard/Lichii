@@ -128,8 +128,7 @@ Topology Detect() {
     const BYTE bottom = std::ranges::min_element(cpus, by_class)->efficiency;
     if (top == bottom) {
         for (const Cpu& cpu : cpus) {
-            topology.classes.push_back(
-                {cpu.group, cpu.number, CoreClass::Uniform, cpu.efficiency, cpu.id});
+            topology.classes.push_back({cpu.group, cpu.number, CoreClass::Uniform, cpu.efficiency});
         }
         LOG_INFO(Common, "CPU: {} logical processors of one core type, no core placement",
                  cpus.size());
@@ -168,7 +167,7 @@ Topology Detect() {
                                     cpu.efficiency == top ? CoreClass::Performance
                                     : usable              ? CoreClass::Efficient
                                                           : CoreClass::LowPower,
-                                    cpu.efficiency, cpu.id});
+                                    cpu.efficiency});
     }
 
     const Policy policy = ReadPolicy();

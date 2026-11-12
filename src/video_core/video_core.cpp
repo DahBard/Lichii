@@ -95,9 +95,7 @@ void LogTestSwitches(const Core::System& system) {
     fmt::format_to(std::back_inserter(line),
                    ", pin_gpu_threads {} ({}{}), LICHII_UMWAIT_C02 {}, UMWAIT {}, "
                    "EDEN_NX2_IDLE_SPIN_US {} ({}), EDEN_NX2_CLOCK_TRACE {}",
-                   !pin                              ? "off"
-                   : Common::PinGpuThreadsOnly()     ? "GPU threads only"
-                                                     : "on",
+                   pin ? "on" : "off",
                    Common::PinGpuThreadsFromEnvironment() ? "EDEN_NX2_PIN_GPU_THREADS" : "setting",
                    !pin                                  ? ""
                    : Common::GpuThreadPinningApplies()   ? ", applied"

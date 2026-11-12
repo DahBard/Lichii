@@ -34,7 +34,6 @@ struct ClassifiedProcessor {
     u8 number; ///< In the group, as GetCurrentProcessorNumberEx and PDH ("group,number") give it
     CoreClass core_class;
     u8 efficiency_class; ///< The CPU set's EfficiencyClass (higher is faster)
-    u32 cpu_set_id;      ///< For SetThreadSelectedCpuSets
 };
 
 /// Every logical processor with its class; empty without CPU set information.
