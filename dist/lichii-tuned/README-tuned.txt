@@ -361,12 +361,20 @@ below), plus:
      streamed, and changed since the previous draw because the slot read another range or the
      command buffer is older (the keep itself refuses both) or because the bytes are stale. Each
      kind logs its first 16 every 600 frames.
+   - verify-ports-off is verify-r55 with the switches of ab-26, ab-29 and ab-36 off: if the
+     uniform keep mismatches stay at verify-r55's rate, they don't come from those three ports,
+     and their switches can go.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
    Bounded, VRAM usage Aggressive, and "Ocarina of Time anti-aliasing" = No sharpening
    (Graphics settings; "Game" brings the game's network back). Help > Apply Recommended
    Settings keeps these.
+ * Windows power mode: Best performance while plugged in (Settings > System > Power & battery >
+   Power mode). In "best power efficiency" the clock trace showed the E-cores at 1.1 GHz, and
+   Lichii ran slower. Energy performance preference 0 is optional, a small gain: powercfg
+   /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFEPP 0, the same for PERFEPP1, then
+   powercfg /setactive SCHEME_CURRENT.
 
 The "msvc" download is the same source built like the official MSVC build (MSVC, no PGO, no
 CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
@@ -448,6 +456,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
  verify-r55.bat               verify-r52 without resolving repeat draws in full, so they run and
                               the delta descriptor and uniform keep checks check them (their
                               mismatches should stay 0, as verify-r52's); slower
+ verify-ports-off.bat         verify-r55 with three ports off, #1161's computed-handle delta
+                              draws, #1216 and #1161's other repeat draw changes
+                              (EDEN_NX2_TEST_1161_HANDLES=0, EDEN_NX2_TEST_1216=0,
+                              EDEN_NX2_TEST_1161_DRAWS=0): whether the uniform keep mismatches
+                              depend on them; slower
  verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and
                               bitsets missed, "Read download check" differing bytes, fast draw,
                               delta descriptor and uniform keep mismatches should stay 0, no
