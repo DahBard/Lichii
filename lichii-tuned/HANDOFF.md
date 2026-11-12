@@ -1882,8 +1882,22 @@ Own changes:
      - Reviews: the assembly review fixed a use-after-free in the heap trace (a stopped
        session's globals), launchers without the heap trace, missing switch-line entries and
        three CI problems. Option 3: workflow `wv9q5mza3` (implement, code and measurement
-       reviews: 22 findings, all addressed in 11 commits); its fixes were re-reviewed in
-       `wuy4loezg`.
+       reviews: 22 findings, all addressed in 11 commits). Its fixes were re-reviewed in
+       `wuy4loezg`, resumed as `w1aj6a2el` after an interrupt (four lenses, a refuter each): no
+       crash, hang or API-contract defect, nothing changes with the variables unset (the hooks
+       cost ~2-3 us a frame), and 6 confirmed findings that are all log or doc text (ab-38 keeps
+       only the Performance- and Fastest-role threads off the GPU threads' cores, ab-39's rem,
+       the switch line when UMWAIT is off, two stale CpuSets() log lines, which launchers log the
+       clock trace). They are fixed on `r22-r55` after the build (`9c5081c39`..`91968a4dd`), so
+       r55 doesn't have them; r56 does. In ab-38's log, ignore "Hybrid CPU with 6 performance
+       logical processors (fewer than 8): threads are left to Windows": hybrid_cpu.cpp places
+       the threads.
+     - Run #55 passed (00:37 UTC on 2026-11-12): `lichii-tuned-r55-pgo-lto`, `-pgo`,
+       `-pgo-train` and their `-symbols`. The PGO step cut pgo-r49 to dump 34 of 34 (40,178
+       functions) and merged it 70:1 ("1 cut, 0 whole"). Tests run 6: 1225 pass; the clock
+       trace's test ran on the windows-2022 runner without a crash (2 start lines, 1 window line,
+       trace overhead 3.44 ms/s; PDH, the power plan and its values read; no power counters or
+       battery there).
      - Profile: r55 changes the back loop, Backoff and the idle path that pgo-r49 covers, so
        compare r55 only with its own baseline.
      - Test plan (frame generation AMD FSR 2x throughout):
