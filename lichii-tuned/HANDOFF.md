@@ -1932,6 +1932,20 @@ Own changes:
        r55 defaults) if verify-r55 is clean, since build C's A/B is skipped. Option 1 changes
        the draw path a multithreaded back would restructure, so look at Zortos's branch or pull
        request first, if it is public.
+   - Package power (2026-11-12): the laptop holds Lichii at 35 W. In all ten r55 logs the clock
+     trace reads 48-71 W in Lichii's first 10 s window (P-cores up to 4.5 GHz), then 34.8-35.0 W
+     in every heavier window to the end, one 38-41 W window per run aside; lighter windows fall
+     below it. The baseline at 27 s had all six P-cores 100% busy (shader preparation) at
+     3.38 GHz and 34.9 W; gameplay holds ~3.6 GHz at 35 W and ~70 °C. The owner's HWiNFO of
+     Cinebench on the same laptop: 80 W sustained at 100 °C (thermal throttling), PL1 (Dynamic)
+     82-87 W, PL1 (Static) 27 W, PL2 115 W, P-cores 4.27 GHz all-core. So the 35 W is a power
+     limit applied while Lichii runs (Intel's dynamic tuning with Lenovo's tables, or the play
+     setup: lid, external display, eGPU), not a light load. Round 18's HWiNFO note (package up to
+     ~80 W, Core Power Limit Exceeded 100%) was this limit; the 80 W was the start burst. Under
+     it, each watt a spin saves goes to the busy cores, which is likely ab-40's +0.2 GHz. Asked
+     the owner for HWiNFO's PL1 (Dynamic) and power-limit flags during play, and Cinebench in
+     the exact play setup. If the limit can be lifted, rerun the baseline and the best arm
+     uncapped before r56: the arms' gains are partly the limit's.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
