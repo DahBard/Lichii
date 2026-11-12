@@ -49,6 +49,19 @@ Then (owner, 2026-11-12; the options are in HANDOFF's next steps), in this order
    `r22-merge-nx2b`, now tuned4 and the base under the patch).
 3. After the merge, critically review Fritchii's new commits for anything worth adding.
 
+Then (owner, later on 2026-11-12):
+- Option 3 is done: the owner fixed the Windows power mode (Best performance; EPP 0 and boost
+  aggressive helped a little more, not significantly). "Use your best judgement on what to include
+  from option 3 considering the results of the best performance run."
+- Assume CI run #56 (r55 + merge 2) goes well. Review Fritchii's new commits (since
+  fritchii-v5.8.2) and CheezyEmu (cheezy/test since our port base `4baa89ec5`). Take only what is
+  highly likely to (1) noticeably reduce the number or severity of stutters, (2) reduce the GPU
+  back thread's frame times, or (3) greatly improve quality of life; for Fritchii also a large
+  benefit for this setup or for Ocarina.
+- "When my usage runs out, resume when it renews, and if it runs out again, resume again": a
+  scheduled task ("Resume Lichii fork review", every 2 h) resumes this session until the work is
+  done.
+
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
 
