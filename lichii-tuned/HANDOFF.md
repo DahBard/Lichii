@@ -37,7 +37,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 - Since 2026-11-12: branch `tuned` = upstream Lichii nx2 `2eb5f081c` (merged in `526c0ab1c`;
   `17baed716`, build 132 plus 31 commits, since round 22, merged in `2d9ea59c5`) + the workflow +
   this folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
-  `git diff --binary 2eb5f081c tuned4` (390 files, 2.9 MB), backed up in `tuned4.bundle` (`git
+  `git diff --binary 2eb5f081c tuned4` (384 files, 2.9 MB), backed up in `tuned4.bundle` (`git
   fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
   `2eb5f081c`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
@@ -98,10 +98,11 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
   `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`, builds A, B and r54 up to
   `cbe51e88a`, r55 up to `3bf40a3c2`, and nx2 `2eb5f081c` merged in `bd1ce62ff` with follow-ups up
-  to `d34bcee34` (the MinGW link fix), branch `r22-merge-nx2b`; pushing it doesn't trigger builds).
+  to `d34bcee34` (the MinGW link fix), branch `r22-merge-nx2b`, and the stable build r58 up to
+  `5fc428bdc`, branch `r22-r57`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `2eb5f081c`, as `tuned` does). The patch is `git diff --binary 2eb5f081c tuned4` (390 files,
+  `2eb5f081c`, as `tuned` does). The patch is `git diff --binary 2eb5f081c tuned4` (384 files,
   2.9 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
@@ -2171,6 +2172,54 @@ Own changes:
        from the tuned build. Rebuilt as run #57 (r55 + merge 2 + this fix): passed at 09:25 UTC
        in all three variants; tests run #8: 1279 of 1280 pass, 1 skipped as designed (the clock
        trace case without its variable), and the clock trace's own run on the runner passed.
+   - Stable build r58 (2026-11-12; branch `r22-r57`, tuned4 `5fc428bdc`; the owner, away, asked for
+     it: "assume that 56 goes well"). r55's defaults on merge 2, nothing else changes with the
+     variables unset. Workflow `w0lg7kxbd` (implement, behaviour and completeness reviews; one minor
+     README finding, fixed):
+     - Permanent, switches and launchers gone: QUICK (ab-28), CONTIG (ab-27), bank bitsets (ab-31),
+       #1306/#1311 (ab-35), FoldInstance (ab-30; upstream #1274 isn't in nx2 yet, so watch for its
+       switch coming back). Removed with their code: the per-draw trims and the translation cache.
+     - Option 3 trimmed: EDEN_NX2_PIN_GPU_THREADS=2 and ab-37/38/39 gone (=0/1 still override the
+       setting); KSPIN, ARB_SPIN, IDLE_SPIN_US, UMWAIT_C02, the clock trace and ab-15/20/40/41 kept.
+       Kept on and switchable: #16, #1216, #1161 draws and reports, the zero-page trim.
+     - New: a "Windows power mode" line at each game start (Windows x86-64; mode in effect, the
+       chosen one, AC, plan, boost, EPP; "read in N ms"), with a warning in best power efficiency
+       on AC. EDEN_NX2_UBO_KEEP_VERIFY counts mismatches by kind (no longer streamed; changed:
+       slot range, older command buffer, stale bytes) and logs 16 of each per 600 frames.
+       verify-ports-off.bat (verify-r55 with ab-26/29/36's switches off) settles whether the
+       keep mismatches depend on those ports. README-tuned: Best performance while plugged in,
+       EPP 0 optional.
+     - From CheezyEmu (`d399d2719`): Ocarina's FSR keeps its mesh list between frames (0d118d2d43's
+       remaining half), meshes built in place. With MinGW's libstdc++ the old per-frame vector
+       meant 6-7 heap blocks a frame, at 33+ meshes (two thirds of the owner's snapshots) one of
+       1,729,536 B from VirtualAlloc. Expected: the FSR actors zone (median ~730 us a frame in the
+       profiled r55 run) falls by about 0.2-0.7 ms; check it in the next profiled run
+       (fork-review/fsr_zones.py and actor_cost.py in the session scratchpad).
+   - Fork review (2026-11-12, workflow `w9qlr0wzt`, resumed as `ws5qag8rz` after the usage cut-off):
+     all 194 commits classified. Owner's bar: highly likely to cut stutters or the back thread's
+     time, or a great quality-of-life gain; for Fritchii also a large benefit here or for Ocarina.
+     - Fritchii v5.8.3-v5.8.4 (10 commits): nothing passes. A Saves window, settings text, DLSS
+       per game, and EXP47 (reads of clean GPU-written pages without the cache locks), which
+       v5.8.4 reverts.
+     - CheezyEmu (cheezy/test 6aaf9f243f, 184 commits since 4baa89ec5): 81 are upstream commits we
+       have, the rest cosmetic (25), other platforms (33), experiments shipped off (11),
+       diagnostics (13), docs (9), upstream #820 (we revert it: AMD tessellation crash) and 11
+       candidates in five groups. One take survived its skeptic: the FSR mesh list above.
+     - Refuted: upstream #1129 (texture collector cap on cards over 10 GiB). The collector's
+       Finish costs 0.08-0.22 ms a frame (0.5-1.2% of the back), and the gain needs usage to
+       settle below the raised threshold, which no log shows: usage refills to whatever the cap
+       allows within 12-20 s of a load. To test without code: EDEN_NX2_TC_EXPECTED_MIB=12122
+       EDEN_NX2_TC_CRITICAL_MIB=12890 with EDEN_NX2_TC_LOG=1, EDEN_NX2_GPU_PROFILE=1 and
+       EDEN_NX2_STUTTER_TRACE=1 for 20+ minutes with several area loads; take it only if usage
+       stays below expected, the texture_cache.h:221 Finishes stay near 0, commit left stays 3+ GB
+       at every load, nothing runs out of memory, and the back's busy time falls.
+     - Skipped: the buffer collector by idle bytes (a862c5d7de: the old rule's aggressive pass
+       runs every frame here, but the churn isn't measured and the change would push the texture
+       collector harder; revisit only with #1129 and EDEN_NX2_CHURN_LOG); #1161's remaining pieces
+       (low here); the 250 ms equal-acquire escape (a hang we can't reach); the 16 MiB storage
+       bindings for Ocarina's water and haze tiles (not seen by the owner); the limb motion
+       fixes for FSR/FG (more per-frame work, not reported); the ASTC/BC and texture age
+       changes; the AMD allocator callbacks (shipped off after two freezes).
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
