@@ -2066,6 +2066,42 @@ Own changes:
        ports off. Under reading 2, option 1 alone won't reach the target: it also needs a
        stutter hunt (an EDEN_NX2_STUTTER_TRACE=1 run, the mapping cost, an unprofiled
        EDEN_NX2_ZERO_TRIM=0 A/B); the owner orders the two.
+   - Best-performance run bp1 (2026-11-12, sitting 4; owner: "I figured out how to fix my power
+     situation"): r55 pgo-lto, default build, perf-trace-noprofile. Workflow `wzi5n6a45` (rule,
+     mechanism, a challenger with its own code); dataset r55-bp/, r55-bp-mech/ and r55-bp-review/
+     in the session scratchpad.
+     - Start line: power mode "best performance" (user-configured), boost efficient enabled (3),
+       EPP 33/33; all 27 windows unchanged. Steady play: P-cores 4.12 GHz, E-cores 3.79, back
+       4.13, guest cores 4.00 (base 3.66/3.15/3.65/3.49; sitting 3 3.80/1.13/3.82/3.03), package
+       53.0 W (45.6-57.4), no power cap (the P clock follows load). The P-cores still run 7.3%
+       below their 4.44 GHz all-core clock. During the shader preload something held the P-cores
+       at 2.4-2.9 GHz at 93-99% busy (package falling 62.9 -> 44.1 W; preload 31.3 s against
+       24-28): thermal or firmware, gone by 70 s; the log has no temperatures.
+     - Reading 1 passes. As the rule is written, 8 of 8 medium windows at 50+, lowest 52.1 (w7).
+       But bp1 ran area A 4 s late (draws curve fits base's at +4 s, r 0.997): w7 holds base's
+       heavy A+5.6..15.6 content. Content-matched, 7 of 7 medium windows reach 59.2+ (most at the
+       60 fps cap: median medium second 59.9) and every medium stretch 55.6+. One run: the margin
+       holds here; post-load windows still depend on the session's mapping state.
+     - Reading 2 fails, as in all 15 runs: medium 1% lows 6.1-37.1, best steady window 40.2.
+       75% of the dip excess falls within 20 s of an area load (A+14-17 s: ~150 MiB/s host
+       decompression and ~200 ms/s map+unmap; C+0-3.5 s: 318 ms/s map+unmap), 73% in runs of 3+
+       slow frames; the isolated spikes are ~31 ms. Post-load slow frames follow map+unmap time
+       (r +0.68 to +0.89).
+     - Gains (content-aligned, challenger): heavy -15.8% frame time vs base (43.4 -> 50.8 fps,
+       z -5.8; back work -2.0 ms and waiting -1.7 ms a frame) and -16.1% vs sitting 3; medium
+       -5.9% vs base, within noise (capped). The GPU back thread is still the slowest thread
+       (16 of 16 steady windows) and busy 86.5% of each heavy frame; its work scales with its clock
+       at about -0.65 to -0.95. The sampled GPU time also fell back to sitting 1's level (10.4 ms a
+       frame against base 12.8), so not all of the gain is the power mode's.
+     - Owner (2026-11-12): EPP 0 and boost aggressive (powercfg) were "even better", not
+       significantly; "satisfied with the results for 3". Projection for EPP 0 if it reaches the
+       all-core clock: +1 to +2 fps in heavy content, nothing in capped medium play.
+     - Option 3, decided (owner: "use your best judgement"): the stable build keeps bp1's defaults,
+       which passed. ab-40 stays an opt-in launcher with ab-41 (never beyond the noise: -2.4 to
+       -3.7% frame time in sitting 3, untested in best performance). ab-38's GPU-thread pinning
+       (EDEN_NX2_PIN_GPU_THREADS=2) goes with the ab-37/38/39 launchers; the clock trace stays a
+       diagnostic. The boot log gets one line with the Windows power mode and a warning when it
+       is "best power efficiency" on AC, the state that cost sitting 3 its E-core clocks.
    - Upstream merge 2 (started 2026-11-12; the owner asked for it while the full-power analysis
      ran): nx2 `2eb5f081c` (30 commits on `17baed716`) into r22-r55 `91968a4dd` on branch
      `r22-merge-nx2b`. Among them: #1095 (3D state registers in one call), #1332 (GpuSplit front
