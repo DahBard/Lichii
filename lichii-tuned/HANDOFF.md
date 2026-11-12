@@ -1897,11 +1897,13 @@ Own changes:
        - Sitting 2, build C, only if option 3 falls short (it feeds option 1): A B C C B A A B C
          with A = perf-trace-noprofile, B = ab-36 (#16 off), C = ab-26 (#1216 off), then
          perf-trace-fine once.
-   - Owner decisions (2026-11-12):
-     - Option 2 (the back thread split across two cores) is dropped: Zortos is writing a
-       multithreaded back thread for upstream Lichii. Merge it when it is released.
-     - If option 3 alone holds medium-intensity areas at a constant 50-60 fps, development stops
-       for now and the next step is that merge. If not, option 1, then the merge.
+   - Owner decisions (2026-11-12), in this order:
+     - Option 3 first. If it makes medium-intensity areas steady at 50-60 fps, integrate it into
+       a stable build. If not, option 1 first, then that stable build.
+     - Then merge with upstream Lichii at once, without waiting for Zortos's multithreaded back
+       thread. Option 2 (the back thread split across two cores) is dropped: his version comes
+       with a later merge once it is released.
+     - After the merge, a critical review of Fritchii's new commits for anything worth adding.
      - Medium intensity is the "steady medium play" row above: ~1700 draws/frame, 55-57 fps
        unprofiled on r54, so its average is already in range and the question is whether it
        holds. Reading used unless the owner says otherwise: the game's own frame rate (frame
@@ -1910,9 +1912,12 @@ Own changes:
        breaks it today: the slow spells after the second area's load (23-44 fps by session,
        the memory-mapping cost that r55's heap trace measures; option 3 does not target it)
        and scene loads.
-     - If an arm meets it: a last build with that arm as the default; the r56 cleanup waits
-       for the merge. Option 1 changes the draw path a multithreaded back would restructure,
-       so look at Zortos's branch or pull request first, if it is public.
+     - If an arm meets it: the stable build (r56) has that arm as the default and the r56
+       cleanup (proven switches made permanent, the trims and the translation cache removed),
+       which also shrinks the patch before the merge. #16 and #1216 then stay on (they are the
+       r55 defaults) if verify-r55 is clean, since build C's A/B is skipped. Option 1 changes
+       the draw path a multithreaded back would restructure, so look at Zortos's branch or pull
+       request first, if it is public.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

@@ -35,12 +35,14 @@ Then (owner, 2026-11-10), in this order:
    official Lichii builds.
 3. Once that merge is complete, analyze the newest Fritchii builds for anything worth taking.
 
-Then (owner, 2026-11-12; the options are in HANDOFF's next steps):
-- Option 2, splitting the GPU back thread across cores, is dropped: Zortos is writing a
-  multithreaded back thread for upstream Lichii. Merge it when it is released.
-- If option 3 alone holds medium-intensity areas (steady play at ~1700 draws a frame) at a
-  constant 50-60 fps, stop development for now and merge with upstream Lichii. If not, do
-  option 1 first, then merge.
+Then (owner, 2026-11-12; the options are in HANDOFF's next steps), in this order:
+1. Option 3. If it improves performance enough that medium-intensity areas (steady play at
+   ~1700 draws a frame) hold a steady 50 fps or more, integrate it into a stable build. If not,
+   do option 1 first.
+2. Merge with upstream Lichii right after that stable build. Don't wait for Zortos's
+   multithreaded GPU back thread; option 2 (the same thing) is dropped, and his version comes
+   in with a later merge once it is released.
+3. After the merge, critically review Fritchii's new commits for anything worth adding.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
