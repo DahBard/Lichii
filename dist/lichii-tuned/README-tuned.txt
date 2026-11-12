@@ -342,7 +342,8 @@ below), plus:
      loop among it), so comparing r55 with r54 needs a profile recorded with r55's pgo-train
      first. The "TEST switches in effect" line and the first "Clock trace" line show what each
      run had.
- * r57, the stable build: r55's defaults, without the test switches that are settled.
+ * r58, the stable build: r55's defaults, without the test switches that are settled, on
+   upstream Lichii nx2 2eb5f081c (r57 was that merge alone).
    - Permanent, without their A/B launchers: r51's small speedups and #717's check, r52's
      instance folding, the bank check's bulk skips and #1306.
    - Removed: r52's per-draw trims and per-thread GPU page translations, off since r55 (no gain
@@ -363,6 +364,11 @@ below), plus:
    - verify-ports-off is verify-r55 with the switches of ab-26, ab-29 and ab-36 off: if the
      uniform keep mismatches stay at verify-r55's rate, they don't come from those three ports,
      and their switches can go.
+   - From CheezyEmu: Ocarina's FSR keeps its list of moving characters between frames instead
+     of building it anew each frame (two poses of 13 KB per character), which saves the GPU
+     back thread a few tenths of a millisecond a frame (the FSR actors zone).
+   - No NX converter in this build: upstream's library for it links only with MSVC.
+     Loading .nx games is not affected.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
