@@ -291,7 +291,7 @@ below), plus:
      another power mode may give that thread more clock; these launchers measure it before
      bigger changes to the back thread's work.
      The clock trace (EDEN_NX2_CLOCK_TRACE=1, now in perf-trace, perf-trace-fine,
-     perf-trace-noprofile and every unprofiled A/B launcher) logs a "Clock trace
+     perf-trace-noprofile and ab-25 to ab-41) logs a "Clock trace
      (EDEN_NX2_CLOCK_TRACE):" line a second after the game starts: the CPU's P-cores, E-cores
      and low-power E-cores with their base clocks, the power plan, the power mode (and the one
      chosen in Settings, on Windows 11 23H2 and later), AC power, battery saver, the battery and
@@ -458,8 +458,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               perf-trace-noprofile.bat
  ab-41-idle-poll-30.bat       only the 30 microsecond idle poll (EDEN_NX2_IDLE_SPIN_US=30), if
                               ab-40 helps and neither ab-37 nor ab-39 does; compare with
-                              perf-trace-noprofile.bat. ab-37 to ab-41 log the clock trace like
-                              all timing launchers: run them as option 3 above says
+                              perf-trace-noprofile.bat. ab-37 to ab-41 log the clock trace, as
+                              perf-trace-noprofile does: run them as option 3 above says
  verify-r55.bat               verify-r52 without resolving repeat draws in full, so they run and
                               the delta descriptor and uniform keep checks check them (their
                               mismatches should stay 0, as verify-r52's); slower
@@ -506,8 +506,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               EDEN_NX2_MME_DMA_STATS=1, EDEN_NX2_HEAP_TRACE=1,
                               EDEN_NX2_CLOCK_TRACE=1). Draws are timed one sampled frame in four
                               (LICHII_TRACE_DRAWS_EVERY=4). The launchers "logged like
-                              perf-trace.bat" have its profile and frame trace but not the heap
-                              and clock traces, which r55 added here
+                              perf-trace.bat" have its profile and frame trace, but only ab-25
+                              also has the heap and clock traces, which r55 added here
  perf-trace-fine.bat          perf-trace.bat plus the fine zones and counters
                               (EDEN_NX2_GPU_PROFILE=2): slower, for where the time goes
  perf-trace-noprofile.bat     default settings with only the frame, heap and clock traces
