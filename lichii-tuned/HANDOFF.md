@@ -98,7 +98,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
   `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`, builds A, B and r54 up to
   `cbe51e88a`, r55 up to `3bf40a3c2`, and nx2 `2eb5f081c` merged in `bd1ce62ff` with follow-ups up
-  to `61c0d882b`, branch `r22-merge-nx2b`; pushing it doesn't trigger builds).
+  to `d34bcee34` (the MinGW link fix), branch `r22-merge-nx2b`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
   `2eb5f081c`, as `tuned` does). The patch is `git diff --binary 2eb5f081c tuned4` (390 files,
@@ -2161,6 +2161,14 @@ Own changes:
      - The owner's power-mode sitting stays on r55 (no new build), so it compares with the
        earlier r55 runs. The r56 cleanup (r55 defaults, the decided switches made permanent)
        goes on top of this merge.
+     - Run #56 failed in all three variants at lichii.exe's link (tests run #7 passed: the tests
+       don't link nxformat). #1232 links nxformat's Windows release statically, and that
+       library is built for the MSVC runtime: ld.lld can't resolve type_info's vftable,
+       __chkstk or _fltused from a MinGW link. `d34bcee34` (tuned4) builds the NX converter only
+       with MSVC or clang-cl; MinGW builds, ours included, skip it as on a platform without a
+       prebuilt library. Loading .nx games uses the vendored header-only reader and is
+       unaffected; the converter's menu entries (convert to .nx, edit NX metadata) are gone
+       from the tuned build. Rebuilt as run #57 (r55 + merge 2 + this fix).
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host

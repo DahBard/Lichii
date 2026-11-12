@@ -18,6 +18,27 @@ index e0ea432caf..2df32a7cc3 100644
  | Read stalls (loading hitches, NUP vs other containers) | `EDEN_NX2_FS_READ_TRACE=1` | About once a second while the guest reads, one `Guest storage reads` line (`IStorage`, the RomFS) and one `Guest file reads` line (`IFile`): count, MiB, p50/p99/max latency and reads over 1 ms and 16 ms, plus totals and read time since boot. Times cover the backend read (NUP decompression included), not the Switch 1 SD-card throttle. |
  | Unmapped device reads (`Unmapped Device ReadBlock`) | `EDEN_NX2_READBLOCK_TRACE=1` | Every read of unmapped device memory, one line per read with its first unmapped address, unmapped byte count and caller (`file:line`). Without it only the first 16 are logged. |
  | Device loss (`Device loss occurred!`) | Always on | The `Device fault` lines after it: what VK_EXT_device_fault reports (fault addresses and their type, vendor fault codes). `not supported by the driver` means the driver has no such data. |
+diff --git a/CMakeModules/NxFormat.cmake b/CMakeModules/NxFormat.cmake
+index 256f09a736..ae99918678 100644
+--- a/CMakeModules/NxFormat.cmake
++++ b/CMakeModules/NxFormat.cmake
+@@ -23,9 +23,15 @@ function(lichii_find_nxformat)
+     set(tag V1.0.3)
+     set(root "${LICHII_NXFORMAT_ROOT}")
+     if (NOT root)
+-        if (WIN32 AND ARCHITECTURE_x86_64)
++        if (WIN32 AND ARCHITECTURE_x86_64 AND MSVC)
+             set(platform windows-x64)
+             set(sha256 f96148cf062adaa0aed3069945f08e1d7537e38d490f714f3bb27767fc297066)
++        elseif (WIN32)
++            # The Windows release is a static library for the MSVC runtime (type_info, __chkstk,
++            # _fltused), which a MinGW link can't resolve.
++            message(WARNING "NX converter disabled: nxformat's Windows library is built for MSVC "
++                            "and doesn't link with MinGW. Loading .nx games is not affected.")
++            return()
+         elseif (APPLE)
+             set(platform macos-universal)
+             set(sha256 b61fecfad224d2f0b6a040c23663e5f6915eb500be9fc36016e3ffcb0aa66e52)
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
 index 0000000000..c2a8cc70e5
