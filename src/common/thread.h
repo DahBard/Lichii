@@ -153,9 +153,11 @@ void PinCurrentThread(PinnedRole role);
 [[nodiscard]] bool PinGpuThreads();
 /// Whether EDEN_NX2_PIN_GPU_THREADS decides PinGpuThreads() rather than the setting.
 [[nodiscard]] bool PinGpuThreadsFromEnvironment();
-/// EDEN_NX2_PIN_GPU_THREADS=2 (TEST): only the GPU front and back get a core of their own; the
-/// guest cores and the other threads placed on P- and E-cores keep every core but those two
-/// (Windows; on Linux the guest cores).
+/// EDEN_NX2_PIN_GPU_THREADS=2 (TEST): only the GPU front and back get a core of their own. On
+/// Windows the threads of SetCurrentThreadToPerformanceCores (the guest cores among them) keep
+/// every P- and E-core but those two and those of SetCurrentThreadToFastestCores the other
+/// P-cores; background work, worker pools and unplaced threads are not moved off them. On Linux
+/// the guest cores keep every core but those two.
 [[nodiscard]] bool PinGpuThreadsOnly();
 /// Whether this CPU has the cores the pinning plan needs (MinCoresForGpuThreadPinning physical
 /// performance cores). The first call works the plan out and logs it.

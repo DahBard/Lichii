@@ -795,9 +795,10 @@ const PinnedCpuSets& GpuPinning() {
         sets.guest = Without(usable, sets.front, sets.back);
         LOG_INFO(Common,
                  "GPU thread pinning, the GPU threads only (EDEN_NX2_PIN_GPU_THREADS=2, TEST): "
-                 "front and back on a physical core each; the guest cores and every other thread "
-                 "placed on P- and E-cores keep off them ({} logical processors), the Vulkan worker "
-                 "too ({} on P-cores)",
+                 "front and back on a physical core each; the guest cores and the threads placed "
+                 "like them (presentation, fencing, VSync) keep off them ({} logical processors), "
+                 "the Vulkan worker too ({} on P-cores); background work, worker pools and "
+                 "unplaced threads do not. The Core placement lines give the sets before this",
                  sets.guest.size(), sets.other_fastest.size());
         return sets;
     }();

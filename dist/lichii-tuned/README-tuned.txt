@@ -313,10 +313,13 @@ below), plus:
      that waiting: judge an arm first by its frame times, then by the back's work_ms per frame
      and the P-cores' ghz at the same package power.
        ab-37  the emulated kernel's locks and waits sleep at once instead of spinning first
-       ab-38  the GPU thread's front and back on a P-core each, and every other thread kept off
-              those two: the emulated CPU cores keep the other P- and E-cores
-              (EDEN_NX2_PIN_GPU_THREADS=2). The "Pin GPU threads to their own cores" setting
-              puts them on the four P-cores left instead: keep it off for every run
+       ab-38  the GPU thread's front and back on a P-core each (EDEN_NX2_PIN_GPU_THREADS=2):
+              the emulated CPU cores, presentation, fencing and VSync keep the other P- and
+              E-cores, the Vulkan worker the other P-cores. Lower-priority work, such as
+              pipeline builds, texture decoding, shader translation and audio, and the driver's
+              threads can still run on those two cores while the GPU threads sleep. The "Pin
+              GPU threads to their own cores" setting puts the emulated CPU cores on the four
+              P-cores left instead: keep it off for every run
        ab-39  waiting cores idle in the deeper C0.2 state instead of C0.1, and an idle emulated
               core waits its whole poll at once rather than in 4-microsecond pieces, which may
               be too short for C0.2. If it matches the baseline, C0.2 had no measurable effect
@@ -443,9 +446,10 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-37-no-kernel-spin.bat     ab-20 without the profile: the emulated kernel's locks and waits
                               sleep at once (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0); compare
                               with perf-trace-noprofile.bat
- ab-38-pin-gpu-threads.bat    the GPU thread's front and back on a P-core each, every other
-                              thread kept off those two (EDEN_NX2_PIN_GPU_THREADS=2); compare
-                              with perf-trace-noprofile.bat
+ ab-38-pin-gpu-threads.bat    the GPU thread's front and back on a P-core each; the emulated CPU
+                              cores, presentation and the Vulkan worker keep off those two
+                              (EDEN_NX2_PIN_GPU_THREADS=2); compare with
+                              perf-trace-noprofile.bat
  ab-39-umwait-c02.bat         waiting cores idle in C0.2 instead of C0.1, an idle core's poll in
                               one wait (LICHII_UMWAIT_C02=1); compare with
                               perf-trace-noprofile.bat
@@ -517,7 +521,9 @@ A/B launchers (this build with one change switched off or on; compare the same s
 Each start replaces the log, so copy it after every run you want to compare.
 
 The log (eden_log.txt in the emulator's Log folder) starts with a "Hybrid CPU:" line and one
-"Core placement:" line per thread, so you can check what each launcher did.
+"Core placement:" line per thread, so you can check what each launcher did. ab-38 narrows some
+of those sets afterwards: its "GPU thread pinning" line says which threads and how many logical
+processors they keep.
 
 First launch: import
 --------------------
