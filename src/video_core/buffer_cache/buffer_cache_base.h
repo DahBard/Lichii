@@ -963,6 +963,12 @@ private:
         u64 streamed_binds{};
         u64 verified{};
         u64 mismatches{};
+        /// The mismatches by kind (EDEN_NX2_UBO_KEEP_VERIFY): kept ranges the original path binds
+        /// from the buffer, and those KeptUniformHolds rejected by KeptUniformMismatch::Kind.
+        u64 no_longer_streamed{};
+        u64 changed_slot{};
+        u64 changed_older{};
+        u64 changed_stale{};
     } uniform_keep;
 
     boost::container::small_vector<BufferCopy, 4> upload_copies;

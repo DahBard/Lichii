@@ -143,12 +143,22 @@ void BufferCache<P>::TickFrame() {
     if (frame_tick % 600 == 0) {
         UniformKeep& keep = uniform_keep;
         if (Nx2Profile::Enabled() || ubo_keep_verify) {
+            // With the verify, every mismatch by kind: the keep itself refuses the first two kinds
+            // of 'changed since the previous draw'; it would bind the stale bytes.
             LOG_INFO(HW_GPU,
                      "Uniform keeps in 600 frames: {} kept, {} streamed, {} verified, {} verify "
-                     "mismatches",
-                     keep.kept, keep.streamed_binds, keep.verified, keep.mismatches);
+                     "mismatches{}",
+                     keep.kept, keep.streamed_binds, keep.verified, keep.mismatches,
+                     ubo_keep_verify
+                         ? fmt::format(" (no longer streamed {}; changed since the previous draw: "
+                                       "slot address or size differs {}, older command buffer "
+                                       "{}, stale bytes {})",
+                                       keep.no_longer_streamed, keep.changed_slot,
+                                       keep.changed_older, keep.changed_stale)
+                         : std::string{});
         }
         keep.kept = keep.streamed_binds = keep.verified = keep.mismatches = 0;
+        keep.no_longer_streamed = keep.changed_slot = keep.changed_older = keep.changed_stale = 0;
     }
     if (frame_tick % 600 == 0 && !uploaded_buffer_ranges.empty()) {
         for (const auto& [address, size] : uploaded_buffer_ranges) {
@@ -2661,11 +2671,30 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                 verify_kept = true;
                 if (!VideoCommon::KeptUniformHolds<Runtime>(device_memory, stage, index,
                                                              device_addr, size)) {
-                    if (uniform_keep.mismatches++ < 16) {
+                    using Kind = VideoCommon::KeptUniformMismatch::Kind;
+                    const VideoCommon::KeptUniformMismatch mismatch =
+                        VideoCommon::KeptUniformMismatchOf<Runtime>(runtime, stage, index,
+                                                                    device_addr, size);
+                    u64& count = mismatch.kind == Kind::SlotRange     ? uniform_keep.changed_slot
+                                 : mismatch.kind == Kind::OlderBuffer ? uniform_keep.changed_older
+                                                                      : uniform_keep.changed_stale;
+                    ++uniform_keep.mismatches;
+                    // The first 16 of each kind every 600 frames.
+                    if (++count <= 16) {
                         LOG_ERROR(HW_GPU,
                                   "Uniform keep verify: stage {} slot {} at {:#x}+{:#x} changed "
-                                  "since the previous draw",
-                                  stage, index, device_addr, size);
+                                  "since the previous draw ({})",
+                                  stage, index, device_addr, size,
+                                  mismatch.kind == Kind::SlotRange
+                                      ? fmt::format("the slot's last bind read {:#x}+{:#x}: the "
+                                                    "keep refuses",
+                                                    mismatch.slot_addr, mismatch.slot_size)
+                                  : mismatch.kind == Kind::OlderBuffer
+                                      ? std::string{"bytes changed, but the slot's allocation is "
+                                                    "from an older command buffer: the keep "
+                                                    "refuses"}
+                                      : std::string{"bytes changed: the keep would bind stale "
+                                                    "data"});
                     }
                 }
             } else if (VideoCommon::RebindKeptUniform(runtime, stage, index, device_addr, size)) {
@@ -2833,10 +2862,13 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     }
     Nx2Profile::AddFine(Nx2Profile::FineCounter::UniformCached, 1);
     // Classic cached path
-    if (verify_kept && uniform_keep.mismatches++ < 16) {
-        LOG_ERROR(HW_GPU,
-                  "Uniform keep verify: stage {} slot {} at {:#x}+{:#x} is no longer streamed",
-                  stage, index, device_addr, size);
+    if (verify_kept) {
+        ++uniform_keep.mismatches;
+        if (++uniform_keep.no_longer_streamed <= 16) {
+            LOG_ERROR(HW_GPU,
+                      "Uniform keep verify: stage {} slot {} at {:#x}+{:#x} is no longer streamed",
+                      stage, index, device_addr, size);
+        }
     }
     if (SynchronizeBuffer(buffer, device_addr, size)) {
         ++channel_state->uniform_cache_hits[0];

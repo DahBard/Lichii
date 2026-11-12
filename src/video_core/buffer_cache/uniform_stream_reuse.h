@@ -188,4 +188,35 @@ template <class Runtime, class DeviceMemory>
     return std::memcmp(slot.bytes.data(), reuse.scratch.data(), size) == 0;
 }
 
+/// EDEN_NX2_UBO_KEEP_VERIFY: why a range KeptUniformHolds rejected does not hold.
+struct KeptUniformMismatch {
+    enum class Kind : u8 {
+        SlotRange,   ///< The slot's last bind read another range or size: RebindKeptUniform refuses
+        OlderBuffer, ///< The bytes changed under an earlier command buffer's allocation: it refuses
+        Stale,       ///< The bytes changed in this command buffer: it would bind stale data
+    };
+    Kind kind;
+    u64 slot_addr; ///< The range the slot's last bind read
+    u32 slot_size;
+};
+
+/// Classifies a range KeptUniformHolds rejected by the conditions RebindKeptUniform checks.
+template <class Runtime>
+[[nodiscard]] KeptUniformMismatch KeptUniformMismatchOf(Runtime& runtime, size_t stage, u32 index,
+                                                        u64 device_addr, u32 size) {
+    using Reuse = UniformStreamReuse<typename Runtime::StreamUniformRef>;
+    using Kind = KeptUniformMismatch::Kind;
+    if (size == 0 || size > Reuse::MaxBytes || stage >= Reuse::NumStages ||
+        index >= Reuse::NumSlots) {
+        return {Kind::SlotRange, 0, 0};
+    }
+    const typename Reuse::Slot& slot =
+        UniformStreamReuseState<typename Runtime::StreamUniformRef>().slots[stage][index];
+    if (slot.size != size || slot.device_addr != device_addr) {
+        return {Kind::SlotRange, slot.device_addr, slot.size};
+    }
+    return {slot.tick != runtime.CurrentTick() ? Kind::OlderBuffer : Kind::Stale,
+            slot.device_addr, slot.size};
+}
+
 } // namespace VideoCommon

@@ -357,6 +357,10 @@ below), plus:
      mode in effect and the one chosen in Settings, AC power or battery, the power plan and its
      boost mode and energy performance preferences ("Windows power mode" line). In "best power
      efficiency" on AC power a warning follows it (see the settings below).
+   - The verify launchers' "Uniform keeps" line counts each kind of mismatch: no longer
+     streamed, and changed since the previous draw because the slot read another range or the
+     command buffer is older (the keep itself refuses both) or because the bytes are stale. Each
+     kind logs its first 16 every 600 frames.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines

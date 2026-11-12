@@ -367,13 +367,20 @@ struct BufferCacheTestAccess {
     }
     struct KeepCounts {
         u64 kept, streamed, verified, mismatches;
+        u64 no_longer_streamed, changed_slot, changed_older, changed_stale;
     };
     static KeepCounts Counts(const KeepCache& cache) {
         const auto& keep = cache.uniform_keep;
-        return {keep.kept, keep.streamed_binds, keep.verified, keep.mismatches};
+        return {keep.kept,          keep.streamed_binds,     keep.verified,
+                keep.mismatches,    keep.no_longer_streamed, keep.changed_slot,
+                keep.changed_older, keep.changed_stale};
     }
     static void GpuWrite(KeepCache& cache, BufferId id, DAddr address, u32 size) {
         cache.MarkWrittenBuffer(id, address, size);
+    }
+    /// GPU-modified in the tracker without the keep hearing of it.
+    static void MarkGpuModified(KeepCache& cache, DAddr address, u64 size) {
+        cache.memory_tracker.MarkRegionAsGpuModified(address, size);
     }
     static void MarkWritten(Cache& cache, BufferId id, DAddr address, u32 size) {
         cache.MarkWrittenBuffer(id, address, size);
@@ -1244,7 +1251,32 @@ TEST_CASE("Uniform keep verify counts guest writes the delta did not report",
     f.Draw(&unchanged);
     REQUIRE(f.Counts().verified == 2);
     REQUIRE(f.Counts().mismatches == 1);
+    REQUIRE(f.Counts().changed_stale == 1);
     REQUIRE(f.Counts().kept == 0);
+}
+
+TEST_CASE("Uniform keep verify counts each kind of mismatch", "[buffer_ports]") {
+    KeepFixture f{"EDEN_NX2_UBO_KEEP_VERIFY"};
+    const VideoCommon::Nx2FastDraw::Delta unchanged{};
+    f.Draw(nullptr);
+    // Bytes changed under the previous command buffer's allocation: the keep refuses those.
+    ++f.runtime.tick;
+    f.UboBytes()[3] = 9;
+    f.Draw(&unchanged);
+    REQUIRE(f.Counts().changed_older == 1);
+    // The binding moved without a rebind: the slot read another range, which the keep refuses.
+    constexpr DAddr moved = KeepFixture::Ubo + 0x100;
+    Access::KeepDraw(*f.cache, *f.channel, &unchanged, f.id, moved, KeepFixture::UboSize);
+    REQUIRE(f.Counts().changed_slot == 1);
+    // GPU-modified unnoticed: the original path binds the buffer instead of streaming.
+    Access::MarkGpuModified(*f.cache, moved, 4);
+    Access::KeepDraw(*f.cache, *f.channel, &unchanged, f.id, moved, KeepFixture::UboSize);
+    const auto counts = f.Counts();
+    REQUIRE(counts.no_longer_streamed == 1);
+    REQUIRE(counts.changed_stale == 0);
+    REQUIRE(counts.verified == 3);
+    REQUIRE(counts.mismatches == 3);
+    REQUIRE(counts.kept == 0);
 }
 
 TEST_CASE("Read downloads stay GPU-modified until the reading thread writes them",
