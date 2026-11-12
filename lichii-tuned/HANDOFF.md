@@ -2168,7 +2168,9 @@ Own changes:
        with MSVC or clang-cl; MinGW builds, ours included, skip it as on a platform without a
        prebuilt library. Loading .nx games uses the vendored header-only reader and is
        unaffected; the converter's menu entries (convert to .nx, edit NX metadata) are gone
-       from the tuned build. Rebuilt as run #57 (r55 + merge 2 + this fix).
+       from the tuned build. Rebuilt as run #57 (r55 + merge 2 + this fix): passed at 09:25 UTC
+       in all three variants; tests run #8: 1279 of 1280 pass, 1 skipped as designed (the clock
+       trace case without its variable), and the clock trace's own run on the runner passed.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
