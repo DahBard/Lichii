@@ -86,8 +86,6 @@ template<std::size_t bitsize, auto callback>
 void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     const bool ordered = IsOrdered(args[2].GetImmediateAccType());
-    // On x86-64 a plain load already acquires (store-releases keep their XCHG).
-    const bool locked_read = ordered && (bitsize == 128 || !conf.x64_tso_barriers);
     const auto fastmem_marker = ShouldFastmem(ctx, inst);
     // The address is base + disp with the Add folded in here (A64 fold_address_offsets).
     std::optional<s32> disp = args[1].IsImmediate() ? std::nullopt : code.FoldedAddressDisp(args[1].GetInst());
@@ -142,7 +140,7 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
             src_ptr = src_ptr + FoldedDisp(*disp);
         }
 
-        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, locked_read);
+        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered);
 
         ColdEmits(code, ctx).emplace_back([=, this, &ctx] {
             if (disp) {
@@ -173,7 +171,7 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
         // Use page table
         ASSERT(conf.page_table);
         const auto src_ptr = EmitVAddrLookup(code, ctx, bitsize, *abort, vaddr);
-        EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, locked_read);
+        EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered);
 
         ColdEmits(code, ctx).emplace_back([=, this, &ctx] {
             code.L(*abort);
@@ -436,9 +434,7 @@ void AxxEmitX64::EmitExclusiveReadMemoryInline(AxxEmitContext& ctx, IR::Inst* in
 
         const auto src_ptr = EmitFastmemVAddr(code, ctx, *abort, vaddr, require_abort_handling);
 
-        // The exclusive store compares with a locked CMPXCHG, so a plain load is enough here.
-        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr,
-                                                         bitsize == 128 || !conf.x64_tso_barriers);
+        const auto location = EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered);
 
         AddFastmemPatch(location, code.getCurr(), wrapped_fn, *fastmem_marker, conf.recompile_on_exclusive_fastmem_failure);
 

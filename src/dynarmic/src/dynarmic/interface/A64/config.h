@@ -339,11 +339,6 @@ struct UserConfig {
     /// to avoid writting certain unnecessary code only needed for cycle timers.
     bool wall_clock_cntpct = false;
 
-    /// x86-64 hosts keep loads and stores in order (total store order): DMB LD and DMB ST emit
-    /// nothing, and load-acquires are plain loads. Store-releases keep their XCHG, so a
-    /// store-release followed by a load-acquire stays ordered.
-    bool x64_tso_barriers = false;
-
     /// x86-64 hosts with an invariant TSC: CNTPCT_EL0 reads are the high 64 bits of
     /// TSC * inline_cntpct_factor, computed inline instead of calling GetCNTPCT (0: call it).
     /// Two reads less than inline_cntpct_spin_ticks apart pause twice, as GetCNTPCT does for

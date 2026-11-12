@@ -486,9 +486,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  trace-fp16.bat               ab-9 with the logging of perf-trace.bat
  trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
                               (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
- trace-old-jit.bat            the emulated CPU without round 7's faster barriers and counter
-                              reads (LICHII_JIT_TSO=0, LICHII_JIT_INLINE_CNTPCT=0), logged
-                              like perf-trace.bat
+ trace-old-jit.bat            the emulated CPU without round 7's inline counter reads
+                              (LICHII_JIT_INLINE_CNTPCT=0), logged like perf-trace.bat
  trace-no-fsr.bat             Ocarina's own upscale pass instead of AMD FSR, no 4K output
                               (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
  trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like

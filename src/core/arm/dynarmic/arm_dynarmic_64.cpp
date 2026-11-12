@@ -400,13 +400,6 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
     config.enable_cycle_counting = !m_uses_wall_clock;
 
 #if defined(ARCHITECTURE_x86_64)
-    // x86-64 keeps loads and stores in order: DMB LD and DMB ST emit nothing and load-acquires are
-    // plain loads instead of LOCK XADD. LICHII_JIT_TSO=0 keeps the fences.
-    static const bool tso_barriers = [] {
-        const char* const value = std::getenv("LICHII_JIT_TSO");
-        return value == nullptr || value[0] != '0';
-    }();
-    config.x64_tso_barriers = tso_barriers;
     // CNTPCT_EL0 inline from the TSC, the value GetClockTicks returns at the normal CPU clock
     // without core speed sync, keeping GetCNTPCT's pause for polling loops (EDEN_NX2_CNTPCT_PAUSE).
     // LICHII_JIT_INLINE_CNTPCT=0 calls GetCNTPCT instead.
@@ -530,8 +523,7 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
         config.fastmem_exclusive_access = false;
     }
 #if defined(ARCHITECTURE_x86_64)
-    // zortos293/Lichii#717's code generation switches, all on unless set to 0. Load-acquires and
-    // DMB LD/ST are LICHII_JIT_TSO above.
+    // zortos293/Lichii#717's code generation switches, all on unless set to 0.
     if (Settings::values.cpu_accuracy.GetValue() != Settings::CpuAccuracy::Paranoid) {
         // An evicted value goes to a free callee-saved GPR instead of a stack slot.
         static const bool spill_to_gpr = Nx2EnvOn("EDEN_NX2_JIT_SPILL_GPR");
