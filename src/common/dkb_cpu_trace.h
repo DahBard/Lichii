@@ -59,8 +59,9 @@ constexpr std::optional<u64> CpuTimeDelta(const ThreadSample& before, const Thre
 
 Snapshot ReadSnapshot();
 
-/// Made by each role thread on its own stack. With EDEN_DKB_FRAME_TRACE its CPU clock is in the
-/// snapshots; with EDEN_NX2_CLOCK_TRACE it holds the thread's clock trace slot (ClockTrace).
+/// Made by each role thread on its own stack. Its CPU clock is in the snapshots (the overlay's
+/// CPU %, EDEN_DKB_FRAME_TRACE); with EDEN_NX2_CLOCK_TRACE it holds the thread's clock trace
+/// slot (ClockTrace).
 class Registration {
 public:
     explicit Registration(Role role);

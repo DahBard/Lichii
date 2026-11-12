@@ -17,10 +17,11 @@ EDEN_NX2_SPLIT=2
 # Batch GPU fence syncpoints to reduce host driver overhead and smooth frametimes.
 EDEN_NX2_FENCE_BATCH=1
 
-# lichii-tuned: build every cached pipeline at boot and keep it, not only the ones recent sessions
-# used (the owner's choice, with a ~19,000-pipeline Ocarina cache; each holds ~0.45 MB of driver
-# memory). EDEN_NX2_PRELOAD_ALL_PIPELINES=0 in %APPDATA%\lichii\nx2_switches.txt builds the rest
-# in the background instead.
+# lichii-tuned: build every cached pipeline at boot, not only the ones recent sessions used (the
+# owner's choice, with a ~19,000-pipeline Ocarina cache; each holds ~0.45 MB of driver memory).
+# Built pipelines are kept up to a quarter of the RAM. This line overrides the "Build all cached
+# shaders before game start" checkbox; EDEN_NX2_PRELOAD_ALL_PIPELINES=0 in
+# %APPDATA%\lichii\nx2_switches.txt builds only the recent sessions' pipelines at boot.
 EDEN_NX2_PRELOAD_ALL_PIPELINES=1
 
 # lichii-tuned: on a crash, write lichii-crash-<pid>.txt (where it crashed, its call stack and the

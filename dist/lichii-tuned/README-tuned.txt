@@ -26,10 +26,11 @@ below), plus:
    leaves undefined (#353), no green tint growing from shadow lookups through wrong texture
    handles (#354), batched texture evictions (#376), precise macro reads and cheaper semaphore
    waits on the split GPU thread (#345).
- * Shaders stay compiled: every cached pipeline is compiled at boot and kept, not just the ones
-   the last sessions used (EDEN_NX2_PRELOAD_ALL_PIPELINES=1 in nx2_switches.txt; official
-   builds destroy one unused for 9000 frames, so a few minutes on the title screen threw away
-   the shaders compiled at boot and gameplay froze while rebuilding them).
+ * Shaders stay compiled: every cached pipeline is compiled at boot, not just the ones the last
+   sessions used (EDEN_NX2_PRELOAD_ALL_PIPELINES=1 in nx2_switches.txt, which overrides the
+   "Build all cached shaders before game start" checkbox). Built pipelines are kept up to a
+   quarter of the RAM, and one evicted past that is built again from its kept SPIR-V without
+   translating its shaders (upstream since the 2026-11-12 merge).
    Shaders the game has never shown yet can't be compiled ahead; ab-8 skips their draws.
  * The emulated CPU skips memory fences that x86 CPUs don't need (ARM DMB LD/ST and
    load-acquires) and reads the game's clock without leaving the generated code.
@@ -81,7 +82,12 @@ below), plus:
    The status bar, and the performance overlay in fullscreen, show "FSR 4.x.x" while FSR
    upscales. When it doesn't, they show "FSR (reason)", for example RES 1X, or NO CAMERA in
    menus. Clicking it turns FSR on or off. With AMD frame generation the FG button shows
-   "FG AMD FSR 2X" and the frame rate reads like "Game: 120 FPS (60 + FG)".
+   "FG AMD FSR 2X", the frame rate reads like "Game: 60 FPS + 60 generated", and the
+   overlay's footer shows "FG +60" with the FSR/FG line under it.
+ * Since the upstream merge of 2026-11-12, the first launch switches the theme to Lichii Dark
+   and shows a What's new dialog, once each (Configure > General > UI switches the theme back).
+   HDR output (Configure > Graphics) is Off by default; AMD frame generation is off while HDR
+   output is active.
  * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
    GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
  * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
@@ -387,8 +393,8 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
                               even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
                               GPU does not idle between frames; logs like perf-trace.bat
- ab-11-official-shader-cache.bat  boot compiles only what the last sessions used, and unused
-                              pipelines are destroyed after 9000 frames (LICHII_KEEP_PIPELINES=0)
+ ab-11-official-shader-cache.bat  boot compiles only what the last sessions used
+                              (EDEN_NX2_PRELOAD_ALL_PIPELINES=0)
  ab-12-round15-paths.bat      round 16's new shortcuts off (bank check, texture uploads,
                               mixed macro reads, attribute keys), logged like perf-trace.bat:
                               if a glitch or a frame-rate change goes away here, one of them
