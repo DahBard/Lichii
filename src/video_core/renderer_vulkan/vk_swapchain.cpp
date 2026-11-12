@@ -13,6 +13,7 @@
 #include <android/api-level.h>
 #endif
 
+#include "common/display_hdr.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -29,7 +30,26 @@ namespace {
 
 VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats,
                                            const vk::PhysicalDevice& physical_device,
-                                           bool want_storage) {
+                                           bool want_storage, VkFormat requested_format,
+                                           VkColorSpaceKHR requested_color_space) {
+    if (requested_format == VK_FORMAT_R16G16B16A16_SFLOAT ||
+        requested_format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+        requested_color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        // A swapchain may only use a pair the surface lists
+        // (VUID-VkSwapchainCreateInfoKHR-imageFormat-01273).
+        const bool listed = std::ranges::any_of(formats, [&](const VkSurfaceFormatKHR& format) {
+            return format.format == requested_format &&
+                   format.colorSpace == requested_color_space;
+        });
+        if (listed) {
+            return {
+                .format = requested_format,
+                .colorSpace = requested_color_space,
+            };
+        }
+        LOG_ERROR(Render_Vulkan, "The surface has no {} {} format, presenting SDR",
+                  string_VkFormat(requested_format), string_VkColorSpaceKHR(requested_color_space));
+    }
     if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
         VkSurfaceFormatKHR format;
         format.format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -57,8 +77,13 @@ VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats,
             }
         }
     }
-    const auto found = offered(VK_FORMAT_B8G8R8A8_UNORM);
-    return found != formats.end() ? *found : formats[0];
+    if (const auto found = offered(VK_FORMAT_B8G8R8A8_UNORM); found != formats.end()) {
+        return *found;
+    }
+    const auto sdr = std::find_if(formats.begin(), formats.end(), [](const auto& format) {
+        return format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    });
+    return sdr != formats.end() ? *sdr : formats[0];
 }
 
 static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
@@ -139,17 +164,43 @@ VkCompositeAlphaFlagBitsKHR ChooseAlphaFlags(const VkSurfaceCapabilitiesKHR& cap
 
 } // Anonymous namespace
 
+std::optional<VkSurfaceFormatKHR> ChooseHdrSurfaceFormat(
+    std::span<const VkSurfaceFormatKHR> formats, Settings::HdrSwapchain preferred) {
+    constexpr VkSurfaceFormatKHR hdr10{VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                                       VK_COLOR_SPACE_HDR10_ST2084_EXT};
+    constexpr VkSurfaceFormatKHR scrgb{VK_FORMAT_R16G16B16A16_SFLOAT,
+                                       VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT};
+    const auto listed = [&](const VkSurfaceFormatKHR& wanted) {
+        return std::ranges::any_of(formats, [&](const VkSurfaceFormatKHR& format) {
+            return format.format == wanted.format && format.colorSpace == wanted.colorSpace;
+        });
+    };
+    const auto& first = preferred == Settings::HdrSwapchain::Scrgb ? scrgb : hdr10;
+    const auto& second = preferred == Settings::HdrSwapchain::Scrgb ? hdr10 : scrgb;
+    if (listed(first)) {
+        return first;
+    }
+    if (listed(second)) {
+        return second;
+    }
+    return std::nullopt;
+}
+
 Swapchain::Swapchain(
     VkSurfaceKHR_T* surface_,
     const Device& device_,
     Scheduler& scheduler_,
     u32 width_,
-    u32 height_)
+    u32 height_,
+    VkSurfaceFormatKHR requested)
     : surface(surface_)
     , device{device_}
     , scheduler{scheduler_}
 {
-    Create(surface, width_, height_);
+    if (!Create(surface, width_, height_, requested.format, requested.colorSpace)) {
+        LOG_ERROR(Render_Vulkan, "Initial swapchain creation failed: surface has zero extent");
+        throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
+    }
 }
 
 Swapchain::~Swapchain() {
@@ -159,23 +210,29 @@ Swapchain::~Swapchain() {
     }
     // Also after AMD's swapchain failed to start: its runtime was loaded all the same.
     AmdFrameGen::Shutdown();
+    Common::DisplayHdrMonitor::Instance().SetPresentingHdr(false);
 }
 
-void Swapchain::Create(
+bool Swapchain::Create(
     VkSurfaceKHR_T* surface_,
     u32 width_,
-    u32 height_)
+    u32 height_,
+    VkFormat requested_format_,
+    VkColorSpaceKHR requested_color_space_)
 {
     is_outdated = false;
-    is_suboptimal = false;
+    // Keep recreation pending until creation succeeds, including zero-extent surfaces.
+    is_suboptimal = true;
     width = width_;
     height = height_;
     surface = surface_;
+    requested_format = requested_format_;
+    requested_color_space = requested_color_space_;
 
     const auto physical_device = device.GetPhysical();
     const auto capabilities{physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface))};
     if (capabilities.maxImageExtent.width == 0 || capabilities.maxImageExtent.height == 0) {
-        return;
+        return false;
     }
 
     // AMD's present thread uses its queue until its presents finish; idle that first.
@@ -196,9 +253,11 @@ void Swapchain::Create(
 
     CreateSwapchain(capabilities);
     CreateSemaphores();
+    is_suboptimal = false;
 
     resource_ticks.clear();
     resource_ticks.resize(image_count);
+    return true;
 }
 
 bool Swapchain::AcquireNextImage(bool may_flush) {
@@ -330,6 +389,16 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const auto formats{physical_device.GetSurfaceFormatsKHR(VkSurfaceKHR(surface))};
     const auto present_modes = physical_device.GetSurfacePresentModesKHR(VkSurfaceKHR(surface));
 
+    // Only the built-in frame generation writes the swapchain images from shaders.
+    const bool want_storage =
+        Settings::values.frame_gen.GetValue() &&
+        Settings::values.frame_gen_type.GetValue() != Settings::FrameGenType::AmdFsr;
+    // Keep the SDR choice available even while the active swapchain is HDR.
+    sdr_image_format = ChooseSwapSurfaceFormat(formats, physical_device, want_storage,
+                                              VK_FORMAT_B8G8R8A8_UNORM,
+                                              VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                           .format;
+
     has_mailbox = std::find(present_modes.begin(), present_modes.end(), VK_PRESENT_MODE_MAILBOX_KHR)
                   != present_modes.end();
     has_imm = std::find(present_modes.begin(), present_modes.end(),
@@ -338,11 +407,10 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
                                  VK_PRESENT_MODE_FIFO_RELAXED_KHR) != present_modes.end();
 
     const VkCompositeAlphaFlagBitsKHR alpha_flags{ChooseAlphaFlags(capabilities)};
-    // Only the built-in frame generation writes the swapchain images from shaders.
-    surface_format = ChooseSwapSurfaceFormat(
-        formats, physical_device,
-        Settings::values.frame_gen.GetValue() &&
-            Settings::values.frame_gen_type.GetValue() != Settings::FrameGenType::AmdFsr);
+    surface_format = ChooseSwapSurfaceFormat(formats, physical_device, want_storage,
+                                             requested_format, requested_color_space);
+    Common::DisplayHdrMonitor::Instance().SetPresentingHdr(surface_format.colorSpace !=
+                                                           VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
     present_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed);
     LOG_INFO(Render_Vulkan, "Swapchain: {}, present mode {}, shader writes to it {}",
              string_VkFormat(surface_format.format), string_VkPresentModeKHR(present_mode),
@@ -350,6 +418,13 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
               VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0
                  ? "supported"
                  : "unsupported");
+    // AMD's frame generation is set up for SDR only (no HDR flags or metadata). Like the built-in
+    // frame generation, it is off while HDR output is active: HDR gets a normal swapchain.
+    const bool amd_frame_gen = AmdFrameGen::Requested() &&
+                               surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    if (AmdFrameGen::Requested() && !amd_frame_gen) {
+        LOG_INFO(Render_Vulkan, "AMD frame generation: off while HDR output is active");
+    }
 
     u32 requested_image_count{capabilities.minImageCount + 1};
     // Ensure Triple buffering if possible.
@@ -413,7 +488,8 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         .viewFormatCount = static_cast<u32>(view_formats.size()),
         .pViewFormats = view_formats.data(),
     };
-    if (device.IsKhrSwapchainMutableFormatEnabled()) {
+    if (device.IsKhrSwapchainMutableFormatEnabled() &&
+        surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         format_list.pNext = std::exchange(swapchain_ci.pNext, &format_list);
         swapchain_ci.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
     }
@@ -424,7 +500,7 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     // few failures at real sizes the session keeps normal swapchains.
     const bool real_size =
         swapchain_ci.imageExtent.width >= 320 && swapchain_ci.imageExtent.height >= 240;
-    if (AmdFrameGen::Requested() && real_size && frame_gen_failures < 3) {
+    if (amd_frame_gen && real_size && frame_gen_failures < 3) {
         // AMD's swapchain takes a plain create info: no format list, no mutable format.
         VkSwapchainCreateInfoKHR frame_gen_ci = swapchain_ci;
         frame_gen_ci.pNext = nullptr;
@@ -451,6 +527,9 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
 #else
     image_view_format = VK_FORMAT_B8G8R8A8_UNORM;
 #endif
+    if (surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        image_view_format = surface_format.format;
+    }
 }
 
 void Swapchain::CreateSemaphores() {
@@ -472,6 +551,32 @@ void Swapchain::Destroy(bool shutting_down) {
                                       frame_gen_swapchain);
         frame_gen_swapchain = VK_NULL_HANDLE;
     }
+}
+
+void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) const {
+    // AMD's frame generation swapchain (no `swapchain`) never presents HDR.
+    if (!swapchain || !device.IsExtHdrMetadataEnabled() ||
+        surface_format.colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT) {
+        return;
+    }
+    // The game tone maps to the peak it was told about, so that is the brightest the stream
+    // gets. Mastering primaries are BT.2020 with a D65 white (the colour space's own); the frame
+    // average is not known.
+    const VkHdrMetadataEXT metadata{
+        .sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT,
+        .pNext = nullptr,
+        .displayPrimaryRed = {0.708f, 0.292f},
+        .displayPrimaryGreen = {0.170f, 0.797f},
+        .displayPrimaryBlue = {0.131f, 0.046f},
+        .whitePoint = {0.3127f, 0.3290f},
+        .maxLuminance = static_cast<float>(peak_luminance),
+        .minLuminance = 0.0f,
+        .maxContentLightLevel = static_cast<float>(peak_luminance),
+        .maxFrameAverageLightLevel = 0.0f,
+    };
+    device.GetLogical().SetHdrMetadataEXT(*swapchain, metadata);
+    LOG_INFO(Render_Vulkan, "HDR10 metadata: peak {} nits (reference white {} nits)",
+             peak_luminance, reference_white);
 }
 
 bool Swapchain::NeedsPresentModeUpdate() const {

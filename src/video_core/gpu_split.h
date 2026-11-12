@@ -781,7 +781,9 @@ private:
     bool front_macros{};
     std::unique_ptr<u64[]> ring;
 
-    // Keep the front's ring bookkeeping apart from fields accessed by the back.
+    // Front side, in its own 128-byte block (x86 prefetchers pull 64-byte lines in pairs): the
+    // back writes back_engine on every engine switch, and next to these fields that made the
+    // front miss the cache on almost every ring write (found by SerkiGohan).
     alignas(128) u64 write_position{};
     // Instance folding: instances counted and not sent yet (front).
     u32 fold_count{};
@@ -857,7 +859,7 @@ private:
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
 
-    // The back writes these on every engine switch and every entry.
+    // Back side, in its own block: the back writes these on every engine switch and every entry.
     alignas(128) Tegra::Engines::EngineInterface* back_engine{};
     u64 back_entry_start{}; ///< Where the entry the back runs starts (BackEntry)
 

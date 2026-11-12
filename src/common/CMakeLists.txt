@@ -46,6 +46,8 @@ add_library(
     demangle.h
     device_power_state.cpp
     device_power_state.h
+    display_hdr.cpp
+    display_hdr.h
     div_ceil.h
     dkb_cpu_trace.cpp
     dkb_cpu_trace.h
@@ -190,7 +192,7 @@ if(WIN32)
         windows/timer_resolution.h
         windows/hybrid_cpu.cpp
         windows/hybrid_cpu.h)
-    target_link_libraries(common PRIVATE ntdll)
+    target_link_libraries(common PRIVATE dxgi ntdll)
 endif()
 
 if(NOT WIN32)

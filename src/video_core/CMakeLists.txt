@@ -178,6 +178,8 @@ add_library(video_core STATIC
     renderer_vulkan/present/fsr3.h
     renderer_vulkan/present/fxaa.cpp
     renderer_vulkan/present/fxaa.h
+    renderer_vulkan/present/hdr_convert.cpp
+    renderer_vulkan/present/hdr_convert.h
     renderer_vulkan/present/layer.cpp
     renderer_vulkan/present/layer.h
     renderer_vulkan/present/present_push_constants.h
@@ -204,6 +206,7 @@ add_library(video_core STATIC
     renderer_vulkan/pipeline_build_failure.cpp
     renderer_vulkan/pipeline_build_failure.h
     renderer_vulkan/pipeline_build_trace.h
+    renderer_vulkan/pipeline_eviction_policy.h
     renderer_vulkan/precache_journal.h
     renderer_vulkan/pipeline_helper.h
     renderer_vulkan/pipeline_optimization.h
@@ -334,6 +337,7 @@ add_library(video_core STATIC
     shader_environment.cpp
     shader_environment.h
     evicted_pointer_slots.h
+    bounded_store.h
     shader_handle_program.h
     shader_jobs.cpp
     shader_jobs.h

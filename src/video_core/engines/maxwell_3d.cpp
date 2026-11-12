@@ -603,9 +603,11 @@ void Maxwell3D::CallMethod(Core::System& system, u32 method, u32 method_argument
     if (draw_manager.pending_vertex_arguments) [[unlikely]] {
         draw_manager.NoteVertexArgumentWrite(method);
     }
-    // About half of the split's back's 3D writes (~5 million a second in Ocarina of Time) are state
-    // registers: CallMethodFast's state write, here without the calls to it. Not in
-    // execution_mask, they are not SET_SHADOW_RAM_CONTROL either.
+    // About half of the split back's 3D writes (~5 million a second in Ocarina of Time) are state
+    // registers: CallMethodFast's state write, here without the calls to it. A register not in
+    // execution_mask is not SET_SHADOW_RAM_CONTROL either (CallMethodSlow's). The verify switch
+    // and the profile take the longer paths below; the write history and the first-write trace
+    // leave fast_maxwell3d off.
     if (fast_maxwell3d && executing_macro == 0 && method < MacroRegistersStart &&
         !execution_mask[method] && !perf_verify &&
         !VideoCommon::Nx2Profile::Enabled()) [[likely]] {
