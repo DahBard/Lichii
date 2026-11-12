@@ -1932,20 +1932,46 @@ Own changes:
        r55 defaults) if verify-r55 is clean, since build C's A/B is skipped. Option 1 changes
        the draw path a multithreaded back would restructure, so look at Zortos's branch or pull
        request first, if it is public.
-   - Package power (2026-11-12): the laptop holds Lichii at 35 W. In all ten r55 logs the clock
+   - Package power (2026-11-12): the laptop held Lichii at 35 W. In all ten r55 logs the clock
      trace reads 48-71 W in Lichii's first 10 s window (P-cores up to 4.5 GHz), then 34.8-35.0 W
-     in every heavier window to the end, one 38-41 W window per run aside; lighter windows fall
-     below it. The baseline at 27 s had all six P-cores 100% busy (shader preparation) at
-     3.38 GHz and 34.9 W; gameplay holds ~3.6 GHz at 35 W and ~70 °C. The owner's HWiNFO of
-     Cinebench on the same laptop: 80 W sustained at 100 °C (thermal throttling), PL1 (Dynamic)
-     82-87 W, PL1 (Static) 27 W, PL2 115 W, P-cores 4.27 GHz all-core. So the 35 W is a power
-     limit applied while Lichii runs (Intel's dynamic tuning with Lenovo's tables, or the play
-     setup: lid, external display, eGPU), not a light load. Round 18's HWiNFO note (package up to
-     ~80 W, Core Power Limit Exceeded 100%) was this limit; the 80 W was the start burst. Under
-     it, each watt a spin saves goes to the busy cores, which is likely ab-40's +0.2 GHz. Asked
-     the owner for HWiNFO's PL1 (Dynamic) and power-limit flags during play, and Cinebench in
-     the exact play setup. If the limit can be lifted, rerun the baseline and the best arm
-     uncapped before r56: the arms' gains are partly the limit's.
+     in every heavier window to the end; the few windows over 36 W follow a low-power one (a
+     running-average limit). HWiNFO during play read PL1 (Dynamic) 35 W, against 82-87 W in
+     Cinebench. The cause was the wrong power cord (owner). On the right one, HWiNFO during play
+     reads PL1 (Dynamic) 82-87 W, package 40 W on average (peak 82.6 W), the power limit hit 2%
+     of the time and thermal throttling 2-3%, P-core effective clocks ~3.3-3.4 GHz (~2.9-3.0
+     before). So every r55 run, and very likely every earlier round, was measured at 35 W
+     (round 18's note: P-cores 2.6-3.3 GHz, Core Power Limit Exceeded 100%; its ~80 W was the
+     start burst).
+   - The r55 analysis, stopped before its synthesis once the cause was known (dataset and parser
+     in the session scratchpad, r55-analysis/):
+     - The GPU back thread is the slowest thread in all 154 steady 10 s windows; its polls never
+       change that. Medium intensity, set on the base run: 12-15 ms of back work a frame (light
+       under 12, heavy 15 or more), ~1300-2135 draws a frame (median 1785), a quarter of steady
+       play. Runs are matched by content (route position, draws, rank), not by their own thread
+       times, so a faster arm can't move its content into a lighter band.
+     - ab-38 (pinning): frames 27-34% longer in both runs, light content included. The back does
+       ~1.4 ms less work a frame, but every GPU-side thread waits more (guest flush requests
+       queue ~1.4 ms a frame). Not a power effect; dropped.
+     - ab-37 and ab-39: no detectable effect. ab-40: P-cores read +0.13-0.16 GHz at the same
+       35 W and guest idle polls fall 41%, but the back does no less work a frame; +1-2 fps over
+       ab-37/39, inside the noise.
+     - Noise: sigma 1.2-2.1% of frame time per run at matched content once the memory-mapping
+       cost is accounted for, 2.5-4.7% without. Map+unmap cost per call is a session state
+       (164-296 us in sitting positions 1-5 and base, 51-91 us in 6-9; it tracks background
+       activity on the LP-E cores, r 0.86) and explains the 1.4-2.8 fps gaps between an arm's
+       two runs.
+     - At 35 W, medium play: medians 56-59 fps for ab-37/39/40 and 54.8 for base, every medium
+       10 s window at 50+ (margins 1-4 fps; at stricter band edges only ab-40 holds). No window
+       of any run has a 1% low of 45; the median medium window's is 24-33 fps. The dips track
+       the session's mapping cost (r -0.84 across runs), which option 1's cheaper draws don't
+       touch.
+   - Next (asked the owner, 2026-11-12): at full power, perf-trace-noprofile, ab-40, ab-40,
+     perf-trace-noprofile on the same route, then verify-r55 for ~5 min at the Kokiri water and
+     Castle Town. Medium is judged by the base run's content bands. Asked whether "steady"
+     means every 10 s of medium play at a median of 50+ (the 35 W runs already pass narrowly)
+     or also its slowest 1% of frames at 45+ (nothing passes; that needs a stutter hunt, not
+     option 1). If the first: r56 with the defaults (ab-40 only if it beats them beyond the
+     noise), then the merge.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
