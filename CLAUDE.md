@@ -58,9 +58,9 @@ Then (owner, later on 2026-11-12):
   highly likely to (1) noticeably reduce the number or severity of stutters, (2) reduce the GPU
   back thread's frame times, or (3) greatly improve quality of life; for Fritchii also a large
   benefit for this setup or for Ocarina.
-- "When my usage runs out, resume when it renews, and if it runs out again, resume again": a
-  scheduled task ("Resume Lichii fork review": first at 09:11 UTC, when the owner's usage renews,
-  then every 5 h at minute 11) resumes this session until the work is done.
+- Done on 2026-11-12: r58 (CI run #58), the stable build with the cleanup and the one change the
+  review took (CheezyEmu's kept FSR mesh list); the review's findings are in HANDOFF. The
+  scheduled resume task that carried the work across the owner's usage windows is deleted.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.

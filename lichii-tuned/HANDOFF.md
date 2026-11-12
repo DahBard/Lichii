@@ -2195,6 +2195,9 @@ Own changes:
        1,729,536 B from VirtualAlloc. Expected: the FSR actors zone (median ~730 us a frame in the
        profiled r55 run) falls by about 0.2-0.7 ms; check it in the next profiled run
        (fork-review/fsr_zones.py and actor_cost.py in the session scratchpad).
+     - Run #58 passed (11:06 UTC) in all three variants; tests run #9: 1282 of 1283 pass, 1 skipped
+       as designed, and the clock trace's run on the runner passed and printed the new power
+       mode line (read in 1.41 ms there).
    - Fork review (2026-11-12, workflow `w9qlr0wzt`, resumed as `ws5qag8rz` after the usage cut-off):
      all 194 commits classified. Owner's bar: highly likely to cut stutters or the back thread's
      time, or a great quality-of-life gain; for Fritchii also a large benefit here or for Ocarina.
