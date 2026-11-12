@@ -235,32 +235,27 @@ below), plus:
      same cache line back and forth (no switch; compare against r50 on the same route).
    - Small upstream speedups: no second flush after each fence, the driver's memory budget asked
      at most every 50 ms, flat texture lookup tables, no copies of compute image handles; and
-     no cache gather at fences when the CPU wrote nothing. ab-28 turns the switchable ones off.
+     no cache gather at fences when the CPU wrote nothing.
    - Upstream #717's check: storage bindings in one piece skip a page walk of up to 1 GiB.
-     ab-27 turns it off.
    - More logging with perf-trace: which kinds of state change end repeat draws, compute
      dispatch steps and slow dispatches, fence and lock times, and a one-time "Stream buffer
      write rate" line. perf-trace-noprofile logs the frame trace alone, for the frame rate you
      actually get; verify-r51 checks the repeat draws and back macros against the slow way.
      In profiled logs the back macros' 3D writes now count under "deferred call", not
      "method", so compare those two zones with r50 only through the unprofiled frame times.
- * r52, the next round for the GPU back thread, every change with an A/B launcher:
+ * r52, the next round for the GPU back thread:
    - Upstream #1161's repeat draw changes: a long run of constant writes no longer ends the
      cheap repeat draws (the "delta overflow" breaks), writes next to a draw's texture handles
      no longer count as handle changes, and vertex attribute format changes keep them when the
      pipeline is the same. ab-29 turns them off.
    - Upstream #1274: the instances of an instance loop reach the GPU back thread as one count
-     instead of ~380,000 writes a second. ab-30 turns it off.
-   - The bank check skips the pages no write touched in bulk. ab-31 turns it off.
+     instead of ~380,000 writes a second.
+   - The bank check skips the pages no write touched in bulk.
    - Upstream #1161's report and fence trims: no memory allocation per query report, reused
      fence lists, no buffer cache lock for reports nobody reads back, the query pool reset off
      the GPU thread. ab-32 turns off the switchable ones.
-   - Per-draw trims: less copying, one lock round trip less, the FSR state read once a frame
-     (FSR 4 and frame generation get the same inputs). Off since r55: no gain measured.
-   - GPU page translations cached per thread (Eglantine, via Fritchii). Off since r55: no gain
-     measured.
    - Upstream #1306 and #1311: the texture collector frees faster the further past its limit,
-     for the device-memory crash breaking pots in Hyrule Castle. ab-35 turns #1306 off.
+     for the device-memory crash breaking pots in Hyrule Castle.
    - perf-trace logs what each change does, and verify-r52 checks them against the slow ways.
  * r55, more for the GPU back thread (build C, part 1):
    - Upstream #1161's last repeat draw change: draws whose textures the shader picks from data
@@ -269,14 +264,10 @@ below), plus:
    - perf-trace splits "compute FSR" (the FSR 4 dispatch) and "compute synchronize" into their
      steps, and the one-time "Stream buffer write rate" line measures for real, with small
      copies too. perf-trace-fine adds the finer zones (slower).
-   - r52's per-draw trims and per-thread GPU page translations are off: neither gained anything
-     in r53 and r54, so ab-33 and ab-34 are gone and the code goes next round. Until then
-     EDEN_NX2_TEST_DRAW_TRIMS=1 or EDEN_NX2_TEST_XLATE_CACHE=1 turns one back on.
-   - The log names every TEST switch, and the A/B launchers' other switches (instance folding,
-     zero-page passes, kernel spinning, and since option 3 below the GPU thread pinning, UMWAIT
-     and its C0.2 state, the idle poll and the clock trace), and whether each is on ("TEST
-     switches in effect:", when the GPU starts), so a launcher whose switch did not take effect
-     shows there.
+   - The log names every TEST switch, and the A/B launchers' other switches (zero-page passes,
+     kernel spinning, and since option 3 below the GPU thread pinning, UMWAIT and its C0.2
+     state, the idle poll and the clock trace), and whether each is on ("TEST switches in
+     effect:", when the GPU starts), so a launcher whose switch did not take effect shows there.
    - Draws no longer read the clock for a time only perf-trace and the verify launchers log
      (two reads a draw, about 4,000 a frame).
    - Heap trace: in the second area after a load the same build runs 24-44 fps from session to
@@ -365,6 +356,12 @@ below), plus:
      loop among it), so comparing r55 with r54 needs a profile recorded with r55's pgo-train
      first. The "TEST switches in effect" line and the first "Clock trace" line show what each
      run had.
+ * r57, the stable build: r55's defaults, without the test switches that are settled.
+   - Permanent, without their A/B launchers: r51's small speedups (ab-28) and #717's check
+     (ab-27), r52's instance folding (ab-30), the bank check's bulk skips (ab-31) and #1306
+     (ab-35).
+   - Removed: r52's per-draw trims and per-thread GPU page translations, off since r55 (no gain
+     in r53 and r54).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -431,21 +428,11 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-26-no-1216.bat            repeat draws end at stride words, render enable addresses and
                               back macro calls as in r50 (EDEN_NX2_TEST_1216=0); unprofiled:
                               compare with perf-trace-noprofile.bat
- ab-27-no-contig.bat          storage bindings in one piece walk the page tables again
-                              (EDEN_NX2_TEST_CONTIG=0); unprofiled, compare with
-                              perf-trace-noprofile.bat
- ab-28-no-quick-wins.bat      r51's switchable small speedups off (EDEN_NX2_TEST_QUICK=0);
-                              unprofiled, compare with perf-trace-noprofile.bat
  ab-29-no-1161-draws.bat      repeat draws as in r51: delta overflows, whole-buffer handle checks,
                               attribute formats end them (EDEN_NX2_TEST_1161_DRAWS=0)
- ab-30-no-fold.bat            every later instance sent on its own (EDEN_NX2_FOLD_INSTANCES=0)
- ab-31-no-bank-bits.bat       the bank check looks up every page (EDEN_NX2_TEST_BANK_BITS=0)
  ab-32-no-1161-reports.bat    r51's fence lists, report locks and query pool resets
-                              (EDEN_NX2_TEST_1161_REPORTS=0)
- ab-35-no-1306.bat            the texture collector as before #1306 (EDEN_NX2_TEST_1306=0); the
-                              Hyrule Castle pot crash may come back, so only for comparisons.
-                              ab-29 to ab-35 are unprofiled: compare with
-                              perf-trace-noprofile.bat
+                              (EDEN_NX2_TEST_1161_REPORTS=0). ab-29 and ab-32 are unprofiled:
+                              compare with perf-trace-noprofile.bat
  ab-36-no-1161-handles.bat    repeat draws as in r54 for shaders that pick their textures from
                               memory (EDEN_NX2_TEST_1161_HANDLES=0); unprofiled, compare with
                               perf-trace-noprofile.bat

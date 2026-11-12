@@ -24,7 +24,6 @@
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_core.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
-#include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/nx2_async_readback.h"
@@ -74,18 +73,11 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
 void LogTestSwitches(const Core::System& system) {
     namespace Test = VideoCommon::Nx2Test;
     namespace FastDraw = VideoCommon::Nx2FastDraw;
-    const std::array<std::pair<const char*, bool>, 14> switches{{
-        {"EDEN_NX2_TEST_QUICK", Test::QuickWins()},
-        {"EDEN_NX2_TEST_CONTIG", Test::ContiguousResolve()},
+    const std::array<std::pair<const char*, bool>, 7> switches{{
         {"EDEN_NX2_TEST_1161_DRAWS", FastDraw::g_test_1161_draws.load(std::memory_order_relaxed)},
         {"EDEN_NX2_TEST_1161_HANDLES", Test::Handles1161()},
-        {"EDEN_NX2_TEST_BANK_BITS", Test::BankBits()},
         {"EDEN_NX2_TEST_1161_REPORTS", Test::Reports1161()},
-        {"EDEN_NX2_TEST_DRAW_TRIMS", Test::DrawTrims()},
-        {"EDEN_NX2_TEST_XLATE_CACHE", Test::TranslationCache()},
-        {"EDEN_NX2_TEST_1306", Test::Collector1306()},
         {"EDEN_NX2_TEST_1216", FastDraw::g_test_1216.load(std::memory_order_relaxed)},
-        {"EDEN_NX2_FOLD_INSTANCES", Tegra::Engines::Maxwell3D::FoldInstancesEnabled()},
         {"EDEN_NX2_ZERO_TRIM", system.DeviceMemory().ZeroTrimRunning()},
         {"EDEN_NX2_KSPIN", Kernel::Nx2Wait::Enabled()},
         {"EDEN_NX2_ARB_SPIN",

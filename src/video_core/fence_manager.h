@@ -146,11 +146,6 @@ public:
             func();
         }
         fences.push(std::move(new_fence));
-        if (should_flush && !VideoCommon::Nx2Test::QuickWins()) {
-            const Nx2Profile::Scope submit_scope{Nx2Profile::Zone::FenceSubmit,
-                                                 Nx2Profile::Enabled()};
-            rasterizer.FlushCommands(); // TEST: EDEN_NX2_TEST_QUICK=0
-        }
         if constexpr (can_async_check) {
             guard.unlock();
             cv.notify_all();

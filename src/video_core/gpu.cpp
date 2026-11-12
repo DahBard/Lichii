@@ -32,7 +32,6 @@
 #include "video_core/engines/kepler_memory.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/nx2_fast_draw.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
 #include "video_core/pending_maps.h"
@@ -120,8 +119,7 @@ struct GPU::Impl {
         // write is recorded, and the gather clears it before it reads them (as
         // DmaPusher::ApplyCollectedWrites checks it).
         namespace Profile = VideoCommon::Nx2Profile;
-        if (!Core::g_writes_collected.load(std::memory_order_acquire) &&
-            VideoCommon::Nx2Test::QuickWins()) {
+        if (!Core::g_writes_collected.load(std::memory_order_acquire)) {
             Profile::Add(Profile::Counter::InvalidateNothingCollected, 1); // TEST
             return;
         }

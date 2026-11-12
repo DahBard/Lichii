@@ -14,27 +14,6 @@ namespace VideoCommon::Nx2Test {
     return value == nullptr || value[0] != '0';
 }
 
-/// TEST: off unless the variable is "1", for a change being dropped that stays one round for
-/// comparison. Read as SwitchOn.
-[[nodiscard]] inline bool SwitchSet(const char* name) {
-    const char* const value = std::getenv(name);
-    return value != nullptr && value[0] == '1';
-}
-
-/// TEST: EDEN_NX2_TEST_QUICK=0 restores tuned4's flush after queueing a fence, its device
-/// memory usage query on every call and InvalidateGPUCache's gather with nothing collected.
-[[nodiscard]] inline bool QuickWins() {
-    static const bool on = SwitchOn("EDEN_NX2_TEST_QUICK");
-    return on;
-}
-
-/// TEST: EDEN_NX2_TEST_CONTIG=0 restores tuned4's VirtualRangeCache::Query for storage bindings
-/// that lie in one device range (BufferCache::ResolveMultiRangeStorage).
-[[nodiscard]] inline bool ContiguousResolve() {
-    static const bool on = SwitchOn("EDEN_NX2_TEST_CONTIG");
-    return on;
-}
-
 /// TEST: EDEN_NX2_TEST_1161_DRAWS=0 restores tuned4's delta overflow break, handle checks over
 /// whole constant buffers and attribute format breaks (upstream #1161's fast-draw half; the
 /// renderer copies it into Nx2FastDraw::g_test_1161_draws).
@@ -50,41 +29,11 @@ namespace VideoCommon::Nx2Test {
     return on;
 }
 
-/// TEST: EDEN_NX2_TEST_BANK_BITS=0 restores the native bank check's walk of every page with a
-/// snapshot lookup each (BufferCache::CheckNativeBankPagesTracked).
-[[nodiscard]] inline bool BankBits() {
-    static const bool on = SwitchOn("EDEN_NX2_TEST_BANK_BITS");
-    return on;
-}
-
 /// TEST: EDEN_NX2_TEST_1161_REPORTS=0 restores, of upstream #1161's report and fence half, a
 /// new fence operation list per made fence, the buffer cache lock for every pending report and
 /// the host query pool reset on the recording thread.
 [[nodiscard]] inline bool Reports1161() {
     static const bool on = SwitchOn("EDEN_NX2_TEST_1161_REPORTS");
-    return on;
-}
-
-/// TEST: EDEN_NX2_TEST_DRAW_TRIMS=1 copies only the fast draw delta's used entries, applies the
-/// buffer cache's FlushCaching invalidations under the draw's lock and reads the Ocarina FSR
-/// state once a frame. Off since r55: neutral in r53 and r54 (ab-33); removed next round.
-[[nodiscard]] inline bool DrawTrims() {
-    static const bool on = SwitchSet("EDEN_NX2_TEST_DRAW_TRIMS");
-    return on;
-}
-
-/// TEST: EDEN_NX2_TEST_XLATE_CACHE=1 keeps GPU page translations in a per-thread cache
-/// (MemoryManager::GpuToCpuAddress; Eglantine b1e650849e, Fritchii EXP63). Off since r55:
-/// neutral in r53 and r54 (ab-34); removed next round.
-[[nodiscard]] inline bool TranslationCache() {
-    static const bool on = SwitchSet("EDEN_NX2_TEST_XLATE_CACHE");
-    return on;
-}
-
-/// TEST: EDEN_NX2_TEST_1306=0 keeps the aggressive collector at 40 images a frame unused for 10
-/// frames however far past the critical memory (before upstream #1306).
-[[nodiscard]] inline bool Collector1306() {
-    static const bool on = SwitchOn("EDEN_NX2_TEST_1306");
     return on;
 }
 

@@ -36,7 +36,6 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/shader_cache_v2/cache.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/vulkan_common/streamline.h"
@@ -2091,9 +2090,6 @@ u64 Device::GetDeviceMemoryUsage() const {
     // The buffer and texture caches ask every frame; with the budget extension each answer is a
     // driver and OS query (~0.1-0.5 ms on Windows): answers younger than 50 ms are reused.
     constexpr s64 reuse_ns = 50'000'000;
-    if (!VideoCommon::Nx2Test::QuickWins()) {
-        return QueryDeviceMemoryUsage(); // TEST: EDEN_NX2_TEST_QUICK=0
-    }
     const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::steady_clock::now().time_since_epoch())
                         .count();

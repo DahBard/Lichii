@@ -3329,8 +3329,6 @@ public:
     /// A vertex attribute format, when vertex input is dynamic state.
     static bool IsFastDrawVertexFormat(u32 method);
     void NoteFastDrawConstantData(GPUVAddr begin, GPUVAddr end);
-    /// Whether the front counts an instance loop's later instances (FrontWrite).
-    static bool FoldInstancesEnabled();
 
     /// Handles a write to the CB_DATA[i] register.
     void ProcessCBData(u32 value);

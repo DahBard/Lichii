@@ -1645,7 +1645,7 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
     // loop; the dropped same-value draw.end writes between these do nothing on the back either.
     if (method == MAXWELL3D_REG_INDEX(draw.begin) && fs.instance_loop &&
         ((value >> 26) & 3) == 1 && fs.skip_same && !fs.sink_pending && shadow_kept &&
-        fs.regs[method] == value && FoldInstancesEnabled()) {
+        fs.regs[method] == value) {
         fs.draw_pending = true;
         split.FoldInstance(&FlushFoldedInstances, this);
         return;
@@ -2507,15 +2507,6 @@ void Maxwell3D::DrawFromGpuArguments(Core::System& system, GPUVAddr arguments, D
     draw_manager.gpu_draw_arguments = draw_manager.pending_vertex_arguments;
     CallMethod(system, MAXWELL3D_REG_INDEX(draw.end), end_value, true);
     draw_manager.gpu_draw_arguments.reset();
-}
-
-bool Maxwell3D::FoldInstancesEnabled() {
-    // EDEN_NX2_FOLD_INSTANCES=0: every later instance is sent as its own write again.
-    static const bool enabled = [] {
-        const char* const value = std::getenv("EDEN_NX2_FOLD_INSTANCES");
-        return value == nullptr || value[0] != '0';
-    }();
-    return enabled;
 }
 
 void Maxwell3D::FlushFoldedInstances(void* engine, u32 count) {

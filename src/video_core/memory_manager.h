@@ -332,8 +332,6 @@ private:
     static constexpr size_t continuous_bits = 64;
 
     const size_t unique_identifier;
-    /// GpuToCpuAddress keeps translations in a per-thread cache (TEST: EDEN_NX2_TEST_XLATE_CACHE=1).
-    const bool translation_cache;
     VideoCommon::InvalidationAccumulator accumulator;
 
     static std::atomic<size_t> unique_identifier_generator;

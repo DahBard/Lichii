@@ -637,7 +637,7 @@ public:
             chunks;
     } native_bank_bits;
     /// Why bank pages were compared and which of them had changed, by the first reason that
-    /// applies (CheckNativeBankPagesTracked), logged every 10 s with the GPU profile.
+    /// applies (CheckNativeBankPagesBits), logged every 10 s with the GPU profile.
     enum NativeBankReason : size_t {
         BankCollected, ///< Collected CPU writes (Core::g_collected_write_pages)
         BankWritten,   ///< Writes the buffer cache saw (Core::g_buffer_write_pages)
@@ -654,10 +654,10 @@ public:
         u64 pages_skipped = 0;
         std::array<u64, BankReasons> compared{};
         std::array<u64, BankReasons> changed{};
-        /// LICHII_BANK_CHECK=2 with the bitsets: pages they would have skipped although a
-        /// reason applied, or without a snapshot (must stay 0).
+        /// LICHII_BANK_CHECK=2: pages the bitsets would have skipped although a reason applied,
+        /// or without a snapshot (must stay 0).
         u64 bit_misses = 0;
-        /// With the bitsets: skipped pages that took no snapshot lookup.
+        /// Skipped pages that took no snapshot lookup.
         u64 pages_bulk_skipped = 0;
         std::chrono::steady_clock::time_point last_log{};
     } native_bank_tracked_stats;
@@ -708,10 +708,8 @@ private:
     void BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 binding_index, bool needs_bind);
 
     /// The native uniform bank check of a bind of [device_addr, device_addr + size) that compares
-    /// only the pages whose guest memory may have changed (LICHII_BANK_CHECK 1-3).
-    void CheckNativeBankPagesTracked(DAddr device_addr, u32 size, int mode);
-    /// CheckNativeBankPagesTracked with the pages no reason applies to skipped in bulk
-    /// (native_bank_bits), unless EDEN_NX2_TEST_BANK_BITS=0.
+    /// only the pages whose guest memory may have changed (LICHII_BANK_CHECK 1-3), with the pages
+    /// no reason applies to skipped in bulk (native_bank_bits).
     void CheckNativeBankPagesBits(DAddr device_addr, u32 size, int mode);
     /// The native bank check's 10 s line (GPU profile, LICHII_BANK_CHECK=2).
     void LogNativeBankStats(int mode);

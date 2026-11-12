@@ -36,7 +36,6 @@
 #include "video_core/nx2.h"
 #include "video_core/churn_counters.h"
 #include "video_core/nx2_profile.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/render_trace.h"
 #include "video_core/texture_cache/conversion.h"
 #include "video_core/texture_cache/host_memory_limit.h"
@@ -254,8 +253,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         // replaces an older one (bad overlaps). The cache grew ~15 images a frame, 4 GiB in two
         // seconds, until the device heap was full and the driver crashed on the next image.
         // So delete more the further past it, and sooner after an image's last use.
-        if (aggressive_mode && total_used_memory > critical_memory &&
-            VideoCommon::Nx2Test::Collector1306()) {
+        if (aggressive_mode && total_used_memory > critical_memory) {
             const u64 over = total_used_memory - critical_memory;
             num_iterations += static_cast<size_t>((std::min)(over / 2_MiB, u64{1024}));
             if (over >= 1_GiB) {

@@ -34,7 +34,6 @@
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/oot_network.h"
 #include "video_core/rasterizer_download_area.h"
 #include "video_core/texture_cache/util.h"
@@ -2697,7 +2696,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     // rewrite per-draw data between draws, and checking once per frame left it stale for a frame
     // now and then (white flashes in Ocarina of Time, Eglantine 031e07436c).
     // LICHII_BANK_CHECK (Fritchii's EDEN_NX2_EXP9, which it also reads): 1 compares only the
-    // pages that may have changed (CheckNativeBankPagesTracked), 3 (default, as Fritchii v5) is
+    // pages that may have changed (CheckNativeBankPagesBits), 3 (default, as Fritchii v5) is
     // 1 without the once-a-frame compare of every page, which never found a change there
     // (Castle Town: uniform buffers 135.6 -> 97.9 ms/s of the split's back, 40.8 -> 42.3 fps),
     // 2 compares every page and logs what 1 would have missed, 0 compares every page on every
@@ -2715,11 +2714,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                              !memory_tracker.IsRegionGpuModified(device_addr, size);
     if (native_bank && bank_check_mode != 0) {
         Nx2Profile::Scope scope{Nx2Profile::Zone::BankCheck};
-        if (Nx2Test::BankBits()) {
-            CheckNativeBankPagesBits(device_addr, size, bank_check_mode);
-        } else {
-            CheckNativeBankPagesTracked(device_addr, size, bank_check_mode); // TEST
-        }
+        CheckNativeBankPagesBits(device_addr, size, bank_check_mode);
     } else if (native_bank) {
         // The bank size is only an upper limit: stop at the end of the mapped memory.
         u64 mapped_size = 0;
@@ -2898,8 +2893,7 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
         // One device range (the mapping runs, no page walk) is one segment: nothing to gather.
         // Since #1231 read-only native bindings reach up to 1 GiB, and a Query miss walks every
         // page of them (upstream #717's EDEN_NX2_BUFCACHE_CONTIG).
-        if (VideoCommon::Nx2Test::ContiguousResolve() &&
-            gpu_memory->MaxContinuousRange(binding.gpu_addr, binding.size) >= binding.size) {
+        if (gpu_memory->MaxContinuousRange(binding.gpu_addr, binding.size) >= binding.size) {
             return;
         }
         // Counted for compute bindings only (the compute bindings line).
@@ -2981,7 +2975,7 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
 }
 
 template <class P>
-void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, int mode) {
+void BufferCache<P>::CheckNativeBankPagesBits(DAddr device_addr, u32 size, int mode) {
     // From Fritchii v4 (Frizti/Lichii 9e8cb73ed, 1a64fe500, EDEN_NX2_EXP9). Most changes the
     // per-bind compare finds the memory tracker already knows. The ones it doesn't include guest
     // CPU writes collected by the GPU dirty memory managers: HandleRasterizerWrite keeps a core's
@@ -2993,85 +2987,12 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
     // paths no flag sees), and with mode 1 once a frame for writers none of these see: semaphore
     // and query writes, HLE (it found none in Fritchii's tests, so mode 3, the default, leaves it
     // out). Mode 2 compares every page and counts what mode 1 would have missed.
+    // A 64-page word at a time: a page with a snapshot whose write flags, recheck flag and Hot
+    // bit are clear, and that isn't CPU-modified, has no reason to be compared in mode 3, so it
+    // costs no snapshot lookup. The snapshot of every other page is looked up and decides; mode
+    // 1's frame check needs it for every page.
     static_assert(Core::DevicePageFlags::AddressBits >=
                   Tegra::MaxwellDeviceTraits::device_virtual_bits);
-    u64 mapped_size = 0;
-    while (mapped_size < size &&
-           device_memory.template GetPointer<u8>(device_addr + mapped_size) != nullptr) {
-        mapped_size += Core::DEVICE_PAGESIZE - ((device_addr + mapped_size) & Core::DEVICE_PAGEMASK);
-    }
-    if (native_indirect_page_snapshots.size() >= 16384) {
-        native_indirect_page_snapshots.clear();
-    }
-    const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
-    const DAddr end = device_addr + (std::min<u64>)(mapped_size, size);
-    const bool verify = mode == 2;
-    const bool frame_check = mode != 3;
-    // Most banks have no CPU-modified page: ask per page only when one has.
-    const bool any_cpu_dirty = memory_tracker.IsRegionCpuModified(first_page, end - first_page);
-    auto& stats = native_bank_tracked_stats;
-    ++stats.binds;
-    for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
-        const u8* const guest = device_memory.template GetPointer<u8>(page);
-        if (guest == nullptr) {
-            continue;
-        }
-        // Take the flags before reading the page: a write flagged later is compared next bind.
-        const bool collected = Core::g_collected_write_pages.Take(page);
-        const bool written = Core::g_buffer_write_pages.Take(page);
-        auto [it, inserted] = native_indirect_page_snapshots.try_emplace(page);
-        NativeBankPage& snapshot = it->second;
-        if (inserted) {
-            ++stats.pages_new;
-            std::memcpy(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE);
-            snapshot.checked_frame = frame_tick;
-            snapshot.recheck = collected || written;
-            memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
-            continue;
-        }
-        const bool recheck = std::exchange(snapshot.recheck, collected || written);
-        NativeBankReason reason = BankNone;
-        if (collected) {
-            reason = BankCollected;
-        } else if (written) {
-            reason = BankWritten;
-        } else if (recheck) {
-            reason = BankRecheck;
-        } else if (any_cpu_dirty &&
-                   memory_tracker.IsRegionCpuModified(page, Core::DEVICE_PAGESIZE)) {
-            reason = BankCpuDirty;
-        } else if (snapshot.changed_frame != ~u64{0} &&
-                   frame_tick - snapshot.changed_frame < NativeBankHotFrames) {
-            reason = BankHot;
-        } else if (frame_check && snapshot.checked_frame != frame_tick) {
-            reason = BankFrame;
-        }
-        if (reason != BankNone) {
-            snapshot.checked_frame = frame_tick;
-        } else if (!verify) {
-            ++stats.pages_skipped;
-            Nx2Profile::Add(Nx2Profile::Counter::BankPagesSkipped, 1);
-            continue;
-        }
-        ++stats.compared[reason];
-        Nx2Profile::Add(Nx2Profile::Counter::BankPagesChecked, 1);
-        if (std::memcmp(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE) == 0) {
-            continue;
-        }
-        ++stats.changed[reason];
-        snapshot.changed_frame = frame_tick;
-        std::memcpy(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE);
-        memory_tracker.MarkRegionAsCpuModified(page, Core::DEVICE_PAGESIZE);
-    }
-    LogNativeBankStats(mode);
-}
-
-template <class P>
-void BufferCache<P>::CheckNativeBankPagesBits(DAddr device_addr, u32 size, int mode) {
-    // CheckNativeBankPagesTracked, a 64-page word at a time: a page with a snapshot whose write
-    // flags, recheck flag and Hot bit are clear, and that isn't CPU-modified, has no reason to be
-    // compared in mode 3, so it costs no snapshot lookup. The snapshot of every other page is
-    // looked up and decides as before; mode 1's frame check needs it for every page.
     u64 mapped_size = 0;
     while (mapped_size < size &&
            device_memory.template GetPointer<u8>(device_addr + mapped_size) != nullptr) {
@@ -3086,6 +3007,7 @@ void BufferCache<P>::CheckNativeBankPagesBits(DAddr device_addr, u32 size, int m
     const DAddr end = device_addr + (std::min<u64>)(mapped_size, size);
     const bool verify = mode == 2;
     const bool frame_check = mode != 3;
+    // Most banks have no CPU-modified page: ask per page only when one has.
     const bool any_cpu_dirty = memory_tracker.IsRegionCpuModified(first_page, end - first_page);
     auto& stats = native_bank_tracked_stats;
     ++stats.binds;
@@ -3215,23 +3137,22 @@ void BufferCache<P>::LogNativeBankStats(int mode) {
     const auto& changed = stats.changed;
     // Verify (mode 2): "missed" are changes only its compare of every page found, which mode 1
     // misses; mode 3 also misses those the frame check found (at least: a page it missed doesn't
-    // turn hot either). With the bitsets, "bitsets missed" counts pages they would have skipped
-    // although a reason applied.
+    // turn hot either). "bitsets missed" counts pages the bitsets would have skipped although a
+    // reason applied.
     LOG_INFO(HW_GPU,
              "Native bank check (mode {}, 10 s): {} binds, {} new pages, {} skipped; compared / "
              "changed: collected CPU writes {} / {}, buffer cache writes {} / {}, recheck {} / {}, "
              "CPU-modified {} / {}, hot {} / {}, frame check {} / {}, verify only {} / {}; missed "
-             "{}, without the frame check (mode 3) {}{}",
+             "{}, without the frame check (mode 3) {}; bitsets missed {}, {} skipped without a "
+             "lookup",
              mode, stats.binds, stats.pages_new, stats.pages_skipped, compared[BankCollected],
              changed[BankCollected], compared[BankWritten], changed[BankWritten],
              compared[BankRecheck], changed[BankRecheck], compared[BankCpuDirty],
              changed[BankCpuDirty], compared[BankHot], changed[BankHot], compared[BankFrame],
              changed[BankFrame], compared[BankNone], changed[BankNone],
              verify ? changed[BankNone] : 0,
-             verify ? changed[BankNone] + changed[BankFrame] : 0,
-             Nx2Test::BankBits() ? fmt::format("; bitsets missed {}, {} skipped without a lookup",
-                                               stats.bit_misses, stats.pages_bulk_skipped)
-                                 : std::string{});
+             verify ? changed[BankNone] + changed[BankFrame] : 0, stats.bit_misses,
+             stats.pages_bulk_skipped);
     stats = {};
     stats.last_log = now;
 }
