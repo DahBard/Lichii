@@ -59,8 +59,8 @@ Then (owner, later on 2026-11-12):
   back thread's frame times, or (3) greatly improve quality of life; for Fritchii also a large
   benefit for this setup or for Ocarina.
 - "When my usage runs out, resume when it renews, and if it runs out again, resume again": a
-  scheduled task ("Resume Lichii fork review", every 2 h) resumes this session until the work is
-  done.
+  scheduled task ("Resume Lichii fork review": first at 09:11 UTC, when the owner's usage renews,
+  then every 5 h at minute 11) resumes this session until the work is done.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
