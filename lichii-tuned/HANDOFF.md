@@ -2223,6 +2223,22 @@ Own changes:
        bindings for Ocarina's water and haze tiles (not seen by the owner); the limb motion
        fixes for FSR/FG (more per-frame work, not reported); the ASTC/BC and texture age
        changes; the AMD allocator callbacks (shipped off after two freezes).
+   - Castle Town guard house ("pot room") frame rate (owner's question, 2026-11-12): our tree
+     has no frame-rate fix for it. It has the freeze fix (`9135ab409`, the built-in Texture Pool
+     x2 patch from upstream #976, now upstream as #1313), #976's 'free superseded bad overlaps
+     after 4 unused frames' (`e6a4a2ef1`: device memory no longer fills, no frames over 100 ms
+     there on an RTX 4090) and #1306/#1311 (`9940937f4`: the collector speeds up past the critical
+     memory, which fixed the RX 9070 XT out-of-memory driver crash when breaking pots). The
+     frame-rate fix is upstream's OPEN pull request #1314 (RsMan-Dev, 2026-11-11; head
+     `c52fa0ed7`, three commits on `17baed716`, 10 files, +606/-48; not in nx2, CheezyEmu or
+     Fritchii): the guard house runs 4-7 fps on nx2 while the camera moves because the game makes
+     ~45 new images a frame (shadow maps sized by the camera's distance, and the targets packed
+     behind them), and goes to 53-59 fps (RTX 4080, Linux) with (1) a padded depth target
+     (800x793) looked up as the square it is sampled as, so each shadow map is one image, not
+     two and a copy, (2) images whose memory went entirely to newer images deleted at the frame
+     boundary after 2 unused frames (replaces `e6a4a2ef1`'s rule; `superseded_images.h`, tests),
+     (3) square depth-only passes left unscaled. With open #1285 it reaches the 60 fps cap.
+     Recommended: port #1314 after merge 3 (it meets texture_cache.h, which the merge changes).
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
