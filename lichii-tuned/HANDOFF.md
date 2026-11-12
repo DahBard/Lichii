@@ -1887,12 +1887,32 @@ Own changes:
      - Profile: r55 changes the back loop, Backoff and the idle path that pgo-r49 covers, so
        compare r55 only with its own baseline.
      - Test plan (frame generation AMD FSR 2x throughout):
-       - Sitting 1, option 3, by README-tuned's protocol: one warm-up baseline, one baseline
-         with HWiNFO open (clock check), then blocks N, ab-37, ab-39, ab-40, ab-38 and the
-         reverse (N = perf-trace-noprofile), a third block if there is time.
-       - Sitting 2, build C: A B C C B A A B C with A = perf-trace-noprofile, B = ab-36 (#16
-         off), C = ab-26 (#1216 off); perf-trace-fine once; verify-r55 for ~5 min at the Kokiri
-         water and Castle Town.
+       - Sitting 1, option 3, by README-tuned's protocol: one warm-up baseline, then blocks N,
+         ab-37, ab-39, ab-40, ab-38 and the reverse (N = perf-trace-noprofile), a third block if
+         there is time. The route covers the medium-intensity area the owner's decision is about
+         (below) and a heavier stretch, where the arms' differences show without the 60 fps cap.
+         The baseline with HWiNFO open (clock check) is optional. Then verify-r55 for ~5 min at
+         the Kokiri water and Castle Town: if development stops after option 3, r55's new delta
+         draws stay on.
+       - Sitting 2, build C, only if option 3 falls short (it feeds option 1): A B C C B A A B C
+         with A = perf-trace-noprofile, B = ab-36 (#16 off), C = ab-26 (#1216 off), then
+         perf-trace-fine once.
+   - Owner decisions (2026-11-12):
+     - Option 2 (the back thread split across two cores) is dropped: Zortos is writing a
+       multithreaded back thread for upstream Lichii. Merge it when it is released.
+     - If option 3 alone holds medium-intensity areas at a constant 50-60 fps, development stops
+       for now and the next step is that merge. If not, option 1, then the merge.
+     - Medium intensity is the "steady medium play" row above: ~1700 draws/frame, 55-57 fps
+       unprofiled on r54, so its average is already in range and the question is whether it
+       holds. Reading used unless the owner says otherwise: the game's own frame rate (frame
+       generation shows twice that), loads excluded, every 10 s window of medium play with a
+       median of at least 50 fps and 1% lows of at least 45, in every run of the arm. What
+       breaks it today: the slow spells after the second area's load (23-44 fps by session,
+       the memory-mapping cost that r55's heap trace measures; option 3 does not target it)
+       and scene loads.
+     - If an arm meets it: a last build with that arm as the default; the r56 cleanup waits
+       for the merge. Option 1 changes the draw path a multithreaded back would restructure,
+       so look at Zortos's branch or pull request first, if it is public.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
