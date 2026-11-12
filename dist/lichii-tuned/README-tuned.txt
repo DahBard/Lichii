@@ -343,16 +343,15 @@ below), plus:
      first. The "TEST switches in effect" line and the first "Clock trace" line show what each
      run had.
  * r57, the stable build: r55's defaults, without the test switches that are settled.
-   - Permanent, without their A/B launchers: r51's small speedups (ab-28) and #717's check
-     (ab-27), r52's instance folding (ab-30), the bank check's bulk skips (ab-31) and #1306
-     (ab-35).
+   - Permanent, without their A/B launchers: r51's small speedups and #717's check, r52's
+     instance folding, the bank check's bulk skips and #1306.
    - Removed: r52's per-draw trims and per-thread GPU page translations, off since r55 (no gain
      in r53 and r54).
    - Option 3 ends with r55's defaults, which passed the 50 fps test in medium play with
-     Windows in Best performance. ab-37, ab-38 (EDEN_NX2_PIN_GPU_THREADS=2, frames 27-34%
-     longer) and ab-39 are gone; ab-40 and ab-41 stay for a later A/B in Best performance, and
-     EDEN_NX2_PIN_GPU_THREADS=0 or 1 still overrides the "Pin GPU threads to their own cores"
-     setting for one run.
+     Windows in Best performance. The GPU-threads-only pinning arm (frames 27-34% longer) and
+     the arms that tried no kernel spinning or C0.2 alone are gone; ab-40 and ab-41 stay for a
+     later A/B in Best performance, and EDEN_NX2_PIN_GPU_THREADS=0 or 1 still overrides the
+     "Pin GPU threads to their own cores" setting for one run.
    - Each game start logs Windows' power mode next to the "TEST switches in effect" line: the
      mode in effect and the one chosen in Settings, AC power or battery, the power plan and its
      boost mode and energy performance preferences ("Windows power mode" line). In "best power
