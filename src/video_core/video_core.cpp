@@ -110,7 +110,10 @@ void LogTestSwitches(const Core::System& system) {
                    !pin                                  ? ""
                    : Common::GpuThreadPinningApplies()   ? ", applied"
                                                          : ", skipped: too few P-cores",
-                   Common::SpinWait::UsesC02() ? "on (idle polls in one UMWAIT)" : "off",
+                   // LICHII_UMWAIT_C02 acts only through UMWAIT.
+                   !Common::SpinWait::UsesC02()      ? "off"
+                   : Common::SpinWait::UsesWaitpkg() ? "on (idle polls in one UMWAIT)"
+                                                     : "set, no effect (UMWAIT off)",
                    Common::SpinWait::UsesWaitpkg() ? "on" : "off",
                    idle_spin < 0 ? std::string{"default"} : std::to_string(idle_spin),
                    // Only the multicore idle thread polls (PhysicalCore::Idle).
