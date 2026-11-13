@@ -374,6 +374,8 @@ below), plus:
      back thread a few tenths of a millisecond a frame (the FSR actors zone).
    - No NX converter in this build: upstream's library for it links only with MSVC.
      Loading .nx games is not affected.
+ * r59: r58 with AMD frame generation under HDR output (HDR10; see the frame generation notes
+   above). Nothing changes with HDR off.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
