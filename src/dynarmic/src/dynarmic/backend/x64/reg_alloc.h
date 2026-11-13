@@ -150,7 +150,10 @@ class RegAlloc final {
 public:
     using ArgumentInfo = std::array<Argument, IR::max_arg_count>;
     RegAlloc() noexcept = default;
-    void Reset(std::bitset<32> new_gpr_order, std::bitset<32> new_xmm_order, bool spill_to_gpr_ = false, bool scratch_copy_ = false) noexcept;
+    std::optional<s32> SpillJitOffset() const noexcept { return spill_jit_offset; }
+    /// spill_jit_offset: the spill slots are at [ABI_JIT_PTR + offset] instead of on the stack.
+    void Reset(std::bitset<32> new_gpr_order, std::bitset<32> new_xmm_order, bool new_spill_to_gpr = false, bool new_scratch_copy = false,
+               std::optional<s32> new_spill_jit_offset = std::nullopt) noexcept;
 
     ArgumentInfo GetArgumentInfo(const IR::Inst* inst) noexcept;
     void RegisterPseudoOperation(const IR::Inst* inst) noexcept;
@@ -304,13 +307,14 @@ private:
     std::bitset<32> gpr_order;
     std::bitset<32> xmm_order;
     size_t reserved_stack_space = 0;
-    bool spill_to_gpr = false;
-    bool scratch_copy = false;
     u64 dirty_lo = 0;
     u64 dirty_hi = 0;
     u64 occupied_lo = 0;
     u64 occupied_hi = 0;
     mutable u32 touched_regs = 0;
+    bool spill_to_gpr = false;
+    bool scratch_copy = false;
+    std::optional<s32> spill_jit_offset;
 };
 
 }  // namespace Dynarmic::Backend::X64

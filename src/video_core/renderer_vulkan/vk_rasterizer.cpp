@@ -40,6 +40,7 @@
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/gpu_wait_stats.h"
 #include "video_core/control/channel_state.h"
+#include "video_core/buffer_cache/indirect_buffer.h"
 #include "video_core/native_query_trace.h"
 #include "video_core/native_indirect_reset.h"
 #include "video_core/render_trace.h"
@@ -78,11 +79,13 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_backx.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_stats.h"
 #include "video_core/churn_counters.h"
+#include "video_core/nx2_list_grid.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -1189,7 +1192,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         fast_draw_stats = {};
     }
     fast_draw_verify = fast_draw_on && FastDraw::VerifyEnabled();
-    // The prepare time per draw: ReportFastDraws logs it only with the profile or the verify.
+    // The prepare time per draw (a fenced time stamp at each end): ReportFastDraws logs it only
+    // with the profile or the verify on.
     const bool time_fast_draw = fast_draw_on && (Profile::Enabled() || fast_draw_verify);
     const u64 fast_draw_start = time_fast_draw ? Profile::Now() : 0;
     {
@@ -2732,10 +2736,20 @@ void RasterizerVulkan::DispatchCompute() {
         }
     };
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
-    const auto list_slot = kepler_compute->GetIndirectListSlot();
+    // A grid a command list left on the host GPU (nx2_list_grid.h): its kept copy.
+    const auto kept_grid = kepler_compute->GetKeptGrid();
+    const bool indirect = indirect_address || kept_grid;
     const bool can_replace = OcarinaDlssEnabled() &&
                              (pipeline->CanReplaceOcarinaUpscale() || OcarinaFsrPresetActive()) &&
-                             !indirect_address && !list_slot && !frame_dump.Capturing();
+                             !indirect && !frame_dump.Capturing();
+    // Kept grid reads wait for the copy and can flush the command buffer: before Configure records
+    // the binds the dispatch uses.
+    std::array<u32, 3> kept_words{};
+    const bool kept_words_read = !indirect_address && kept_grid && frame_dump.CapturingBuffers() &&
+                                 buffer_cache_runtime.ReadKeptListWords(*kept_grid, kept_words);
+    if (kept_grid && Tegra::Nx2ListGrid::g_verify) {
+        VerifyKeptGrid(*kept_grid);
+    }
     ComputePipeline::BindCommand deferred_bind;
     if (!pipeline->Configure(*kepler_compute, *gpu_memory, scheduler, buffer_cache,
                              texture_cache, texture_cache_runtime, byte_addressed_shadow,
@@ -2787,6 +2801,9 @@ void RasterizerVulkan::DispatchCompute() {
             indirect_grid = std::array{gpu_memory->Read<u32>(*indirect_address),
                                        gpu_memory->Read<u32>(*indirect_address + 4),
                                        gpu_memory->Read<u32>(*indirect_address + 8)};
+        } else if (kept_words_read) {
+            indirect_grid = std::array{kept_words[0] & 0x7fffffff, kept_words[1] & 0xffff,
+                                       kept_words[2] & 0xffff};
         }
         frame_dump.NoteLaunch(pipeline->ShaderHash(),
                               {qmd.grid_dim_x, qmd.grid_dim_y, qmd.grid_dim_z},
@@ -2796,24 +2813,28 @@ void RasterizerVulkan::DispatchCompute() {
     // Recording the dispatch, early downloads and list copies (the FSR replacement apart).
     std::optional<Profile::Scope> record_scope;
     record_scope.emplace(Profile::Zone::ComputeRecord);
-    if (list_slot) {
-        // The grid is GPU-written list words (Nx2ListIndirect): the host GPU copied them into the
-        // slot at the list's place, and dispatches from there.
-        auto& slots = buffer_cache_runtime.Nx2Slots();
-        if (!slots.Held(*list_slot)) [[unlikely]] {
-            LOG_ERROR(Render_Vulkan, "Nx2 list slot {} dispatched without a hold", *list_slot);
-            return;
+    if (indirect) {
+        // DispatchIndirect, from the guest's arguments or a list's kept words.
+        VkBuffer indirect_buffer{};
+        VkDeviceSize indirect_offset{};
+        if (kept_grid) {
+            std::tie(indirect_buffer, indirect_offset) = buffer_cache_runtime.KeptGrid(*kept_grid);
+        } else {
+            const auto [buffer, offset] =
+                VideoCommon::ObtainIndirectBuffer(buffer_cache, *indirect_address);
+            indirect_buffer = buffer->Handle();
+            indirect_offset = offset;
         }
-        const auto [args_buffer, args_offset] = slots.DispatchArguments(*list_slot);
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.NoteComputeWrites();
         scheduler.TraceComputePipeline(pipeline->ShaderHash());
-        scheduler.Record([this, pipeline, byte_addressed_shadow, indirect_buffer = args_buffer,
-                          indirect_offset = args_offset](vk::CommandBuffer cmdbuf) {
+        scheduler.Record([this, pipeline, indirect_buffer, indirect_offset,
+                          byte_addressed_shadow](vk::CommandBuffer cmdbuf) {
             RecordDispatchBarrier(cmdbuf);
             if (!pipeline->IsBound()) {
                 return;
             }
+            // Only a kept grid's dispatch can have the packed R16 shadow (ComputePipeline::Configure).
             if (byte_addressed_shadow) {
                 TextureCacheRuntime::CopyByteAddressedShadow(cmdbuf, *byte_addressed_shadow, false);
             }
@@ -2824,37 +2845,14 @@ void RasterizerVulkan::DispatchCompute() {
                 TextureCacheRuntime::CopyByteAddressedShadow(cmdbuf, *byte_addressed_shadow, true);
             }
         });
-        Tegra::Nx2ListIndirect::Stats::Count(Tegra::Nx2ListIndirect::Stats::Get().slot_dispatches);
-        if (Tegra::Nx2ListIndirect::Stats::g_check) [[unlikely]] {
-            slots.CheckDispatch(*list_slot); // TEST
-        }
-        SubmitNx2ListCopies();
-        const Profile::Scope fsr_scope{Profile::Zone::ComputeFsr};
-        TryOcarinaDlss(*pipeline, false); // As after a direct dispatch
-        return;
-    }
-    if (indirect_address) {
-        // DispatchIndirect
-        static constexpr auto sync_info = VideoCommon::ObtainBufferSynchronize::FullSynchronize;
-        const auto post_op = VideoCommon::ObtainBufferOperation::DiscardWrite;
-        const auto [buffer, offset] =
-            buffer_cache.ObtainBuffer(*indirect_address, 12, sync_info, post_op);
-        scheduler.RequestOutsideRenderPassOperationContext();
-        scheduler.NoteComputeWrites();
-        scheduler.TraceComputePipeline(pipeline->ShaderHash());
-        scheduler.Record([this, pipeline, indirect_buffer = buffer->Handle(),
-                          indirect_offset = offset](vk::CommandBuffer cmdbuf) {
-            RecordDispatchBarrier(cmdbuf);
-            if (!pipeline->IsBound()) {
-                return;
-            }
-            scheduler.TraceGpuWork(cmdbuf, pipeline->ShaderHash(), 0, {}, [&] {
-                cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
-            });
-        });
         buffer_cache.NoteWorkRecorded(true);
         SubmitNx2ListCopies();
         publish_collision_map();
+        if (kept_grid) {
+            // Ocarina's FSR follows its scene depth reader as after a direct dispatch.
+            const Profile::Scope fsr_scope{Profile::Zone::ComputeFsr};
+            TryOcarinaDlss(*pipeline, false);
+        }
         return;
     }
     const std::array<u32, 3> dim{qmd.grid_dim_x, qmd.grid_dim_y, qmd.grid_dim_z};
@@ -2973,6 +2971,80 @@ void Vulkan::RasterizerVulkan::DisableGraphicsUniformBuffer(size_t stage, u32 in
 
 void RasterizerVulkan::FlushAll() {}
 
+bool RasterizerVulkan::Nx2ListGridSupported() const {
+    // As jpkto's #805: an indirect dispatch can't skip a grid over the device's limits as a
+    // direct one does, so the device must take any width of 31 bits and 16-bit heights and depths.
+    const std::array<u32, 3> max_dim{device.GetMaxComputeWorkGroupCount()};
+    const bool fits = max_dim[0] >= 0x7fffffffU && max_dim[1] >= 0xffffU && max_dim[2] >= 0xffffU;
+    if (static std::atomic<bool> logged{}; !fits && !logged.exchange(true)) {
+        LOG_WARNING(Render_Vulkan,
+                    "List-fed grid macros read their words: the device dispatches at most "
+                    "{}x{}x{} groups",
+                    max_dim[0], max_dim[1], max_dim[2]);
+    }
+    return fits;
+}
+
+void RasterizerVulkan::Nx2KeepListWords(u64 keep_id, GPUVAddr address, u64 hash,
+                                        std::span<const u32> real) {
+    // The words as the work sent before the list left them, CPU writes included (as #805).
+    gpu_memory->FlushCaching();
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        const auto [buffer, offset] = buffer_cache.ObtainBuffer(
+            address, 3 * sizeof(u32), VideoCommon::ObtainBufferSynchronize::FullSynchronize,
+            VideoCommon::ObtainBufferOperation::DoNothing);
+        if (buffer != nullptr && buffer->Handle() != VK_NULL_HANDLE) {
+            buffer->MarkUsage(offset, 3 * sizeof(u32));
+            buffer_cache_runtime.KeepListWords(keep_id, buffer->Handle(), offset, hash, real);
+        }
+    }
+    if (real.size() != 3) {
+        return;
+    }
+    std::array<u32, 3> kept{};
+    const bool read = buffer_cache_runtime.ReadKeptListWords(keep_id, kept);
+    Tegra::Nx2ListGrid::NoteVerify(
+        Tegra::Nx2ListGrid::Check::Kept, hash, read && std::ranges::equal(kept, real),
+        fmt::format("list {} at {:#x} kept {:#x} {:#x} {:#x}, the real words are {:#x} {:#x} {:#x}",
+                    keep_id, address, kept[0], kept[1], kept[2], real[0], real[1], real[2]));
+}
+
+void RasterizerVulkan::Nx2ExpectKeptWord(DAddr device_addr, u64 keep_id, u32 index) {
+    nx2_expected_words[device_addr] = {keep_id, index};
+}
+
+bool RasterizerVulkan::Nx2ReadKeptListWords(u64 keep_id, std::span<u32> words) {
+    return buffer_cache_runtime.ReadKeptListWords(keep_id, words);
+}
+
+std::optional<u64> RasterizerVulkan::Nx2FindKeptWord(DAddr device_addr, u32 marker) {
+    std::optional<std::pair<u64, u32>> registered;
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        registered = buffer_cache.Nx2KeptWordList(device_addr);
+    }
+    return Tegra::Nx2ListGrid::QmdWordList(
+        marker, registered,
+        buffer_cache_runtime.FindKeptList(Tegra::Nx2ListGrid::MarkerKeepBits(marker)));
+}
+
+void RasterizerVulkan::VerifyKeptGrid(u64 keep_id) {
+    const auto* const keep = buffer_cache_runtime.KeptVerify(keep_id);
+    // The arguments the dispatch takes against what DispatchNativeCompute takes from the real
+    // words.
+    std::array<u32, 3> dispatched{};
+    if (keep == nullptr || !buffer_cache_runtime.ReadKeptListWords(keep_id, dispatched, true)) {
+        return;
+    }
+    const std::array<u32, 3> real{keep->real[0] & 0x7fffffff, keep->real[1] & 0xffff,
+                                  keep->real[2] & 0xffff};
+    Tegra::Nx2ListGrid::NoteVerify(
+        Tegra::Nx2ListGrid::Check::Grid, keep->hash, dispatched == real,
+        fmt::format("list {} dispatched {}x{}x{}, the real grid is {}x{}x{}", keep_id,
+                    dispatched[0], dispatched[1], dispatched[2], real[0], real[1], real[2]));
+}
+
 void RasterizerVulkan::SubmitNx2ListCopies() {
     // Submitted at once: ReadGpuWrittenCommands waits on these copies, so they can't sit out
     // the longer DeferFlush interval (#161).
@@ -3030,56 +3102,6 @@ bool RasterizerVulkan::IsGpuTickDone(u64 tick) {
 
 void RasterizerVulkan::NoteGpuWrittenCommandListSynced(DAddr page) {
     buffer_cache.Nx2NoteListSynced(page);
-}
-
-bool RasterizerVulkan::Nx2ListSlotsSupported() const {
-    // A direct dispatch skips a grid over the device's limits; an indirect one must not get one.
-    // The slot's height and depth are 16 bits, and a width over 31 bits is no culling result.
-    const std::array<u32, 3> max_dim{device.GetMaxComputeWorkGroupCount()};
-    const bool fits = max_dim[0] >= 0x7fffffffU && max_dim[1] >= 0xffffU && max_dim[2] >= 0xffffU;
-    if (static std::atomic<bool> logged{}; !fits && !logged.exchange(true)) {
-        LOG_WARNING(Render_Vulkan,
-                    "Nx2 list indirect off: the device dispatches at most {}x{}x{} groups",
-                    max_dim[0], max_dim[1], max_dim[2]);
-    }
-    return Tegra::Nx2ListIndirect::g_enabled && fits;
-}
-
-std::optional<u32> RasterizerVulkan::Nx2AcquireListSlot() {
-    return buffer_cache_runtime.Nx2Slots().Acquire();
-}
-
-void RasterizerVulkan::Nx2ReleaseListSlot(u32 slot) {
-    buffer_cache_runtime.Nx2Slots().Release(slot);
-}
-
-void RasterizerVulkan::Nx2SnapshotListWords(DAddr device_addr, u32 count, u32 slot) {
-    // The words as GPU work sent before the list left them: the buffer cache's, its CPU writes
-    // applied (as a dispatch reading them finds them).
-    gpu_memory->FlushCaching();
-    std::scoped_lock lock{buffer_cache.mutex};
-    const auto [buffer, offset] =
-        buffer_cache.ObtainCPUBuffer(device_addr, count * static_cast<u32>(sizeof(u32)),
-                                     VideoCommon::ObtainBufferSynchronize::FullSynchronize,
-                                     VideoCommon::ObtainBufferOperation::DoNothing);
-    buffer_cache_runtime.Nx2Slots().Snapshot(buffer->Handle(), offset, count, slot);
-}
-
-void RasterizerVulkan::Nx2NoteOwedListWord(DAddr device_addr, u32 value) {
-    buffer_cache_runtime.Nx2Slots().NoteOwed(device_addr, value,
-                                             device_memory.Read<u32>(device_addr));
-}
-
-void RasterizerVulkan::Nx2NoteInlineQmdGrid(DAddr device_addr, u32 x, u32 y, u32 z) {
-    buffer_cache_runtime.Nx2Slots().NoteInlineQmdGrid(device_addr, x, y, z);
-}
-
-void RasterizerVulkan::Nx2ReadListSlots(std::span<const u32> slots, std::span<u32> words) {
-    buffer_cache_runtime.Nx2Slots().Read(slots, words);
-}
-
-void RasterizerVulkan::Nx2CheckListSlot(u32 slot, std::span<const u32> words) {
-    buffer_cache_runtime.Nx2Slots().CheckSnapshot(slot, words); // TEST
 }
 
 void RasterizerVulkan::FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) {
@@ -3358,29 +3380,33 @@ bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
 }
 
 void RasterizerVulkan::OnCacheInvalidations(std::span<const std::pair<DAddr, u64>> ranges) {
-    // Out of the GPU-written ranges first: applying one write downloads the GPU's bytes elsewhere
-    // on its pages (WriteMemory), which would write over the next collected write.
-    {
-        std::scoped_lock lock{buffer_cache.mutex};
-        buffer_cache.ClaimCpuWrites(ranges);
-    }
-    // Then each cache's lock once for all ranges.
+    // Each cache's lock is taken once for all the writes, not once a write (jpkto/Lichii
+    // f5edeabdbb): guest CPU write traps hold the buffer cache's for long. The caches are
+    // independent (TextureCache::WriteMemory reads and changes only texture state, and the page
+    // counts both change commute), so each ends as with the writes applied one by one.
+    const auto valid = [](const std::pair<DAddr, u64>& range) {
+        return range.first != 0 && range.second != 0;
+    };
     {
         std::scoped_lock lock{texture_cache.mutex};
-        for (const auto& [addr, size] : ranges) {
-            if (addr != 0 && size != 0) {
-                texture_cache.WriteMemory(addr, size);
+        for (const auto& range : ranges) {
+            if (valid(range)) {
+                texture_cache.WriteMemory(range.first, range.second);
             }
         }
     }
     {
         std::scoped_lock lock{buffer_cache.mutex};
-        for (const auto& [addr, size] : ranges) {
-            if (addr != 0 && size != 0) {
-                buffer_cache.WriteMemory(addr, size);
+        // Out of the GPU-written ranges first: applying one write downloads the GPU's bytes
+        // elsewhere on its pages (WriteMemory), which would write over the next collected write.
+        buffer_cache.ClaimCpuWrites(ranges);
+        for (const auto& range : ranges) {
+            if (valid(range)) {
+                buffer_cache.WriteMemory(range.first, range.second);
             }
         }
     }
+    // The shader cache's lock once too.
     pipeline_cache.InvalidateRegions(ranges);
 }
 
@@ -4424,7 +4450,8 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
         const bool recorded = oot_live_dlss->Record(color_view, depth.DepthView(), target_view,
                                                    render_extent, output_extent, target_extent, oot_motion.current,
                                                    oot_motion.previous, meshes, depth.ImageHandle(),
-                                                   render_trace_frame);
+                                                   render_trace_frame,
+                                                   {depth.size.width, depth.size.height});
         if (!recorded) {
             return fail("DLSS declined the frame");
         }
@@ -4684,6 +4711,26 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
         return;
     }
     gpu_memory->WriteBlockUnsafe(address, memory.data(), copy_size);
+    // Markers of a list-fed grid (nx2_list_grid.h): its kept words go over them.
+    if (!nx2_expected_words.empty()) {
+        const auto data = memory.first((std::min)(copy_size, memory.size()));
+        const auto patches = Tegra::Nx2ListGrid::PlanPatches(
+            *cpu_addr, data, [this](DAddr word) -> std::optional<std::pair<u64, u32>> {
+                const auto it = nx2_expected_words.find(word);
+                return it != nx2_expected_words.end() ? std::optional{it->second}
+                                                      : std::nullopt;
+            });
+        for (DAddr word = (*cpu_addr + 3) & ~DAddr{3}; word + 4 <= *cpu_addr + data.size();
+             word += 4) {
+            nx2_expected_words.erase(word);
+        }
+        if (!patches.empty()) {
+            // Invalidations deferred before this write must not land after its patches.
+            gpu_memory->FlushCaching();
+            InlineKeptWords(*cpu_addr, data, patches);
+            return;
+        }
+    }
     // EDEN_NX2_INLINE_DEFER=0: invalidate every cache at once (for comparisons).
     static const bool defer = [] {
         const char* value = std::getenv("EDEN_NX2_INLINE_DEFER");
@@ -4691,8 +4738,41 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
     }();
     // One cache at a time: holding both while waiting for either (std::lock) waited longer, the
     // fencing thread and CPU write traps holding one of them most of the time.
-    bool uploaded;
-    {
+    bool uploaded = false;
+    // InlineMemory uploads only into GPU-written buffer data, and Nx2NoteListHostWrite acts only
+    // on command list pages and kept words (GPU-written too). Every range the buffer cache records
+    // as GPU-written marks its pages in Tegra::g_nx2_gpu_written_pages first, under its lock, on
+    // this thread, and the bits never clear. So when no written page has either mark the locked
+    // section changes nothing, and the write skips the lock (jpkto/Lichii 7a5e5357cb).
+    const DAddr page_begin = Common::AlignDown(*cpu_addr, Core::DEVICE_PAGESIZE);
+    const DAddr page_end = Common::AlignUp(*cpu_addr + copy_size, Core::DEVICE_PAGESIZE);
+    const auto reaches_list_page = [&] {
+        if (copy_size == 0 ||
+            !Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        for (DAddr page = page_begin; page < page_end;
+             page += DAddr{1} << Tegra::Nx2WrittenPageBits) {
+            if (Tegra::Nx2IsCommandListPage(page)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const bool lock_free = defer && Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
+                           !Tegra::Nx2MayBeGpuWritten(page_begin, page_end - page_begin) &&
+                           !reaches_list_page();
+    if (lock_free) {
+        if (VideoCommon::BackX::g_verify) {
+            std::scoped_lock lock{buffer_cache.mutex};
+            if (buffer_cache.IsRegionGpuModified(page_begin, page_end - page_begin)) {
+                VideoCommon::BackX::Mismatch("inline write into GPU-written buffer data", *cpu_addr,
+                                             copy_size);
+                buffer_cache.Nx2NoteListHostWrite(*cpu_addr, copy_size);
+                uploaded = buffer_cache.InlineMemory(*cpu_addr, copy_size, memory);
+            }
+        }
+    } else {
         std::scoped_lock lock{buffer_cache.mutex};
         // Guest memory has the words now: a command list copy of the page no longer does.
         buffer_cache.Nx2NoteListHostWrite(*cpu_addr, copy_size);
@@ -4717,6 +4797,76 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
         texture_cache.WriteMemory(*cpu_addr, copy_size);
     }
     pipeline_cache.InvalidateRegion(*cpu_addr, copy_size);
+}
+
+void RasterizerVulkan::InlineKeptWords(DAddr device_addr, std::span<const u8> data,
+                                       std::span<const Tegra::Nx2ListGrid::KeptPatch> patches) {
+    std::vector<std::pair<VkBuffer, u32>> destinations; // Verify mode: where each patch went
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.Nx2NoteListHostWrite(device_addr, data.size());
+        buffer_cache.Nx2InlineKeptWords(
+            device_addr, data, patches,
+            [&](auto& buffer, u32 offset, const Tegra::Nx2ListGrid::KeptPatch& patch) {
+                buffer_cache_runtime.CopyKeptWord(patch.keep_id, patch.index, buffer.Handle(),
+                                                  offset);
+                if (Tegra::Nx2ListGrid::g_verify) {
+                    destinations.emplace_back(buffer.Handle(), offset);
+                }
+            });
+    }
+    query_cache.InvalidateRegion(device_addr, data.size());
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        texture_cache.WriteMemory(device_addr, data.size());
+    }
+    pipeline_cache.InvalidateRegion(device_addr, data.size());
+    if (!Tegra::Nx2ListGrid::g_verify || destinations.size() != patches.size()) {
+        return;
+    }
+    // Verify mode: the words the destination holds after the copies, read back.
+    const auto staging = staging_pool.Request(destinations.size() * sizeof(u32), MemoryUsage::Download);
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([destinations, staging_buffer = staging.buffer,
+                      staging_offset = staging.offset](vk::CommandBuffer cmdbuf) {
+        static constexpr VkMemoryBarrier READ_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        };
+        static constexpr VkMemoryBarrier WRITE_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                               READ_BARRIER);
+        for (size_t i = 0; i < destinations.size(); ++i) {
+            cmdbuf.CopyBuffer(destinations[i].first, staging_buffer,
+                              VkBufferCopy{.srcOffset = destinations[i].second,
+                                           .dstOffset = staging_offset + i * sizeof(u32),
+                                           .size = sizeof(u32)});
+        }
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+                               WRITE_BARRIER);
+    });
+    scheduler.Finish();
+    for (size_t i = 0; i < patches.size(); ++i) {
+        const auto& patch = patches[i];
+        const auto* const keep = buffer_cache_runtime.KeptVerify(patch.keep_id);
+        if (keep == nullptr) {
+            continue;
+        }
+        u32 patched;
+        std::memcpy(&patched, staging.mapped_span.data() + i * sizeof(u32), sizeof(patched));
+        Tegra::Nx2ListGrid::NoteVerify(
+            Tegra::Nx2ListGrid::Check::Upload, keep->hash, patched == keep->real[patch.index],
+            fmt::format("list {} word {} patched at {:#x} as {:#x}, the real word is {:#x}",
+                        patch.keep_id, patch.index, device_addr + patch.offset, patched,
+                        keep->real[patch.index]));
+    }
 }
 
 void RasterizerVulkan::SaveOcarinaPreHud(VkImage source, VkFormat format, VkExtent2D extent) {
@@ -5874,24 +6024,95 @@ void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) 
         return;
     }
 
-    boost::container::static_vector<VkVertexInputBindingDescription2EXT, 32> bindings;
-    boost::container::static_vector<VkVertexInputAttributeDescription2EXT, 32> attributes;
-
     const u32 max_attributes =
         static_cast<u32>(std::min<size_t>(Maxwell::NumVertexAttributes,
                                           device.GetMaxVertexInputAttributes()));
     const u32 max_bindings =
         static_cast<u32>(std::min<size_t>(Maxwell::NumVertexArrays,
                                           device.GetMaxVertexInputBindings()));
+    const auto same_state = [](const VertexInputState& lhs, const VertexInputState& rhs) {
+        return std::ranges::equal(lhs.bindings, rhs.bindings,
+                                  [](const auto& a, const auto& b) {
+                                      return a.binding == b.binding && a.stride == b.stride &&
+                                             a.inputRate == b.inputRate && a.divisor == b.divisor;
+                                  }) &&
+               std::ranges::equal(lhs.attributes, rhs.attributes, [](const auto& a, const auto& b) {
+                   return a.location == b.location && a.binding == b.binding &&
+                          a.format == b.format && a.offset == b.offset;
+               });
+    };
 
+    if (!record) {
+        // EDEN_NX2_FAST_DRAW_VERIFY: no dirty flag asked for it, so the vertex input recorded
+        // last must be what the registers give.
+        VertexInputState state;
+        BuildVertexInput(regs, max_attributes, max_bindings, state);
+        if (vertex_input_recorded && !same_state(state, recorded_vertex_input)) {
+            ++fast_draw_stats.vertex_input_mismatches;
+        }
+        return;
+    }
+    dirty[Dirty::VertexInput] = false;
+    for (size_t index = 0; index < Maxwell::NumVertexAttributes; ++index) {
+        dirty[Dirty::VertexAttribute0 + index] = false;
+    }
+    for (size_t index = 0; index < Maxwell::NumVertexArrays; ++index) {
+        dirty[Dirty::VertexBinding0 + index] = false;
+    }
 
+    // The state these registers built before, recorded by reference instead of built and copied
+    // into the command again (jpkto/Lichii e7581fa9f6): converting every attribute's format and
+    // copying both arrays into the command was ~0.5 ms a frame of Mario Kart World's back.
+    VideoCommon::VertexInputKey key{
+        .num_attributes = max_attributes,
+        .num_bindings = max_bindings,
+    };
+    for (u32 index = 0; index < max_attributes; ++index) {
+        key.attributes[index] = regs.vertex_attrib_format[index].hex;
+    }
+    for (u32 binding = 0; binding < max_bindings; ++binding) {
+        const auto& stream{regs.vertex_streams[binding]};
+        key.strides[binding] = stream.stride.Value();
+        key.divisors[binding] = stream.frequency;
+        key.instanced |= (regs.vertex_stream_instances.IsInstancingEnabled(binding) ? 1U : 0U)
+                         << binding;
+        key.repacked |= (buffer_cache_runtime.IsVertexRepacked(binding) ? 1U : 0U) << binding;
+    }
+    const u64 hash = key.Hash();
+    std::shared_ptr<const VertexInputState> state = vertex_input_cache.Find(key, hash);
+    if (!state) {
+        auto built = std::make_shared<VertexInputState>();
+        BuildVertexInput(regs, max_attributes, max_bindings, *built);
+        state = std::move(built);
+        vertex_input_cache.Insert(key, hash, state);
+    } else if (fast_draw_verify) {
+        // The key must hold everything the build reads.
+        VertexInputState built;
+        BuildVertexInput(regs, max_attributes, max_bindings, built);
+        if (!same_state(built, *state)) {
+            ++fast_draw_stats.vertex_input_mismatches;
+        }
+    }
+    if (fast_draw_verify) {
+        recorded_vertex_input = *state;
+        vertex_input_recorded = true;
+    }
+
+    scheduler.Record([input = std::move(state)](vk::CommandBuffer cmdbuf) {
+        cmdbuf.SetVertexInputEXT(input->bindings, input->attributes);
+    });
+}
+
+void RasterizerVulkan::BuildVertexInput(const Tegra::Engines::Maxwell3D::Regs& regs,
+                                        u32 max_attributes, u32 max_bindings,
+                                        VertexInputState& state) {
     for (u32 index = 0; index < max_attributes; ++index) {
         const Maxwell::VertexAttribute attribute{regs.vertex_attrib_format[index]};
         const u32 binding{attribute.buffer};
         if (attribute.constant || binding >= max_bindings) {
             continue;
         }
-        attributes.push_back({
+        state.attributes.push_back({
             .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT,
             .pNext = nullptr,
             .location = index,
@@ -5905,7 +6126,7 @@ void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) 
     for (u32 binding = 0; binding < max_bindings; ++binding) {
         const auto& input_binding{regs.vertex_streams[binding]};
         const bool is_instanced{regs.vertex_stream_instances.IsInstancingEnabled(binding)};
-        bindings.push_back({
+        state.bindings.push_back({
             .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT,
             .pNext = nullptr,
             .binding = binding,
@@ -5914,41 +6135,6 @@ void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) 
             .divisor = is_instanced ? input_binding.frequency : 1,
         });
     }
-
-    if (!record) {
-        // EDEN_NX2_FAST_DRAW_VERIFY: no dirty flag asked for it, so the vertex input recorded
-        // last must be what the registers give.
-        const bool same_bindings = std::ranges::equal(
-            bindings, recorded_bindings, [](const auto& lhs, const auto& rhs) {
-                return lhs.binding == rhs.binding && lhs.stride == rhs.stride &&
-                       lhs.inputRate == rhs.inputRate && lhs.divisor == rhs.divisor;
-            });
-        const bool same_attributes = std::ranges::equal(
-            attributes, recorded_attributes, [](const auto& lhs, const auto& rhs) {
-                return lhs.location == rhs.location && lhs.binding == rhs.binding &&
-                       lhs.format == rhs.format && lhs.offset == rhs.offset;
-            });
-        if (vertex_input_recorded && !(same_bindings && same_attributes)) {
-            ++fast_draw_stats.vertex_input_mismatches;
-        }
-        return;
-    }
-    dirty[Dirty::VertexInput] = false;
-    for (size_t index = 0; index < Maxwell::NumVertexAttributes; ++index) {
-        dirty[Dirty::VertexAttribute0 + index] = false;
-    }
-    for (size_t index = 0; index < Maxwell::NumVertexArrays; ++index) {
-        dirty[Dirty::VertexBinding0 + index] = false;
-    }
-    if (fast_draw_verify) {
-        recorded_bindings = bindings;
-        recorded_attributes = attributes;
-        vertex_input_recorded = true;
-    }
-
-    scheduler.Record([bindings, attributes](vk::CommandBuffer cmdbuf) {
-        cmdbuf.SetVertexInputEXT(bindings, attributes);
-    });
 }
 
 void RasterizerVulkan::InitializeChannel(Tegra::Control::ChannelState& channel) {

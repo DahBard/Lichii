@@ -12,7 +12,9 @@
 
 #include "common/common_types.h"
 
+#include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/nzcv_util.h"
+#include "dynarmic/backend/x64/stack_layout.h"
 #include "dynarmic/frontend/A64/a64_location_descriptor.h"
 
 namespace Dynarmic::Backend::X64 {
@@ -23,6 +25,12 @@ class BlockOfCode;
 #    pragma warning(push)
 #    pragma warning(disable : 4324)  // Structure was padded due to alignment specifier
 #endif
+
+/// UserConfig::host_call_return: per guest call, the host return address, the location descriptor
+/// of the guest return address and the callee's shadow space.
+constexpr size_t HostCallFrameSize = 16 + ABI_SHADOW_SPACE;
+/// Guest call depth kept on the host stack; a deeper call drops all frames.
+constexpr size_t HostCallMaxDepth = 512;
 
 struct A64JitState {
     using ProgramCounterType = u64;
@@ -58,6 +66,12 @@ struct A64JitState {
 
     // The last inline CNTPCT_EL0 read, to tell a polling loop (UserConfig::inline_cntpct_spin_ticks).
     u64 last_cntpct = 0;
+    // UserConfig::host_call_return: the register allocator's spill slots and the check bit
+    // live here instead of on the host stack, whose depth then follows the guest's calls.
+    alignas(16) std::array<std::array<u64, 2>, SpillCount> spill{};
+    u64 host_stack_base = 0;   // rsp with no guest call frames
+    u64 host_stack_limit = 0;  // a call below this drops all frames
+    u8 check_bit = 0;
 
     u32 GetPstate() const {
         return NZCV::FromX64(cpsr_nzcv);

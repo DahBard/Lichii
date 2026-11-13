@@ -13,7 +13,7 @@ namespace VideoCommon {
 ///  1  (no longer a switch: upstream #778 keeps idle upload staging buffers always)
 ///  2  no guest upload for a new single-level 2D image that GPU copies overwrite whole
 ///  4  2D levels of 2 MiB or more untiled in bands on the transcode workers too
-///  8  guest memory of uploaded textures not hinted cold (it faulted back in on re-uploads)
+///  8  (no longer a switch: upstream #1581 hints uploaded memory cold only when RAM is short)
 inline int TextureUploadBits() {
     static const int bits = [] {
         for (const char* name : {"LICHII_TEXTURE_UPLOADS", "EDEN_NX2_EXP8"}) {

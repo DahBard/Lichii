@@ -310,14 +310,6 @@ struct UserConfig {
     /// 32-bit instruction) is not zero-extended again by SetW / ZeroExtendWordToLong.
     bool elide_redundant_zext = false;
 
-    /// x64 only. Unlinked block exits jump to one shared stub per target (PC store + dispatcher
-    /// return) instead of an inline stub, so patch sites are 5/6 bytes instead of 22/23.
-    bool compact_block_exits = false;
-
-    /// x64 only. Cold code (memory-access fault and abort paths, exit stubs) is
-    /// emitted into a separate region at the end of the code cache, away from the hot blocks.
-    bool far_code = false;
-
     /// x64 only. Blocks do not save and set up %rbp as a frame pointer (nothing in the JIT
     /// reads it; Windows unwinding does not use it).
     bool omit_block_frame = false;
@@ -330,6 +322,14 @@ struct UserConfig {
     /// x64 only. Return stack buffer entries used (power of two, 8 to 32).
     std::uint32_t rsb_size = 8;
 
+    /// x64 only. Unlinked block exits jump to one shared stub per target (PC store + dispatcher
+    /// return) instead of an inline stub, so patch sites are 5/6 bytes instead of 22/23.
+    bool compact_block_exits = false;
+
+    /// x64 only. Cold code (memory-access fault and abort paths, atomic fallbacks, exit stubs) is
+    /// emitted into a separate region at the end of the code cache, away from the hot blocks.
+    bool far_code = false;
+
     /// x64 only. log2 of the number of fast dispatch table entries (0 = default 20) and whether
     /// the table is 4-way set associative (the four ways of a set share one cache line).
     std::uint32_t fast_dispatch_table_bits = 0;
@@ -339,6 +339,13 @@ struct UserConfig {
     /// flags directly when the flag-setting instruction was emitted right before them, instead
     /// of reloading NZCV from the guest state (the state is still written).
     bool reuse_host_flags = false;
+
+    /// x64 only, without cycle counting and with omit_block_frame. BL and BLR become a host
+    /// `call` and RET a host `ret` once the guest return address matches the one the call
+    /// pushed (else the fast dispatcher runs), so the host's return predictor predicts guest
+    /// returns. Spills and the check bit move into the JIT state; the host stack holds one frame
+    /// per guest call.
+    bool host_call_return = false;
 
     /// This option relates to translation. Generally when we run into an unpredictable
     /// instruction the ExceptionRaised callback is called. If this is true, we define

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -67,6 +68,9 @@ struct BuiltinPatch {
     std::string_view replaces{};
     /// Applied only while this returns true (an env switch); null means always.
     bool (*env_enabled)() = nullptr;
+    // Applies only with NVIDIA DLSS on at this quality in docked mode, and is not listed in
+    // Add-Ons.
+    std::optional<Settings::NvidiaDlssQuality> dlss_quality{};
 };
 
 // EDEN_NX2_<NAME>: unset or empty gives the default, otherwise on unless it starts with '0'.
@@ -88,10 +92,29 @@ bool OotFastLookupEnabled() {
     return enabled;
 }
 
+constexpr std::string_view MAX_RESOLUTION_NAME = "Max Resolution (built-in)";
+
 constexpr std::array<u8, 4> MAX_RESOLUTION_ORIGINAL{0xE8, 0x41, 0x00, 0x36};
 constexpr std::array<u8, 4> MAX_RESOLUTION_BRANCH{0x0F, 0x02, 0x00, 0x14};
 constexpr std::array MAX_RESOLUTION_RECORDS{
     BuiltinPatchRecord{0x805BD0, MAX_RESOLUTION_BRANCH, MAX_RESOLUTION_ORIGINAL},
+};
+
+// ProfessorTee's render scales (#903): Max Resolution's fixed-scale path returns 1.0 of 2560x1440
+// (main+0x806420: mov w9, #0x3f800000), which DLSS takes to 4K as Quality. The lower scales give
+// the other modes' render sizes.
+constexpr std::array<u8, 4> RENDER_SCALE_ONE{0x09, 0xF0, 0xA7, 0x52};         // 1.0
+constexpr std::array<u8, 4> RENDER_SCALE_BALANCED{0xE9, 0xEB, 0xA7, 0x52};    // 0.871, 2276x1280
+constexpr std::array<u8, 4> RENDER_SCALE_PERFORMANCE{0x09, 0xE8, 0xA7, 0x52}; // 0.75, 1920x1080
+constexpr std::array<u8, 4> RENDER_SCALE_ULTRA{0x09, 0xE0, 0xA7, 0x52};       // 0.5, 1280x720
+constexpr std::array RENDER_BALANCED_RECORDS{
+    BuiltinPatchRecord{0x806420, RENDER_SCALE_BALANCED, RENDER_SCALE_ONE},
+};
+constexpr std::array RENDER_PERFORMANCE_RECORDS{
+    BuiltinPatchRecord{0x806420, RENDER_SCALE_PERFORMANCE, RENDER_SCALE_ONE},
+};
+constexpr std::array RENDER_ULTRA_RECORDS{
+    BuiltinPatchRecord{0x806420, RENDER_SCALE_ULTRA, RENDER_SCALE_ONE},
 };
 
 // RsMan-Dev's texture pool patch: stp x8, x9, [sp, #0x10] stores the graphics allocator's
@@ -311,6 +334,12 @@ void ApplyOcarinaFsrPreset(u64 title_id, std::string_view module, std::string_vi
                     build_id, ocarina_build);
         return;
     }
+    // NVIDIA DLSS's quality set the same render scale (its built-in patch, Streamline builds).
+    if (Settings::AppliedOcarinaRenderScale()) {
+        LOG_INFO(Loader, "    - Ocarina of Time FSR preset: not applied, the NVIDIA DLSS quality "
+                         "sets the render scale");
+        return;
+    }
     // The scale is a fraction of the game's base size: handheld 1920x1080, docked 2560x1440 (FSR
     // brings docked to 4K, or keeps 1440p). The same values give AMD's ratios for both.
     // The upper half of an f32 whose lower half is zero (movz w9, #imm16, lsl #16).
@@ -406,7 +435,7 @@ constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
     BuiltinPatch{
-        .name = "Max Resolution (built-in)",
+        .name = MAX_RESOLUTION_NAME,
         .title_id = 0x0400486024DEC000,
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
@@ -466,6 +495,32 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = OOT_POLL_BACKOFF_RECORDS,
         .env_enabled = OotPollBackoffEnabled,
+    },
+    // The NVIDIA DLSS quality lowers Ocarina's render resolution under Max Resolution, since DLSS
+    // replaces the game's own 1440p -> 4K upscale and takes whatever the game renders.
+    BuiltinPatch{
+        .name = "DLSS Balanced render scale (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = RENDER_BALANCED_RECORDS,
+        .dlss_quality = Settings::NvidiaDlssQuality::Balanced,
+    },
+    BuiltinPatch{
+        .name = "DLSS Performance render scale (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = RENDER_PERFORMANCE_RECORDS,
+        .dlss_quality = Settings::NvidiaDlssQuality::Performance,
+    },
+    BuiltinPatch{
+        .name = "DLSS Ultra Performance render scale (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = RENDER_ULTRA_RECORDS,
+        .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
     },
 };
 
@@ -872,6 +927,9 @@ std::vector<VirtualFile> PatchManager::CollectPatches(const std::vector<VirtualD
 }
 
 std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::string& name) const {
+    if (name == "main") {
+        Settings::SetAppliedOcarinaRenderScale(std::nullopt);
+    }
     if (nso.size() < sizeof(Loader::NSOHeader)) {
         return nso;
     }
@@ -948,6 +1006,18 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             LOG_INFO(Loader, "    - Skipping \"{}\": included in an applied built-in patch",
                      patch.name);
             continue;
+        }
+        if (patch.dlss_quality) {
+#ifdef EGLANTINE_STREAMLINE
+            const bool wanted = Settings::OcarinaDlssRenderScale() == patch.dlss_quality &&
+                                std::find(disabled.cbegin(), disabled.cend(),
+                                          MAX_RESOLUTION_NAME) == disabled.cend();
+#else
+            constexpr bool wanted = false;
+#endif
+            if (!wanted) {
+                continue;
+            }
         }
         if (patch.build_id != build_id) {
             LOG_INFO(Loader, "    - Skipping \"{}\": build id {} is not {}", patch.name, build_id,
@@ -1038,6 +1108,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         }
         if (!patch.replaces.empty()) {
             replaced.push_back(patch.replaces);
+        }
+        if (patch.dlss_quality) {
+            Settings::SetAppliedOcarinaRenderScale(patch.dlss_quality);
         }
     }
 
@@ -1600,7 +1673,7 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
     }
 
     for (const auto& patch : BUILTIN_PATCHES) {
-        if (patch.title_id != title_id) {
+        if (patch.title_id != title_id || patch.dlss_quality) {
             continue;
         }
         const auto is_disabled = [&](std::string_view name) {

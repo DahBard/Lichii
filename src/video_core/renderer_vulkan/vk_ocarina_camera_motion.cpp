@@ -407,8 +407,10 @@ public:
     [[nodiscard]] virtual VkImage OutputImage() const = 0;
     [[nodiscard]] virtual VkImageView OutputView() const = 0;
     [[nodiscard]] virtual VkSampler PointSampler() const = 0;
-    /// The frame time and sharpening fields are filled in by the FSR backend.
-    virtual bool Upscale(const Fsr4Upscaler::Inputs& inputs) = 0;
+    /// The frame time and sharpening fields are filled in by the FSR backend. `depth_size` is the
+    /// depth image's own size, larger than the render size where the game pads its images (DLSS
+    /// takes it; FSR reads the render size from the top left).
+    virtual bool Upscale(const Fsr4Upscaler::Inputs& inputs, VkExtent2D depth_size) = 0;
 };
 
 #ifdef EGLANTINE_STREAMLINE
@@ -430,7 +432,7 @@ public:
     VkSampler PointSampler() const override {
         return upscaler.PointSampler();
     }
-    bool Upscale(const Fsr4Upscaler::Inputs& in) override {
+    bool Upscale(const Fsr4Upscaler::Inputs& in, VkExtent2D depth_size) override {
         const auto image = [](const Fsr4Upscaler::Image& i) {
             return StreamlineDlssUpscaler::Image{i.view, i.image, i.format, i.range,
                                                  i.barrier_aspect};
@@ -446,6 +448,7 @@ public:
             .reset = in.reset,
             .depth_inverted = in.depth_inverted,
             .hdr = in.hdr,
+            .depth_size = depth_size,
         });
     }
 
@@ -472,7 +475,7 @@ public:
     VkSampler PointSampler() const override {
         return upscaler.PointSampler();
     }
-    bool Upscale(const Fsr4Upscaler::Inputs& in) override {
+    bool Upscale(const Fsr4Upscaler::Inputs& in, VkExtent2D) override {
         const auto now = std::chrono::steady_clock::now();
         Fsr4Upscaler::Inputs inputs = in;
         inputs.frame_time_ms =
@@ -935,7 +938,8 @@ VkImageView OcarinaLiveDlss::CompositedView() const {
 bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                             VkExtent2D output_extent, VkExtent2D target_extent,
                             const Matrix& current, const Matrix& previous,
-                            std::span<const OcarinaActorMesh> meshes, VkImage depth_image, u64 frame) {
+                            std::span<const OcarinaActorMesh> meshes, VkImage depth_image, u64 frame,
+                            VkExtent2D depth_extent) {
     auto& state = *impl;
     if (state.last_frame == frame || state.upscaler->Failed()) {
         return false;
@@ -1117,7 +1121,7 @@ bool OcarinaLiveDlss::Record(VkImageView color, VkImageView depth, VkImageView t
             .reset = reset,
             .depth_inverted = false,
             .hdr = false,
-        })) {
+        }, depth_extent)) {
         state.scheduler.InvalidateState();
         return false;
     }

@@ -795,13 +795,8 @@ void TextureCache<P>::TickFrame() {
     TickAsyncDecode();
     TickAsyncUnswizzle();
     if (frame_tick % 600 == 0 && !uploaded_ranges.empty()) {
-        // LICHII_TEXTURE_UPLOADS bit 8 (Fritchii v4): none. An image created again over cold memory
-        // (re-created after eviction, or a render target at a new size) faulted all of it back in
-        // while uploading.
-        if ((VideoCommon::TextureUploadBits() & 8) == 0) {
-            for (const auto& [address, size] : uploaded_ranges) {
-                device_memory.HintCold(address, size);
-            }
+        for (const auto& [address, size] : uploaded_ranges) {
+            device_memory.HintCold(address, size);
         }
         uploaded_ranges.clear();
     }

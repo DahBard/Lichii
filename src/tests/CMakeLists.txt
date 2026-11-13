@@ -15,6 +15,7 @@ add_executable(tests
     video_core/nx2_stutter_trace.cpp
     video_core/back_idle_trace.cpp
     video_core/list_macro_trace.cpp
+    video_core/nx2_list_grid.cpp
     video_core/host_mip_limits.cpp
     video_core/gpu_timestamp.cpp
     video_core/semaphore_waiters.cpp
@@ -225,6 +226,8 @@ add_executable(tests
     video_core/turing_macro_ram.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
+    video_core/nx2_backx.cpp
+    video_core/vertex_input_cache.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
     video_core/descriptor_payload_growth.cpp
@@ -246,7 +249,7 @@ target_link_libraries(tests PRIVATE common core audio_core input_common video_co
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 
 if (TARGET dynarmic::dynarmic)
-    target_sources(tests PRIVATE core/jit_ordered_loads.cpp core/window_trace.cpp)
+    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/window_trace.cpp)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
 endif()
 

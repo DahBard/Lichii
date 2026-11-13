@@ -166,44 +166,39 @@ public:
     /// Switch 2: the front flushed this command list page with the split drained.
     virtual void NoteGpuWrittenCommandListSynced([[maybe_unused]] DAddr page) {}
 
-    /// Switch 2, GPU-written command list words the host GPU takes over (Nx2ListIndirect): the
-    /// back's slots for them. Whether this rasterizer has them.
-    [[nodiscard]] virtual bool Nx2ListSlotsSupported() const {
-        return false;
-    }
-    /// Any thread: a slot nobody holds, held for the caller; none while every slot is held.
-    [[nodiscard]] virtual std::optional<u32> Nx2AcquireListSlot() {
-        return std::nullopt;
-    }
-    /// Any thread: drops a hold of `slot` (Nx2AcquireListSlot's or one the back took).
-    virtual void Nx2ReleaseListSlot([[maybe_unused]] u32 slot) {}
-    /// The back, at a list's place: the host GPU copies the list's `count` words at
-    /// `device_addr` into `slot`.
-    virtual void Nx2SnapshotListWords([[maybe_unused]] DAddr device_addr,
-                                      [[maybe_unused]] u32 count, [[maybe_unused]] u32 slot) {}
-    /// The back: the word at `device_addr` was just written `value`, the placeholder of a slot
-    /// word.
-    /// While it holds it, compute dispatches that bind the word as constant buffer data get the
-    /// slot word there instead.
-    virtual void Nx2NoteOwedListWord([[maybe_unused]] DAddr device_addr,
-                                     [[maybe_unused]] u32 value) {}
-    /// The back: an inline QMD with grid words `x`, `y`, `z` was just written at `device_addr`.
-    /// Holds the slots placeholders among them name, until the next inline QMD written there.
-    virtual void Nx2NoteInlineQmdGrid([[maybe_unused]] DAddr device_addr, [[maybe_unused]] u32 x,
-                                      [[maybe_unused]] u32 y, [[maybe_unused]] u32 z) {}
-    /// The back: the words of `slots`, three each, read back from the host GPU (waits for it).
-    virtual void Nx2ReadListSlots([[maybe_unused]] std::span<const u32> slots,
-                                  [[maybe_unused]] std::span<u32> words) {}
-    /// TEST (EDEN_NX2_LIST_INDIRECT_CHECK), the back, right after Nx2SnapshotListWords: the
-    /// words the front read as before for that list, for what the host GPU uses of the slot to
-    /// be compared with.
-    virtual void Nx2CheckListSlot([[maybe_unused]] u32 slot,
-                                  [[maybe_unused]] std::span<const u32> words) {}
-
     virtual void FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) {
         for (const DAddr page : pages) {
             FlushRegion(page, 0x1000, VideoCommon::CacheType::BufferCache);
         }
+    }
+
+    /// Switch 2, list-fed grid macros (nx2_list_grid.h): whether the back keeps list words and
+    /// dispatches from them, so the front may take such lists without reading them.
+    [[nodiscard]] virtual bool Nx2ListGridSupported() const {
+        return false;
+    }
+    /// On the split's back, at the list's place in the stream: copies the three words at
+    /// `address` into a kept-words slot as `keep_id`. Verify mode: `real` are the words as the
+    /// front read them the old way for the macro `hash`, else empty.
+    virtual void Nx2KeepListWords([[maybe_unused]] u64 keep_id, [[maybe_unused]] GPUVAddr address,
+                                  [[maybe_unused]] u64 hash,
+                                  [[maybe_unused]] std::span<const u32> real) {}
+    /// On the split's back, before the inline write that carries it: the word at `device_addr`
+    /// will be the marker of word `index` of list `keep_id`, to be patched from its kept copy.
+    virtual void Nx2ExpectKeptWord([[maybe_unused]] DAddr device_addr,
+                                   [[maybe_unused]] u64 keep_id, [[maybe_unused]] u32 index) {}
+    /// On the split's back: the words kept as `keep_id`, after waiting for the host GPU's copy.
+    /// False if none are kept, or a later list took the slot.
+    [[nodiscard]] virtual bool Nx2ReadKeptListWords([[maybe_unused]] u64 keep_id,
+                                                    [[maybe_unused]] std::span<u32> words) {
+        return false;
+    }
+    /// On the split's back: the keep id of the list grid word `marker` at `device_addr` (in
+    /// guest memory) stands for, if the back patched that word from the list and still keeps it
+    /// (Nx2ListGrid::QmdWordList).
+    [[nodiscard]] virtual std::optional<u64> Nx2FindKeptWord([[maybe_unused]] DAddr device_addr,
+                                                             [[maybe_unused]] u32 marker) {
+        return std::nullopt;
     }
 
     /// Check if the the specified memory area requires flushing to CPU Memory.

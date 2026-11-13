@@ -1535,9 +1535,9 @@ void EmitX64::EmitZeroExtendHalfToLong(EmitContext& ctx, IR::Inst* inst) {
 
 void EmitX64::EmitZeroExtendWordToLong(EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    // Only in a GPR: a spill slot holds just the 32 bits a U32 spill stored, and the 64-bit alias
-    // would reload all 64.
-    if (code.elide_redundant_zext && args[0].IsInGpr(ctx.reg_alloc) && IsZeroExtendedU32Producer(args[0].GetInst())) {
+    // Only a register is known to be zero-extended: a spill slot holds just the 32 bits written to
+    // it, and the 64-bit value aliasing it may be read straight from the slot as a memory operand.
+    if (code.elide_redundant_zext && !args[0].IsImmediate() && IsZeroExtendedU32Producer(args[0].GetInst()) && args[0].IsInGpr(ctx.reg_alloc)) {
         ctx.reg_alloc.DefineValue(code, inst, args[0]);
         return;
     }

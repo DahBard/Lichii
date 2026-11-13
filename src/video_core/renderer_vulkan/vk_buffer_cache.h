@@ -5,9 +5,12 @@
 
 #pragma once
 
-#include <source_location>
-
+#include <array>
 #include <limits>
+#include <optional>
+#include <source_location>
+#include <span>
+#include <utility>
 
 #include <boost/container/small_vector.hpp>
 
@@ -16,7 +19,6 @@
 #include "video_core/buffer_cache/usage_tracker.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
-#include "video_core/renderer_vulkan/nx2_list_slots.h"
 #include "video_core/renderer_vulkan/vk_multi_range_buffer.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
@@ -236,22 +238,6 @@ public:
         return last_stream_uniform;
     }
 
-    /// GPU-written list words the host GPU took over (Nx2ListIndirect), owed in a compute
-    /// dispatch's constant buffer [device_addr, +size) that `buffer` holds at `offset`, filled
-    /// already: the slot words go over the placeholders. `read(device)`: guest memory's word.
-    template <typename Read>
-    void Nx2PatchComputeUniform(DAddr device_addr, u32 size, VkBuffer buffer, u64 offset,
-                                Read&& read) {
-        if (nx2_list_slots.HasOwed()) [[unlikely]] {
-            nx2_list_slots.PatchUniform(device_addr, size, buffer, offset, read);
-        }
-    }
-
-    /// The slots of GPU-written list words (Nx2ListIndirect).
-    [[nodiscard]] Nx2ListSlots& Nx2Slots() noexcept {
-        return nx2_list_slots;
-    }
-
     /// Adds `ref` to the descriptor payload exactly as BindMappedUniformBuffer did when it made
     /// the allocation (it is the very same call). The caller guarantees the allocation is still
     /// live: made on the scheduler tick that is current now, so the staging pool has not recycled
@@ -328,6 +314,34 @@ public:
         return max_dynamic_storage_buffers;
     }
 
+    // List-fed grid macros (nx2_list_grid.h): copies of a command list's three words made at the
+    // list's place in the stream, by keep id. The front reads them back when it needs the values,
+    // uploads that carry their markers get them copied over, and dispatches take their grid there.
+    struct ListKeep {
+        u64 keep_id{};
+        u64 tick{}; ///< The submission that copies them
+        bool verified{};
+        u64 hash{};                ///< If verified: the macro the list fed
+        std::array<u32, 3> real{}; ///< If verified: the words the front read the old way
+    };
+    /// Records, outside the render pass, the copy of the three words at `offset` of `source`.
+    /// Verify mode: `real` are the words the front read the old way for the macro `hash`, else
+    /// empty.
+    void KeepListWords(u64 keep_id, VkBuffer source, VkDeviceSize offset, u64 hash,
+                       std::span<const u32> real);
+    /// The keep id ending in `keep_bits` whose slot still holds its words.
+    [[nodiscard]] std::optional<u64> FindKeptList(u32 keep_bits) const;
+    /// The kept words (or with `arguments`, the dispatch arguments made from them), after waiting
+    /// for their copy. False if the slot holds another list.
+    [[nodiscard]] bool ReadKeptListWords(u64 keep_id, std::span<u32> words, bool arguments = false);
+    /// Verify mode: the kept list `keep_id`, if its words were also read the old way.
+    [[nodiscard]] const ListKeep* KeptVerify(u64 keep_id) const;
+    /// Records the copy of kept word `index` over the word at `offset` of `destination`.
+    void CopyKeptWord(u64 keep_id, u32 index, VkBuffer destination, VkDeviceSize offset);
+    /// Where the kept list's dispatch arguments are: x, then y and z as 16 bits, as
+    /// KeplerCompute::DispatchNativeCompute takes them from a QMD.
+    [[nodiscard]] std::pair<VkBuffer, VkDeviceSize> KeptGrid(u64 keep_id) const;
+
 private:
     void BindBuffer(const Buffer& buffer, u32 offset, u32 size) {
         const VkBuffer handle = buffer.Handle();
@@ -355,6 +369,21 @@ private:
     vk::Buffer null_buffer;
     vk::Buffer nx2_mesh_mirror;
 
+    /// Kept list words: a host-readable slot per keep id (modulo the slot count) holding the
+    /// three words at 0 and the dispatch arguments at LIST_KEEP_GRID (ListGridArgumentsPass).
+    static constexpr u32 LIST_KEEP_SLOTS = 1024;
+    static constexpr u32 LIST_KEEP_SLOT_BYTES = 32;
+    static constexpr VkDeviceSize LIST_KEEP_GRID = 16;
+    void EnsureListKeepBuffer();
+    [[nodiscard]] static VkDeviceSize ListKeepOffset(u64 keep_id) {
+        return VkDeviceSize{keep_id % LIST_KEEP_SLOTS} * LIST_KEEP_SLOT_BYTES;
+    }
+    vk::Buffer list_keep_buffer;
+    std::unique_ptr<ListGridArgumentsPass> list_grid_arguments_pass;
+    DescriptorPool* list_pass_descriptor_pool{};
+    ComputePassDescriptorQueue* list_pass_descriptor_queue{};
+    std::array<ListKeep, LIST_KEEP_SLOTS> list_keeps{};
+
     std::unique_ptr<Uint8Pass> uint8_pass;
     std::unique_ptr<VertexRepackPass> vertex_repack_pass;
     u32 vertex_repack_mask{};
@@ -377,7 +406,6 @@ private:
     u64 bound_index_epoch = 0;
     bool bound_index_valid = false;
 
-    Nx2ListSlots nx2_list_slots{memory_allocator, scheduler};
     /// The vertex buffer each binding last recorded, and the scheduler recording epoch it was
     /// recorded at (~0: unknown).
     struct BoundVertexBuffer {

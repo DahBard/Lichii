@@ -638,10 +638,10 @@ struct System::Impl {
         Network::CancelPendingSocketOperations();
         kernel.SuspendEmulation(true);
         kernel.CloseServices();
-        // Each step done tells the frontend the teardown still moves (see
-        // Common::ShutdownProgress); the GPU's (pipeline caches) reports its own steps.
         Common::NoteShutdownProgress();
         kernel.ShutdownCores();
+        // Each step done tells the frontend the teardown still moves (see
+        // Common::ShutdownProgress); the GPU's (pipeline caches) reports its own steps.
         Common::NoteShutdownProgress();
         services.reset();
         service_manager.reset();

@@ -66,8 +66,8 @@ struct EmitContext {
     }
 
     std::vector<std::function<void()>> deferred_emits;
-    /// Cold deferred code that may go to the far region (memory fault and abort paths). Use
-    /// ColdEmits(); emitted with deferred_emits when there is no far region.
+    /// Cold deferred code that may go to the far region (memory fault/abort paths, atomic
+    /// fallbacks). Use ColdEmits(); emitted with deferred_emits when there is no far region.
     std::vector<std::function<void()>> far_deferred_emits;
     RegAlloc& reg_alloc;
     IR::Block& block;

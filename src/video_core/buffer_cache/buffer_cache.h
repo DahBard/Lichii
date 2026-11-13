@@ -1498,6 +1498,7 @@ void BufferCache<P>::NoteLandedBytes(ReadCheck& check, const Common::RangeSet<DA
 
 template <class P>
 void BufferCache<P>::ClearDownload(DAddr device_addr, u64 size) {
+    Nx2ForgetKeptWords(device_addr, size);
     if (const std::optional<u64> waited = FinishReadDownloads(device_addr, size)) {
         VideoCore::AsyncReadback::CountClearLanding(*waited);
     }
@@ -2113,10 +2114,7 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
             const std::array<u32, 3> block{qmd.block_dim_x.Value(), qmd.block_dim_y.Value(),
                                            qmd.block_dim_z.Value()};
             std::optional<std::array<u32, 3>> grid;
-            // A dispatch from GPU-written list words (Nx2ListIndirect) has the slot's placeholders
-            // in its grid, not the counts the host GPU dispatches: its grid is unknown here too.
-            if (!kepler_compute->GetIndirectComputeAddress() &&
-                !kepler_compute->GetIndirectListSlot()) {
+            if (!kepler_compute->GetIndirectComputeAddress() && !kepler_compute->GetKeptGrid()) {
                 grid = std::array<u32, 3>{qmd.grid_dim_x.Value(), qmd.grid_dim_y.Value(),
                                           qmd.grid_dim_z.Value()};
             }
@@ -3367,21 +3365,14 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
             needs_alignment_stream ||
             (has_host_buffer && size <= channel_state->uniform_buffer_skip_cache_size &&
              !memory_tracker.IsRegionGpuModified(binding.device_addr, size));
-        // GPU-written list words owed there go over their placeholders (Nx2ListIndirect).
-        const auto guest_word = [this](DAddr word) { return device_memory.Read<u32>(word); };
         if constexpr (!IS_OPENGL) {
             if (use_fast_buffer) {
                 const std::span<u8> span =
                     runtime.BindMappedUniformBuffer(0, binding_index, size);
-                {
-                    const Nx2Profile::FineScope copy_scope{Nx2Profile::Zone::StreamCopy}; // TEST
-                    Nx2Profile::Add(Nx2Profile::Counter::StreamCopies, 1);
-                    Nx2Profile::Add(Nx2Profile::Counter::StreamCopyBytes, size);
-                    device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
-                }
-                const auto stream = runtime.LastStreamUniformRef();
-                runtime.Nx2PatchComputeUniform(binding.device_addr, size, stream.buffer,
-                                               stream.offset, guest_word);
+                const Nx2Profile::FineScope copy_scope{Nx2Profile::Zone::StreamCopy}; // TEST
+                Nx2Profile::Add(Nx2Profile::Counter::StreamCopies, 1);
+                Nx2Profile::Add(Nx2Profile::Counter::StreamCopyBytes, size);
+                device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
                 return;
             }
         }
@@ -3392,12 +3383,6 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
         }
 
         buffer.MarkUsage(offset, size);
-        if constexpr (!IS_OPENGL) {
-            runtime.Nx2PatchComputeUniform(binding.device_addr, size, buffer.Handle(), offset,
-                                           guest_word);
-        } else {
-            (void)guest_word;
-        }
         if constexpr (NEEDS_BIND_UNIFORM_INDEX) {
             runtime.BindComputeUniformBuffer(binding_index, buffer, offset, size);
             ++binding_index;
@@ -3806,6 +3791,7 @@ template <class P>
 void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u32 size,
                                        bool needs_sync, GpuWaitStats::WriteSite site) {
     GpuWaitStats::NoteGpuWrite(device_addr, size, site);
+    Nx2ForgetKeptWords(device_addr, size);
     if constexpr (!IS_OPENGL) {
         if (needs_sync) {
             Buffer& buffer = slot_buffers[buffer_id];
@@ -4191,6 +4177,7 @@ void BufferCache<P>::Nx2FlushListPages(std::span<const DAddr> pages) {
 
 template <class P>
 void BufferCache<P>::Nx2NoteListHostWrite(DAddr device_addr, u64 size) {
+    Nx2ForgetKeptWords(device_addr, size);
     if constexpr (!IS_OPENGL) {
         if (size == 0 || !Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
             return;

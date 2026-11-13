@@ -316,6 +316,33 @@ public:
         NoteWrites(writes);
     }
 
+    /// A Maxwell3D state register write (not in execution_mask) from the front, shadow RAM
+    /// applied (not in replay) and changing the front's copy of the register. Writes in a row go
+    /// to the back as one entry once another entry follows or the front publishes or waits; the
+    /// back stores them and sets their dirty flags at once (Maxwell3D::WriteStateRegisters).
+    /// `flags`: the dirty flags the register sets; `breaks`: changing it ends fast draw reuse;
+    /// `anywhere`: the back may issue a deferred draw with it, which can write the GPU caches
+    /// anywhere. Port of Damfortx's state blocks (76548f0bf1), after #717's StateDelta.
+    void StateWrite(Tegra::Engines::EngineInterface* engine, u32 method, u32 value,
+                    std::array<u8, 2> flags, bool breaks, bool anywhere) {
+        if (fold_count != 0) [[unlikely]] {
+            FlushFold(); // The instances it counted came before this write
+        }
+        if (engine != state_engine || state_count == MaxStateWrites) {
+            FlushState();
+            state_engine = engine;
+        }
+        state_writes[state_count++] = u64{method} | (u64{value} << 32);
+        for (const u8 flag : flags) {
+            state_flags[flag / 64] |= u64{1} << (flag % 64);
+        }
+        if (breaks) {
+            state_break = method;
+            state_breaks = true;
+        }
+        state_anywhere = state_anywhere || anywhere;
+    }
+
     /// Defer flag: the call doesn't end fast draw reuse (nx2_fast_draw.h).
     static constexpr u64 FastDrawNeutral = 1 << 7;
 
@@ -380,6 +407,10 @@ public:
     /// The front has nothing to send while it polls suspended channels. A back that ran everything
     /// runs its idle hook (the deferred submit) and sleeps now instead of spinning for more.
     void SettleIdleBack() {
+        if (state_count != 0 || fold_count != 0) {
+            Publish();
+            return;
+        }
         if (hook_requested.load(std::memory_order_relaxed) || BackQuiet() ||
             consumed.load(std::memory_order_acquire) != write_position) {
             return;
@@ -418,9 +449,11 @@ public:
     void Drain(DrainSite site = DrainSite::Other);
 
     /// Instance folding (upstream #1274), front: one more instance of the instance loop `context`
-    /// draws. Nothing is sent: `flush(context, count)` sends the instances counted so far as one
-    /// entry before the next entry, Drain, Publish, WaitFor or macro DMA read.
-    void FoldInstance(void (*flush)(void*, u32), void* context) {
+    /// draws. Nothing is sent: `flush(*this, context, count)` sends the instances counted so far
+    /// as one entry before the next entry, Drain, Publish, WaitFor or macro DMA read. State writes
+    /// gathered before go first, and StateWrite sends a count first: never both wait.
+    void FoldInstance(void (*flush)(GpuSplit&, void*, u32), void* context) {
+        FlushState();
         if (fold_count != 0 && fold_context != context) {
             FlushFold();
         }
@@ -434,7 +467,14 @@ public:
             return;
         }
         const u32 count = std::exchange(fold_count, 0);
-        fold_flush(fold_context, count);
+        fold_flush(*this, fold_context, count);
+    }
+    /// Sends the state writes StateWrite gathered, if any (before any other entry, publish or
+    /// wait).
+    void FlushState() {
+        if (state_count != 0) {
+            FlushStateSlow();
+        }
     }
 
     /// Compute or copy work was just sent: what can write GPU-written command lists.
@@ -450,7 +490,13 @@ public:
     void NoteSync() {
         last_sync_position = write_position;
     }
-    /// The position after everything sent so far, for Ran and WaitForPosition.
+    /// The position after everything sent so far, for Ran and WaitForPosition. The state writes
+    /// still gathered are sent first.
+    [[nodiscard]] u64 Position() {
+        FlushState();
+        return write_position;
+    }
+    /// For readers that can't send: the position without the state writes still gathered.
     [[nodiscard]] u64 Position() const {
         return write_position;
     }
@@ -658,12 +704,17 @@ private:
         Method, ///< Bits 8-23 method, 32-63 argument; flags IsLast, HasSegment (word 1)
         Multi,  ///< Bits 8-23 method, 32-63 amount; word 1 methods pending, [segment], words
         Call,   ///< Bits 8-31 payload size in words; word 1 thunk, then the payload
+        State,  ///< Bits 8-23 last method that breaks, 32-63 count; flag HasBreak; words 1-4
+                ///< dirty flags; then (method | value << 32) per write (StateWrite)
     };
     static constexpr u64 IsLast = 1 << 4;
     static constexpr u64 HasSegment = 1 << 5;
     static constexpr u64 Direct = 1 << 6; ///< Method: call it even if not executable (macros)
     /// Call: made by DeferWords (the back macros), for the fast draw break counts
     static constexpr u64 WordsCall = 1 << 6;
+    static constexpr u64 HasBreak = 1 << 4; ///< State: a write ends fast draw reuse
+    static constexpr size_t StateFlagWords = 4;
+    static constexpr u32 MaxStateWrites = 128;
 
     static constexpr size_t RingWords = size_t{1} << 20; // 8 MiB
     static constexpr size_t RingMask = RingWords - 1;
@@ -733,11 +784,14 @@ private:
                                  static_cast<size_t>(payload[function_words])});
     }
 
+    void FlushStateSlow();
+
     /// Room for an entry of `words` at the write position (never across the ring's end).
     u64* Reserve(size_t words) {
         if (fold_count != 0) [[unlikely]] {
             FlushFold();
         }
+        FlushState();
         const size_t index = write_position & RingMask;
         if (index + words <= RingWords && write_position + words - consumed_cache <= RingWords)
             [[likely]] {
@@ -804,6 +858,7 @@ private:
     bool log_methods{};
     void LogMethod(const Tegra::Engines::EngineInterface* engine, u32 method);
     void SelectEngine(Tegra::Engines::EngineInterface* engine) {
+        FlushState();
         if (engine != front_engine) [[unlikely]] {
             SwitchEngine(engine);
         }
@@ -845,7 +900,7 @@ private:
     alignas(128) u64 write_position{};
     // Instance folding: instances counted and not sent yet (front).
     u32 fold_count{};
-    void (*fold_flush)(void*, u32){};
+    void (*fold_flush)(GpuSplit&, void*, u32){};
     void* fold_context{};
     u64 last_writer_position{};
     u64 last_barrier_position{};
@@ -916,6 +971,14 @@ private:
     /// PublishSoon), while the back may have nothing to do.
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
+    /// The state writes being gathered (StateWrite).
+    Tegra::Engines::EngineInterface* state_engine{};
+    u32 state_count{};
+    u32 state_break{};
+    bool state_breaks{};
+    bool state_anywhere{};
+    std::array<u64, StateFlagWords> state_flags{};
+    std::array<u64, MaxStateWrites> state_writes{};
 
     // Back side, in its own block: the back writes these on every engine switch and every entry.
     alignas(128) Tegra::Engines::EngineInterface* back_engine{};

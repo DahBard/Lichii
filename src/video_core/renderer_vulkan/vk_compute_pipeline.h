@@ -69,6 +69,8 @@ public:
                                  BindCommand* deferred_bind = nullptr);
 
     static constexpr u64 Ocarina1440pShader = 0x6bd913e1f34e83ebULL;
+    /// The game's 3/4 upscale to its output size.
+    static constexpr u64 OcarinaThreeQuarterShader = 0xe40f5efb5480e692ULL;
     [[nodiscard]] bool CanReplaceOcarinaUpscale() const;
 
     bool IsBound() const noexcept {

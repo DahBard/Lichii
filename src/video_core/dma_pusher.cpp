@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cstdlib>
@@ -43,8 +44,7 @@
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_entry_check.h"
-#include "video_core/nx2_list_indirect.h"
-#include "video_core/nx2_list_indirect_stats.h"
+#include "video_core/nx2_list_grid.h"
 #include "video_core/nx2_list_macro_trace.h"
 #include "video_core/nx2_list_stats.h"
 #include "video_core/rasterizer_interface.h"
@@ -789,12 +789,8 @@ bool DmaPusher::Step() {
             Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Safe);
             command_resume_offset +=
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
-        } else if (gpu_written && TakeGpuWrittenListWords(header)) {
-            // The words stay on the host GPU: the call takes their placeholders (not recorded
-            // for EDEN_NX2_PB_CHECK, which would find the entry's memory changed).
-            const std::span<const CommandHeader> commands{command_headers.data(), header.size};
-            command_resume_offset +=
-                ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
+        } else if (gpu_written && TakeListGrid(dma_state.dma_get, static_cast<u32>(header.size))) {
+            // Nothing to parse: the words stay on the host GPU (nx2_list_grid.h).
         } else if (command_resume_offset == 0 && DrawFromGpuArguments(header)) {
             // The entry's words are a draw macro's parameters, left in GPU memory.
         } else if (bool pending = false;
@@ -1353,6 +1349,79 @@ bool DmaPusher::DrawFromGpuArguments(const CommandListHeader& header) {
     return true;
 }
 
+bool DmaPusher::TakeListGrid(GPUVAddr address, u32 count) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    // The three words are all the parameters of a compute macro call begun in the entry before,
+    // on one mapped page.
+    if (count != 3 || dma_state.method_count != 3 || command_resume_offset != 0 ||
+        rasterizer == nullptr || !split.Active() || !split.FrontMacros() ||
+        dma_state.method < MacroRegistersStart || (dma_state.method & 1) != 0 ||
+        (address & 0xfff) > 0x1000 - 3 * sizeof(u32) ||
+        subchannels[dma_state.subchannel] == nullptr ||
+        subchannel_type[dma_state.subchannel] != Engines::EngineTypes::KeplerCompute ||
+        !memory_manager.GpuToCpuAddress(address)) {
+        return false;
+    }
+    auto* const compute = static_cast<Engines::KeplerCompute*>(subchannels[dma_state.subchannel]);
+    if (!compute->FrontRunsMacros()) {
+        return false;
+    }
+    const std::optional<u64> keep_id = compute->FrontClaimListGrid(split, dma_state.method);
+    if (!keep_id) {
+        return false;
+    }
+    // Verify mode: the words the old way too, for the checks to compare against.
+    std::array<u32, 3> real{};
+    if (Nx2ListGrid::g_verify) {
+        if (ReadGpuWrittenCommands(address, count)) {
+            std::memcpy(real.data(), command_headers.data(), sizeof(real));
+        } else {
+            FlushGpuWrittenCommands(address, sizeof(real));
+            memory_manager.ReadBlockUnsafe(address, real.data(), sizeof(real));
+        }
+    }
+    const Nx2ListGrid::ListReader reader{
+        [](void* self, GPUVAddr list, u64 keep_id, std::span<u32> words) {
+            return static_cast<DmaPusher*>(self)->ReadListWords(list, keep_id, words);
+        },
+        this};
+    compute->FrontTakeListGrid(split, dma_state.method, *keep_id, address, reader,
+                               Nx2ListGrid::g_verify ? std::span<const u32>{real}
+                                                     : std::span<const u32>{});
+    dma_state.method_count = 0;
+    dma_state.is_last_call = true;
+    return true;
+}
+
+bool DmaPusher::ReadListWords(GPUVAddr address, u64 keep_id, std::span<u32> words) {
+    if (rasterizer == nullptr || words.size() != 3) {
+        return false;
+    }
+    // The copy the back kept at the list's place in the stream: the words as the list had them,
+    // whatever later work wrote there. Its slot is reused only after the list's markers were
+    // resolved (Nx2ListGrid::ClaimSlot).
+    auto& split = VideoCommon::GpuSplit::Get();
+    bool kept = false;
+    split.Run([&] { kept = rasterizer->Nx2ReadKeptListWords(keep_id, words); },
+              VideoCommon::DrainSite::ListFlush);
+    if (kept) {
+        return true;
+    }
+    // No copy (the back found no buffer for the list): the old way, the list as it is after
+    // everything sent so far.
+    if (!memory_manager.GpuToCpuAddress(address)) {
+        LOG_ERROR(HW_GPU, "List-fed grid: list {} at {:#x} is neither kept nor mapped", keep_id,
+                  address);
+        return false;
+    }
+    LOG_WARNING(HW_GPU, "List-fed grid: list {} at {:#x} has no kept copy, read from memory",
+                keep_id, address);
+    split.Drain(VideoCommon::DrainSite::ListFlush);
+    FlushGpuWrittenCommands(address, words.size_bytes());
+    memory_manager.ReadBlockUnsafe(address, words.data(), words.size_bytes());
+    return true;
+}
+
 bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count, bool* pending) {
     // The pages are marked as command list pages: from the next write on, the buffer cache copies
     // them to host memory right after the dispatch or copy that writes them and submits. The
@@ -1471,86 +1540,6 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count, bool* pendin
     }
     if (Nx2ListStats::g_verify) [[unlikely]] {
         VerifyGpuWrittenCommands(address, count);
-    }
-    return true;
-}
-
-bool DmaPusher::TakeGpuWrittenListWords(const CommandListHeader& header) {
-    // Ocarina of Time's compute culling writes the group counts of a later dispatch as the
-    // parameters of compute macro 0xe74, which only stores them in the data RAM for 0xe7a and
-    // 0xe76 to upload and launch with. The front need not wait for the culling to run and its
-    // copy to come back: the macros run on placeholders the host GPU's copy of the words takes
-    // the place of (Nx2ListIndirect, KeplerCompute::FrontTakeListWords).
-    auto& split = VideoCommon::GpuSplit::Get();
-    using Kept = Nx2ListIndirect::Stats::Kept; // TEST
-    if (Nx2ListIndirect::Stats::Enabled()) [[unlikely]] {
-        Nx2ListIndirect::Stats::MaybeLog();
-    }
-    if (!Nx2ListIndirect::g_enabled || rasterizer == nullptr || command_resume_offset != 0 ||
-        !split.Active() || !split.FrontMacros()) {
-        Nx2ListIndirect::Stats::NoteKept(Kept::Off);
-        return false;
-    }
-    const u32 count = static_cast<u32>(header.size);
-    // All of a macro call's parameters, from its first: its header ended the entry before.
-    if (count == 0 || count > Nx2ListIndirect::SlotWords || dma_state.method_count != count ||
-        dma_state.method < MacroRegistersStart || (dma_state.method & 1) != 0 ||
-        subchannels[dma_state.subchannel] == nullptr ||
-        subchannel_type[dma_state.subchannel] != Engines::EngineTypes::KeplerCompute) {
-        Nx2ListIndirect::Stats::NoteKept(Kept::NotCall);
-        return false;
-    }
-    auto* const compute = static_cast<Engines::KeplerCompute*>(subchannels[dma_state.subchannel]);
-    if (!compute->FrontRunsMacros() || !rasterizer->Nx2ListSlotsSupported()) {
-        Nx2ListIndirect::Stats::NoteKept(Kept::Off);
-        return false;
-    }
-    // On one device page, as the back finds it: its mappings are the front's once it ran the
-    // last change sent.
-    const u64 bytes = u64{count} * sizeof(u32);
-    const auto device = memory_manager.GpuToCpuAddress(dma_state.dma_get);
-    const auto last = memory_manager.GpuToCpuAddress(dma_state.dma_get + bytes - 1);
-    if (!device || !last || *last != *device + bytes - 1 || !split.Ran(split.LastMappingChange())) {
-        Nx2ListIndirect::Stats::NoteKept(Kept::Placement);
-        return false;
-    }
-    const std::optional<u32> slot = rasterizer->Nx2AcquireListSlot();
-    if (!slot) {
-        Nx2ListIndirect::Stats::NoteKept(Kept::NoSlot);
-        return false;
-    }
-    if (!compute->FrontTakeListWords(split, dma_state.method, count, *slot)) {
-        rasterizer->Nx2ReleaseListSlot(*slot); // Nothing sent with it
-        Nx2ListIndirect::Stats::NoteKept(Kept::Refused);
-        return false;
-    }
-    Nx2ListIndirect::Stats::NoteTaken(dma_state.method, count);
-    // TEST (EDEN_NX2_LIST_INDIRECT_CHECK): the words as the old path reads them (waiting for
-    // their writers), for the back to compare what the host GPU uses of the slot with.
-    const bool check = Nx2ListIndirect::Stats::g_check;
-    std::array<u32, Nx2ListIndirect::SlotWords> expected{};
-    if (check) [[unlikely]] {
-        if (ReadGpuWrittenCommands(dma_state.dma_get, count)) {
-            for (u32 k = 0; k < count; ++k) {
-                expected[k] = command_headers[k].argument;
-            }
-        } else {
-            FlushGpuWrittenCommands(dma_state.dma_get, bytes);
-            memory_manager.ReadBlockUnsafe(dma_state.dma_get, expected.data(), bytes);
-        }
-    }
-    // At the list's place: after the work sent before it, the GPU fetched the list there.
-    split.Defer(
-        [rasterizer_ = rasterizer, device_ = *device, count, slot_ = *slot, check, expected] {
-            rasterizer_->Nx2SnapshotListWords(device_, count, slot_);
-            if (check) {
-                rasterizer_->Nx2CheckListSlot(slot_, std::span{expected}.first(count));
-            }
-        },
-        VideoCommon::GpuSplit::Writes::Noted);
-    command_headers.resize_destructive(count);
-    for (u32 k = 0; k < count; ++k) {
-        command_headers[k].argument = Nx2ListIndirect::Placeholder(*slot, k);
     }
     return true;
 }

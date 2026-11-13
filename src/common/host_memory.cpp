@@ -1215,6 +1215,10 @@ void HostMemory::Swap(HostMemory& other) noexcept {
     std::swap(commit_on_use, other.commit_on_use);
 }
 
+namespace {
+std::atomic<u64> g_mapped_bytes{};
+} // namespace
+
 void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length, MemoryPermission perms, bool separate_heap) {
 #if !(defined(__OPENORBIS__) || defined(__managarm__))
     ASSERT(virtual_offset % PageAlignment == 0);
@@ -1229,6 +1233,7 @@ void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length, M
         // Pages the kernel handed out are committed already; this covers any it did not.
         Commit(host_offset, length);
     }
+    g_mapped_bytes.fetch_add(length, std::memory_order_relaxed);
     impl->Map(virtual_offset + virtual_base_offset, host_offset, length, perms);
 #endif
 }
@@ -1241,6 +1246,7 @@ void HostMemory::Unmap(size_t virtual_offset, size_t length, bool separate_heap)
     if (length == 0 || !virtual_base || !impl) {
         return;
     }
+    g_mapped_bytes.fetch_add(length, std::memory_order_relaxed);
     impl->Unmap(virtual_offset + virtual_base_offset, length);
 #endif
 }
@@ -1256,6 +1262,7 @@ void HostMemory::Protect(size_t virtual_offset, size_t length, MemoryPermission 
     const bool read = True(perm & MemoryPermission::Read);
     const bool write = True(perm & MemoryPermission::Write);
     const bool execute = True(perm & MemoryPermission::Execute);
+    g_mapped_bytes.fetch_add(length, std::memory_order_relaxed);
     impl->Protect(virtual_offset + virtual_base_offset, length, read, write, execute);
 #endif
 }
@@ -1287,8 +1294,8 @@ namespace {
 std::atomic<u64> g_zero_filled_bytes{};
 
 [[maybe_unused]] bool IsZeroPage(const u8* page) {
-    // Stops at the first non-zero line: most pages hold data in their first bytes. Reading every
-    // page whole, a pass took ~1.35 s at 7.5-8.5 GB resident (r49).
+    // Stops at the first non-zero line. Read whole, the ~6 GB of resident guest pages took
+    // 1.35-1.47 s a pass, and most pages hold data in their first bytes.
     const auto* words = reinterpret_cast<const u64*>(page);
     constexpr size_t LineWords = 8; // 64 bytes
     for (size_t i = 0; i < PageAlignment / sizeof(u64); i += LineWords) {
@@ -1306,6 +1313,10 @@ std::atomic<u64> g_zero_filled_bytes{};
 
 u64 HostMemory::ZeroFilledBytes() noexcept {
     return g_zero_filled_bytes.load(std::memory_order_relaxed);
+}
+
+u64 HostMemory::MappedBytes() noexcept {
+    return g_mapped_bytes.load(std::memory_order_relaxed);
 }
 
 std::pair<size_t, size_t> HostMemory::TrimZeroPages(ZeroTrimPhases* phases) const {

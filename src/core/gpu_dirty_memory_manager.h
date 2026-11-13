@@ -38,16 +38,24 @@ public:
 
     ~GPUDirtyMemoryManager() = default;
 
+    /// Off unless EDEN_NX2_BACKX_VERIFY counts the writes that add bits (Collects).
+    static inline bool count_collects{};
+
     void Collect(PAddr address, size_t size) {
-        // A transform covers one page_size page: a write reaching past its page (a whole-page
-        // WriteBlock, or a few bytes across the boundary) is collected a page at a time, or its
-        // mask would be cut at the page end (an over-wide mask shifted by a negative amount).
+        // A transform covers one page: a write past its page goes in a page at a time. Its mask
+        // was otherwise built with shifts of 32 or more, which could leave it empty and lose the
+        // write (with an older one left in back_buffer and `current` showing nothing).
         while (size != 0) {
-            const size_t chunk = (std::min)(size, page_size - (address & page_mask));
-            CollectInPage(address, chunk);
-            address += chunk;
-            size -= chunk;
+            const size_t in_page = (std::min<size_t>)(size, page_size - (address & page_mask));
+            CollectInPage(address, in_page);
+            address += in_page;
+            size -= in_page;
         }
+    }
+
+    /// Writes collected that added bits, ever (only while count_collects is set).
+    [[nodiscard]] u64 Collects() const {
+        return collects.load(std::memory_order_acquire);
     }
 
     /// Calls `callback` for each write collected and not yet applied, without consuming them: those
@@ -87,6 +95,15 @@ public:
         front_buffer.clear();
     }
 
+    /// False when Gather would find nothing. Every Collect that adds a write leaves its transform
+    /// in `current` (by compare-exchange, or by exchange after pushing the one before to
+    /// back_buffer under `guard`), and only Gather, which takes back_buffer too, empties `current`
+    /// again. An empty transform has no mask bits. Without the locks: a Collect it misses is one
+    /// the caller may order after itself.
+    [[nodiscard]] bool MayHavePending() const {
+        return current.load(std::memory_order_acquire).mask != 0;
+    }
+
     /// Returns true when collected writes not yet gathered overlap [address, address + size).
     bool Overlaps(PAddr address, size_t size) {
         const PAddr end = address + size;
@@ -120,7 +137,7 @@ private:
         u32 mask;
     };
 
-    /// Collect, for a write within one page_size page.
+    /// [address, address + size) lies in one page and size is not 0, so the mask has bits.
     void CollectInPage(PAddr address, size_t size) {
         TransformAddress t = BuildTransform(address, size);
         TransformAddress tmp, original;
@@ -132,6 +149,7 @@ private:
                     std::scoped_lock lk(guard);
                     back_buffer.emplace_back(tmp);
                     current.exchange(t, std::memory_order_relaxed);
+                    CountCollect();
                     NoteCollected();
                     return;
                 }
@@ -144,7 +162,15 @@ private:
             tmp.mask |= t.mask;
         } while (!current.compare_exchange_weak(original, tmp, std::memory_order_release,
                                                 std::memory_order_relaxed));
+        CountCollect();
         NoteCollected();
+    }
+
+    /// After the write is in `current`: a reader that sees the count sees the write.
+    void CountCollect() {
+        if (count_collects) {
+            collects.fetch_add(1, std::memory_order_release);
+        }
     }
 
     /// Writes already pending set it when they were recorded: only new ones store.
@@ -204,6 +230,7 @@ private:
     }
 
     std::atomic<TransformAddress> current{};
+    std::atomic<u64> collects{};
     std::mutex guard;
     std::mutex gather_guard;
     std::vector<TransformAddress> back_buffer;

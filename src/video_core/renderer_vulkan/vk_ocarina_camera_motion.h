@@ -73,10 +73,11 @@ public:
 
     /// Queue motion, DLSS evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.
+    /// `depth_extent` is the depth image's size (zero: `extent`).
     bool Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                 VkExtent2D output_extent, VkExtent2D target_extent, const std::array<f32, 16>& current,
                 const std::array<f32, 16>& previous, std::span<const OcarinaActorMesh> meshes,
-                VkImage depth_image, u64 frame);
+                VkImage depth_image, u64 frame, VkExtent2D depth_extent = {});
 
 private:
     void MakeHudMaskWith(bool four_k, VkImageView before_hud, VkImageView after_hud,
