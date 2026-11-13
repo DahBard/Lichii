@@ -2239,6 +2239,8 @@ Own changes:
      boundary after 2 unused frames (replaces `e6a4a2ef1`'s rule; `superseded_images.h`, tests),
      (3) square depth-only passes left unscaled. With open #1285 it reaches the 60 fps cap.
      Recommended: port #1314 after merge 3 (it meets texture_cache.h, which the merge changes).
+     Owner (2026-11-13): don't port it; Fritchii's next release (later that day) has a fix for the
+     room, to be reviewed when it is out.
    - Owner (2026-11-12 evening, after r58: "the best looking and smoothest" build): AMD FSR frame
      generation doesn't run with HDR output (r58 logs: 'AMD frame generation: off while HDR
      output is active', merge 2's gate in vk_swapchain.cpp; the port is set up for SDR only); fix
@@ -2257,6 +2259,14 @@ Own changes:
        later commits (the rename of yuzu names, targets and directories to Lichii, #1541 and
        #1550-#1553, 389 files with ~300 renames; #1544 dropping the yuzu SPDX line from 2512
        files; #1521, #1539) are for a later merge.
+     - Owner (2026-11-13): merge up to build 171 (release-binaries run #171 on nx2 =
+       `c169856090`, refs/remotes/zortos/build171), the rename included ("a precaution against
+       future DMCA takedown requests"). Step 1 merges `65745c243f` as planned; step 2 merges
+       build 171 on top: #1521, #1539, #1569 and the rename. A trial of build 171 straight onto
+       `5fc428bdc` (scratchpad/wt-trial171, merge.directoryRenames=true) has 85 conflicted files,
+       only 7 beyond step 1's: the same frontend files at their src/lichii paths (git carries our
+       src/yuzu changes across the rename; the SPDX removal adds none). Afterwards our own
+       additions follow the rename (no yuzu names or yuzu SPDX lines beyond what upstream keeps).
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
