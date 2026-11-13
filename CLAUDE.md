@@ -78,7 +78,8 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   src/lichii, #1541/#1550-#1553) and the removal of the yuzu SPDX lines (#1544): "The rename is a
   precaution against future DMCA takedown requests. We should do it to be safe." Our own
   additions (code, launchers, CI workflow, scripts, docs) follow the same rename; keep only the
-  yuzu names upstream keeps.
+  yuzu names upstream keeps. Done on 2026-11-13: branch `r22-merge-nx2c` (tuned4 `04e8a8d2a`), the base under
+  the patch is now `c169856090`; r60.
 - 2026-11-13: don't port upstream #1314 (the Castle Town guard house / pot room frame rate):
   "Fritchii has a fix that will be in its next release later today." Review that release's fix
   when it is out.

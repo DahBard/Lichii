@@ -34,12 +34,13 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
-- Since 2026-11-12: branch `tuned` = upstream Lichii nx2 `2eb5f081c` (merged in `526c0ab1c`;
-  `17baed716`, build 132 plus 31 commits, since round 22, merged in `2d9ea59c5`) + the workflow +
-  this folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
-  `git diff --binary 2eb5f081c tuned4` (384 files, 2.9 MB), backed up in `tuned4.bundle` (`git
+- Since 2026-11-13 (r60): branch `tuned` = upstream Lichii build 171, nx2 `c169856090` (merged in
+  `8619a1df3`; `2eb5f081c` in `526c0ab1c`, `17baed716` in `2d9ea59c5`) + the workflow + this
+  folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
+  `git diff --binary c169856090 tuned4` (364 files, 2.7 MB), backed up in `tuned4.bundle` (`git
   fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `2eb5f081c`). Variants: `pgo`, `pgo-lto` and `pgo-train`;
+  `c169856090`). Since upstream's rename the build target is `lichii` and the options are
+  `-DLICHII_*`. Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
 - Branch `tuned` of DahBard/Lichii = upstream nx2 `2eb5f081c` (2026-11-12; `17baed716` = round 22's merge, `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
@@ -99,11 +100,13 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`, builds A, B and r54 up to
   `cbe51e88a`, r55 up to `3bf40a3c2`, and nx2 `2eb5f081c` merged in `bd1ce62ff` with follow-ups up
   to `d34bcee34` (the MinGW link fix), branch `r22-merge-nx2b`, and the stable build r58 up to
-  `5fc428bdc`, branch `r22-r57`; pushing it doesn't trigger builds).
+  `5fc428bdc`, branch `r22-r57`, r59 up to `134cfab02`, branch `r22-r59`, and merge 3 (nx2
+  `65745c243f` in `9161e35d2`, build 171 `c169856090` in `31d387f72`, r59 merged in) up to
+  `04e8a8d2a`, branch `r22-merge-nx2c`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
-  `2eb5f081c`, as `tuned` does). The patch is `git diff --binary 2eb5f081c tuned4` (384 files,
-  2.9 MB); check it
+  `c169856090`, as `tuned` does). The patch is `git diff --binary c169856090 tuned4` (364 files,
+  2.7 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
   commit.
@@ -2286,7 +2289,35 @@ Own changes:
      Owner test: HDR10 with AMD frame generation, FSR 4's and FSR 3.1's; the HUD steady and the
      world moving smoothly in generated frames; the log's 'AMD frame generation' lines (the ready
      line ends ", HDR output ... (PQ)"; one decode line); SDR as r58. Nothing ran on Windows or a
-     GPU before that test. Merge 3 takes r59 in after step 1.
+     GPU before that test. Merge 3 takes r59 in after step 1. CI run #59 and tests run #10 passed.
+   - Merge 3, done 2026-11-13 (r60; plan lichii-tuned/merge-plan-nx2c.md, notes in
+     scratchpad/merge3/): step 1 merged nx2 `65745c243f` (60 commits; 83 conflicted files, 199
+     hunks) in `9161e35d2`, resolved by seven area agents and reviewed by six (no defects found;
+     two upstream-first touch-ups); `8d451a893` cherry-picks #1569; `3bcc96bfb` rewords the TEST
+     switch line for #1373; `ad5228486` merges r59 (no conflicts). Step 2 merged build 171
+     `c169856090` (#1521, #1539, the rename #1541/#1544/#1550/#1551, #1552, #1553) in
+     `31d387f72` (10 conflicted files; reviewed): #1521's NoteSync sits at the matching points
+     of our acquire path, plus one per resumed suspension (our view path can resume without
+     upstream's ReleaseFences bump); our verify-by-kind gives way to #1521's gate. No yuzu
+     name is left in our code beyond upstream's own. A compile sweep (278 files, Windows CI
+     flags) found no merge-caused error. VulkanPipelineCacheVersion and PreparationVersion are
+     unchanged. Decisions (defaults): FrameGenType keeps AMD FSR at 2 (DLSS-G 3); #1505's boot
+     marker as upstream. Upstream replaces: our #354 port (#1485), #1161 draws and reports
+     (#1515/#1516/#1519; ab-29/32/36 inert), EXP36/EXP60 (#1479; ab-23 inert), the latch wait
+     (#1376), the WAITPKG idle slices (#1373; ab-1/5/15/40/41 no longer touch the idle poll),
+     LICHII_FG_PACING (#1493), our GUI crash writer (#1453: "Host crash:" in eden_log.txt and
+     eden_crash.dmp). Watch in the owner's first r60 session: 'Uniform keeps in 600 frames'
+     and the back's uniform zone against r58/r59 (#1441/#1521 end keeps at reports and lists);
+     #1520's 'GPUSnapshot' copier thread on the hybrid CPU (our placement doesn't know it);
+     VRAM with #1435 on top of #1306 (up to ~1 GiB more); the new 'GPU thread waits for
+     suspended channels' line; a new JIT crash or glitch: A/B with ab-16 (#1517); 'ExeFS:
+     Ignoring installed update' if the dump is an NUP or tree .nx with an update (#1504).
+     The Qt frontend's recorded PGO data is lost until the next pgo-train (src/yuzu ->
+     src/lichii; GUI only). To offer upstream, with the owner's approval: `3880800d0` (a failed
+     graphics pipeline keeps no stages; still missing at build 171). Optional: on an incomplete
+     or #1523-dropped boot record whose draw key differs, also erase the draw key's hash from
+     disk_pipelines (`admit`, ours; re-capture comes one session later); ClockTrace
+     PollStart/PollEnd around the front's new hardware poll.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
