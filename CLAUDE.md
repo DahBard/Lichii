@@ -81,6 +81,10 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
 - 2026-11-13: don't port upstream #1314 (the Castle Town guard house / pot room frame rate):
   "Fritchii has a fix that will be in its next release later today." Review that release's fix
   when it is out.
+- 2026-11-13, the order after merge 3: (1) a code cleanup and a file system cleanup: most of the
+  A/B and other testing launchers (.bat) go, "unless they might be useful later"; (2) then wait
+  for Fritchii's next release and upstream Lichii's multithreading release before adding
+  anything else.
 - A scheduled task ("Resume Lichii work", every 2 hours at minute 4) resumes this session after
   a usage cut-off until this work is done, as the owner asked on 2026-11-12 ("When my usage runs
   out, resume when it renews ... etc."). It ends its turn at once while work is running.
