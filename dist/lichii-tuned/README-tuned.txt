@@ -408,6 +408,8 @@ below), plus:
      redirect (Network; online play stays off), two unchecked Age of Imprisonment options, and
      Help > Apply Recommended Settings also resets per-game overrides of the table's settings
      (backed up; Restore brings them back).
+ * r61: r60 from the new private repository, with 35 of the test launchers removed (the list
+   below has the 13 left; verify-r55.bat is now verify.bat). The emulator itself is r60's.
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -424,54 +426,17 @@ The "msvc" download is the same source built like the official MSVC build (MSVC,
 CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
 comes from the compiler (only the pgo builds show it) or from the source.
 
-A/B launchers (this build with one change switched off or on; compare the same scene each time):
- ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
- ab-2-no-core-placement.bat   Windows places every thread (LICHII_CPU_POLICY=off)
- ab-3-soft-placement.bat      only keeps threads off the low-power E-cores (LICHII_CPU_POLICY=soft)
- ab-4-strict-placement.bat    emulated CPU cores on P-cores too, pipeline builds on E-cores only
-                              (LICHII_CPU_POLICY=strict)
- ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
+A/B launchers (this build with one change switched off or on; compare the same scene each time).
+r61 removed the A/Bs whose questions are settled or whose switches are gone, the old traces and
+the verify runs before r55; the notes above still name some of them for the builds that had them.
  ab-6-official-texture-cache.bat  texture cache collects from 5 GiB, as official Lichii did
                               before 2026-11-08
- ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
-                              (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
-                              can be missing for a few frames; logs like perf-trace.bat
- ab-9-amd-fp16.bat            keeps float16 shader math on AMD (EDEN_AMD_FP16=1); official builds
-                              turn it off for a driver bug in another game, so look for wrong colors
- ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
-                              even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
-                              GPU does not idle between frames; logs like perf-trace.bat
  ab-11-official-shader-cache.bat  boot compiles only what the last sessions used
                               (EDEN_NX2_PRELOAD_ALL_PIPELINES=0)
- ab-12-round15-paths.bat      round 16's new shortcuts off (bank check, texture uploads,
-                              mixed macro reads, attribute keys), logged like perf-trace.bat:
-                              if a glitch or a frame-rate change goes away here, one of them
-                              caused it
- ab-13-round16-texture-reads.bat  textures copied out of guest memory before they are untiled,
-                              as in round 16 (EDEN_NX2_UNSWIZZLE_COPY=1), logged like
-                              perf-trace.bat
- ab-15-round17-cpu.bat        round 18's CPU work from #717 all off (code generation, memory,
-                              kernel, Ocarina patches), logged like perf-trace.bat
- ab-16-round17-jit.bat        only #717's code generation off, logged like perf-trace.bat
- ab-17-no-oot-patches.bat     only the Ocarina patches off (zstd, string compares, poll
-                              backoff, wider core masks), logged like perf-trace.bat
- ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
-                              macro reads and list waits), logged like perf-trace.bat
- ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
-                              spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
-                              power-limited laptop, compare the frame rate with the default
- ab-22-round19-shaders.bat    round 19's shader handling: translation on the GPU thread, every
-                              draw waits for its pipeline (EDEN_NX2_ASYNC_TRANSLATE=0,
-                              EDEN_NX2_ASYNC_DISCARD=0), logged like perf-trace.bat
- ab-23-round19-memory.bat     round 19's guest memory paths (EDEN_NX2_EXP35=0,
-                              EDEN_NX2_EXP36=1, LICHII_BANK_CHECK=1, EDEN_NX2_EXP18=0,
-                              EDEN_NX2_EXP29=0,
-                              EDEN_NX2_INVALIDATE_BLOCKS=1, EDEN_NX2_SEC_RESERVE=0), logged like
-                              perf-trace.bat
- ab-24-round19-render-targets.bat  no render target relocation or cold sweep
-                              (EDEN_NX2_EXP43=0, EDEN_NX2_TC_COLD_FRAMES=0; the render-frame
-                              clock stays on for the asynchronous shaders), logged like
-                              perf-trace.bat
+ ab-16-round17-jit.bat        #717's code generation off, logged like perf-trace.bat: the first
+                              test when the emulated CPU crashes or glitches
+ ab-17-no-oot-patches.bat     the Ocarina patches off (zstd, string compares, poll backoff, wider
+                              core masks), logged like perf-trace.bat
  ab-25-no-zero-trim.bat       no zero-page passes (EDEN_NX2_ZERO_TRIM=0): pages holding only
                               zeros stay in RAM (about 7 GB more in Ocarina), logged like
                               perf-trace.bat: compare the frames around perf-trace's
@@ -479,68 +444,15 @@ A/B launchers (this build with one change switched off or on; compare the same s
  ab-26-no-1216.bat            repeat draws end at stride words, render enable addresses and
                               back macro calls as in r50 (EDEN_NX2_TEST_1216=0); unprofiled:
                               compare with perf-trace-noprofile.bat
- ab-29-no-1161-draws.bat      repeat draws as in r51: delta overflows, whole-buffer handle checks,
-                              attribute formats end them (EDEN_NX2_TEST_1161_DRAWS=0)
- ab-32-no-1161-reports.bat    r51's fence lists, report locks and query pool resets
-                              (EDEN_NX2_TEST_1161_REPORTS=0). ab-29 and ab-32 are unprofiled:
-                              compare with perf-trace-noprofile.bat
- ab-36-no-1161-handles.bat    repeat draws as in r54 for shaders that pick their textures from
-                              memory (EDEN_NX2_TEST_1161_HANDLES=0); unprofiled, compare with
-                              perf-trace-noprofile.bat
- ab-40-low-power.bat          less spinning: the emulated kernel's locks and waits sleep at once
-                              (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0), waiting cores idle in
-                              C0.2 instead of C0.1 with an idle core's poll in one wait
-                              (LICHII_UMWAIT_C02=1), and a 30 microsecond idle poll instead of
-                              100 (EDEN_NX2_IDLE_SPIN_US=30); compare with
-                              perf-trace-noprofile.bat
- ab-41-idle-poll-30.bat       only the 30 microsecond idle poll (EDEN_NX2_IDLE_SPIN_US=30), if
-                              ab-40 helps; compare with perf-trace-noprofile.bat. ab-40 and
-                              ab-41 log the clock trace, as perf-trace-noprofile does: run them
-                              as option 3 above says
- verify-r55.bat               verify-r52 without resolving repeat draws in full, so they run and
-                              the delta descriptor and uniform keep checks check them (their
-                              mismatches should stay 0, as verify-r52's); slower
- verify-ports-off.bat         verify-r55 with three ports off, #1161's computed-handle delta
-                              draws, #1216 and #1161's other repeat draw changes
-                              (EDEN_NX2_TEST_1161_HANDLES=0, EDEN_NX2_TEST_1216=0,
-                              EDEN_NX2_TEST_1161_DRAWS=0): whether the uniform keep mismatches
-                              depend on them; slower
- verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and
-                              bitsets missed, "Read download check" differing bytes, fast draw,
-                              delta descriptor and uniform keep mismatches should stay 0, no
-                              "Nx2Perf" errors); slower
- verify-r51.bat               resolves repeat draws in full and runs back macros the old way
-                              ("Fast draw verify" mismatches and the back macros' "with other
-                              writes" should stay 0, no "Nx2Perf mapping runs" errors); slower
- verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
-                              verify ... differ", tombstone hits and the bank check's "without
-                              the frame check (mode 3)" should stay 0); slower
- verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
-                              differences ("not met after the drain", "differing" and mismatch
-                              counts should stay 0); slower
- verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
-                              way on every use and logs differences ("missed" and "differed"
-                              should stay 0); slower
- trace-host-pace.bat          Fritchii's host frame pacer on (LICHII_HOST_PACE=1), logged like
-                              perf-trace.bat plus "Host pacing on:" lines every 10 s
- trace-display.bat            the pacer only measuring (LICHII_HOST_PACE=2): the same lines
-                              without holding frames, and the display's refresh rate
- trace-fp16.bat               ab-9 with the logging of perf-trace.bat
- trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
-                              (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
- trace-old-jit.bat            the emulated CPU without round 7's inline counter reads
-                              (LICHII_JIT_INLINE_CNTPCT=0), logged like perf-trace.bat
  trace-no-fsr.bat             Ocarina's own upscale pass instead of AMD FSR, no 4K output
                               (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
- trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
-                              perf-trace.bat
- trace-downloads.bat          perf-trace.bat plus a list of what the GPU copies back and which
-                              GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
- trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
-                              (LICHII_ACQUIRE_POLL=0, LICHII_REPORT_DRAIN=all), logged like
-                              perf-trace.bat: for comparison, or if the new waits misbehave
  trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
                               logged like perf-trace.bat: slower, for comparison
+ verify.bat                   checks this build against the slow ways while you play, with
+                              perf-trace's logging ("Native bank check" missed and bitsets
+                              missed, "Read download check" differing bytes, the delta descriptor
+                              and uniform keep mismatches should stay 0, no "Nx2Perf" errors);
+                              slower. It was verify-r55.bat
  perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores, frame
                               times and the heap and clock traces in the log
                               (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1,
@@ -555,7 +467,7 @@ A/B launchers (this build with one change switched off or on; compare the same s
                               (EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_HEAP_TRACE=1,
                               EDEN_NX2_CLOCK_TRACE=1; the heap and clock traces since r55):
                               gpu_back_cpu_ms_per_frame and frame times without the zones' cost;
-                              the baseline for ab-26 to ab-41, which log the same
+                              the baseline for ab-26, which logs the same
  frame-times.bat              default settings with only each frame's time logged
                               (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 
