@@ -67,6 +67,9 @@ public:
     /// The same for the 4K mode (1440p scene, HUD composited over the 4K output): the 1440p scene
     /// saved before the HUD against the game's 1440p composite, which differ slightly everywhere.
     void MakeHudMask4k(VkImageView native_composite);
+    /// Forgets the HUD mask (the output went from SDR to HDR or back, whose masks are made apart):
+    /// motion is not cleared until the next one is made.
+    void ResetHudMask();
 
     /// Queue motion, DLSS evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.

@@ -857,6 +857,10 @@ void OcarinaLiveDlss::MakeHudMask(VkImageView before_hud, VkImageView after_hud,
     MakeHudMaskWith(false, before_hud, after_hud, extent);
 }
 
+void OcarinaLiveDlss::ResetHudMask() {
+    impl->hud_mask_ready = false;
+}
+
 void OcarinaLiveDlss::MakeHudMaskWith(bool four_k, VkImageView before_hud, VkImageView after_hud,
                                       VkExtent2D extent) {
     auto& state = *impl;

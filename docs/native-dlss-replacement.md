@@ -70,6 +70,12 @@ builds with Streamline when its setting is on and Streamline has DLSS for the de
   replaced frame records AMD's prepare pass from the same depth and motion, with the motion
   cleared and the depth nearest under a per-pixel HUD mask (the upscaled scene before the HUD
   against the same image after it).
+- With HDR output it runs in the HDR10 format. AMD's swapchain presents the PQ frames, takes
+  the HDR10 metadata through its own `vkSetHdrMetadataEXT`, and its generation decodes PQ up
+  to the metadata's peak. New metadata while it generates waits for the next swapchain. The 4K
+  mode's composite takes SDR images only, so under HDR the game's 1440p frame is shown and the
+  HUD mask is made the in-place way. With scRGB it stays off (the status bar shows `SCRGB`);
+  when it can't start with HDR10, Lichii presents HDR without it (`HDR`).
 - FXAA and SMAA are skipped on frames the upscaler drew.
 - Any unexpected input, a busy frame slot, a rescaled image (resolution scale other than 1x) or
   a failed evaluation leaves the game's pass to run. The log names the reason as

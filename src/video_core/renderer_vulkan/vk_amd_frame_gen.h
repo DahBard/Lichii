@@ -29,18 +29,66 @@ namespace AmdFrameGen {
 [[nodiscard]] bool Requested();
 
 /// Frames AMD's swapchain was asked to generate so far (one per game frame presented while
-/// generating), for the frame rate shown with the game's.
+/// generating; with HDR10 output, one per generation dispatch that succeeded), for the frame rate
+/// shown with the game's.
 [[nodiscard]] u64 GeneratedFrames();
 
 /// Whether AMD's frame generation swapchain is in use (it is set up when the emulator starts).
 /// Lock free, so the rasterizer gates the frame generation passes on it.
 [[nodiscard]] bool SwapchainActive();
 
+/// The swapchain output AMD's frame generation presents: SDR, and HDR10, whose PQ frames its
+/// generation decodes up to the HDR10 metadata's peak. scRGB and any other HDR output get a
+/// normal swapchain.
+enum class Output : u8 {
+    Sdr,
+    Hdr10,
+    Unsupported,
+};
+[[nodiscard]] Output OutputOf(VkSurfaceFormatKHR format);
+
+/// For each swapchain made: whether AMD's may present it, which needs it asked for (Requested)
+/// and an output it presents (OutputOf). Logs an output it doesn't present, and keeps the output
+/// for LastOffReason (Sdr while it isn't asked for).
+[[nodiscard]] bool CanPresent(VkSurfaceFormatKHR format);
+
+/// Why AMD's frame generation is off with HDR output, for the status bar.
+enum class OffReason : u8 {
+    None,      ///< No HDR reason
+    HdrFormat, ///< HDR output in a format it doesn't present (scRGB)
+    HdrFailed, ///< HDR10 output, and its swapchain or its generation couldn't start or failed
+};
+[[nodiscard]] OffReason LastOffReason();
+
+/// What AMD's swapchain hands its generation to decode an HDR10 frame with.
+struct HdrDecode {
+    u32 transfer_function; ///< FfxApiBackbufferTransferFunction: 1 is PQ
+    f32 min_luminance;     ///< nits
+    f32 max_luminance;     ///< nits; PQ decodes to 1.0 there
+
+    bool operator==(const HdrDecode&) const = default;
+};
+/// That decode with what AMD's swapchain left out filled in: PQ, and 0 to `peak` nits (the peak
+/// the game tone maps to) while it has no luminance range, which generation divides by.
+[[nodiscard]] HdrDecode CompleteHdr10Decode(const HdrDecode& given, f32 peak);
+
 /// Creates AMD's frame generation swapchain in place of vkCreateSwapchainKHR. Returns
 /// VK_NULL_HANDLE when it can't (missing DLL, no spare present queue, creation failed); the caller
 /// then creates a normal swapchain.
 [[nodiscard]] VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
                                              const VkSwapchainCreateInfoKHR& create_info);
+
+/// What became of HDR10 metadata given to AMD's swapchain.
+enum class HdrMetadataResult : u8 {
+    Sent,          ///< It has it (also when it had the same already)
+    NotSent,       ///< Its version takes none (logged when it started)
+    NextSwapchain, ///< It presents from its own threads while generating: a new one takes it
+};
+/// HDR10 metadata for AMD's swapchain, through its replacement of vkSetHdrMetadataEXT (its handle
+/// isn't the driver's). It hands the metadata on to the display, and its generation decodes PQ
+/// up to the metadata's peak.
+[[nodiscard]] HdrMetadataResult SetHdrMetadata(VkSwapchainKHR swapchain,
+                                               const VkHdrMetadataEXT& metadata);
 
 /// Waits for AMD's presents and the last recorded prepare pass, then destroys the swapchain and
 /// its context. scheduler is null when nothing recorded will be submitted any more (shutdown).

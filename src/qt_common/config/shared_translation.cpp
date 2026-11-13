@@ -321,7 +321,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, bg_blue, QString(), QString());
 
     INSERT(Settings, frame_gen, tr("Enable Frame Generation"),
-           tr("Paused while HDR output is active."));
+           tr("While HDR output is active, AMD FSR Frame Generation needs the HDR10 format (not "
+              "scRGB)."));
     INSERT(Settings, frame_gen_type, tr("Frame Generation Type"),
            tr("AMD FSR Frame Generation: AMD's frame generation for Ocarina of Time (Windows, "
               "Resolution 1X; restart Lichii after picking it).\nOptical Flow Interpolation and "

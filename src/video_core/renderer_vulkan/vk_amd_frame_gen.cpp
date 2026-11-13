@@ -14,11 +14,15 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
+#include "common/display_hdr.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_ffx_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/vulkan_common/vk_enum_string_helper.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 
 #ifdef _WIN32
@@ -46,10 +50,36 @@ namespace Vulkan::AmdFrameGen {
 
 namespace {
 std::atomic<u64> generated_frames{0};
+constexpr u32 TRANSFER_FUNCTION_PQ = 1; // FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ
 } // Anonymous namespace
 
 u64 GeneratedFrames() {
     return generated_frames.load(std::memory_order_relaxed);
+}
+
+Output OutputOf(VkSurfaceFormatKHR format) {
+    if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        return Output::Sdr;
+    }
+    // Not scRGB: Lichii sends it no HDR metadata, so AMD's swapchain passes a 0-0 nits range,
+    // which its scRGB decode divides by. The callback could fill that in as for HDR10, but FSR
+    // FG 4's scRGB path is closed source and untested. HDR10 only in the format AMD's runtime has
+    // (no A2R10G10B10).
+    if (format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT &&
+        format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+        return Output::Hdr10;
+    }
+    return Output::Unsupported;
+}
+
+HdrDecode CompleteHdr10Decode(const HdrDecode& given, f32 peak) {
+    HdrDecode decode = given;
+    decode.transfer_function = TRANSFER_FUNCTION_PQ;
+    if (!(given.max_luminance > 0.0f)) {
+        decode.min_luminance = 0.0f;
+        decode.max_luminance = peak;
+    }
+    return decode;
 }
 
 bool Requested() {
@@ -74,6 +104,36 @@ std::atomic<bool> prepare_ready{false};
 /// The scheduler tick of the last prepare pass recorded, so a swapchain replacement can wait
 /// for the command buffer that holds it.
 std::atomic<u64> last_prepare_tick{0};
+/// The output of the last swapchain made (CanPresent; Sdr while AMD's wasn't asked for), and
+/// whether its swapchain or its generation last failed with HDR10 output: for LastOffReason.
+std::atomic<Output> last_output{Output::Sdr};
+std::atomic<bool> hdr_failed{false};
+
+static_assert(TRANSFER_FUNCTION_PQ == FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ);
+
+/// EDEN_NX2_AMD_FG_DEBUG=1 draws AMD's tear lines (coloured bars on generated frames), =2 its
+/// debug view (the motion vectors, depth and generated frame it works from), =3 turns on its
+/// parameter checks, which report to the log. 1 and 2 write raw values, which HDR10 shows at up
+/// to 10000 nits.
+char DebugMode() {
+    static const char mode = [] {
+        const char* const value = std::getenv("EDEN_NX2_AMD_FG_DEBUG");
+        return value ? value[0] : '0';
+    }();
+    return mode;
+}
+
+bool SameHdrMetadata(const VkHdrMetadataEXT& a, const VkHdrMetadataEXT& b) {
+    const auto same = [](const VkXYColorEXT& p, const VkXYColorEXT& q) {
+        return p.x == q.x && p.y == q.y;
+    };
+    return same(a.displayPrimaryRed, b.displayPrimaryRed) &&
+           same(a.displayPrimaryGreen, b.displayPrimaryGreen) &&
+           same(a.displayPrimaryBlue, b.displayPrimaryBlue) && same(a.whitePoint, b.whitePoint) &&
+           a.maxLuminance == b.maxLuminance && a.minLuminance == b.minLuminance &&
+           a.maxContentLightLevel == b.maxContentLightLevel &&
+           a.maxFrameAverageLightLevel == b.maxFrameAverageLightLevel;
+}
 
 VkDeviceContext DeviceContext(const Device& device) {
     return VkDeviceContext{
@@ -99,6 +159,13 @@ struct State {
     const Device* owner{};          ///< For recreating the generation context after a failure.
     VkExtent2D display{};
     VkFormat format{};
+    VkColorSpaceKHR color_space{}; ///< The swapchain's: sRGB, or HDR10 (PQ frames)
+    /// HDR10: the nits generation decodes PQ to 1.0 at, the peak the game tone maps to. Atomic:
+    /// AMD's frame generation callback reads it.
+    std::atomic<f32> hdr_peak{};
+    bool hdr_checked{}; ///< The decode its swapchain passes with HDR10 output was logged
+    bool dispatch_failure_logged{}; ///< A failed generation dispatch was logged (per swapchain)
+    std::optional<VkHdrMetadataEXT> hdr_metadata; ///< The HDR10 metadata it has
     u32 context_retries{};
     ffxContext swapchain_context{};
     ffxContext frame_gen_context{};
@@ -140,7 +207,49 @@ VkResult SubmitToGameQueue(uint32_t count, const VkSubmitInfo* submits, VkFence 
 
 ffxReturnCode_t DispatchFrameGeneration(ffxDispatchDescFrameGeneration* params, void* user) {
     State& state = *static_cast<State*>(user);
-    return state.api->dispatch(&state.frame_gen_context, &params->header);
+    const bool hdr10 = state.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT;
+    if (hdr10) {
+        // AMD's swapchain takes the transfer function from the colour space and the luminance
+        // range from its vkSetHdrMetadataEXT, 0 until that is called. The description is AMD's
+        // copy for this dispatch: what is missing is filled in here.
+        const HdrDecode given{params->backbufferTransferFunction, params->minMaxLuminance[0],
+                              params->minMaxLuminance[1]};
+        const HdrDecode decode =
+            CompleteHdr10Decode(given, state.hdr_peak.load(std::memory_order_relaxed));
+        if (!std::exchange(state.hdr_checked, true)) {
+            LOG_INFO(Render_Vulkan,
+                     "AMD frame generation: its swapchain decodes HDR10 frames with transfer "
+                     "function {} (1 is PQ), {}-{} nits{}",
+                     given.transfer_function, given.min_luminance, given.max_luminance,
+                     decode == given ? std::string{}
+                                     : fmt::format("; using PQ, {}-{} nits", decode.min_luminance,
+                                                   decode.max_luminance));
+        }
+        params->backbufferTransferFunction = decode.transfer_function;
+        params->minMaxLuminance[0] = decode.min_luminance;
+        params->minMaxLuminance[1] = decode.max_luminance;
+    }
+    const ffxReturnCode_t result = state.api->dispatch(&state.frame_gen_context, &params->header);
+    if (result != FFX_API_RETURN_OK) {
+        // FSR 3.1 gives no reason, and its swapchain presents an older generated frame instead.
+        if (!std::exchange(state.dispatch_failure_logged, true)) {
+            LOG_ERROR(Render_Vulkan, "AMD frame generation: generation dispatch failed ({}){}",
+                      result,
+                      hdr10 ? fmt::format(", HDR10 decode with transfer function {} (1 is PQ), "
+                                          "{}-{} nits",
+                                          params->backbufferTransferFunction,
+                                          params->minMaxLuminance[0], params->minMaxLuminance[1])
+                            : std::string{});
+        }
+        if (hdr10) {
+            hdr_failed.store(true, std::memory_order_relaxed);
+        }
+    } else if (hdr10) {
+        // With HDR10 output a generated frame counts once its dispatch succeeded (in SDR, Present
+        // counts it when it asks for one), so the status bar shows a failing generation.
+        generated_frames.fetch_add(1, std::memory_order_relaxed);
+    }
+    return result;
 }
 
 void DestroyRetired(State& state, bool all) {
@@ -230,7 +339,13 @@ bool CreateFrameGenContext(State& state, const Device& device, VkExtent2D displa
     version.version = FFX_FRAMEGENERATION_VERSION;
     ffxCreateContextDescFrameGeneration create{};
     create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-    create.flags = 0; // depth grows with distance, tonemapped colour, unjittered motion
+    // Depth grows with distance and motion is unjittered. HDR10 frames are PQ: AMD's flag for HDR
+    // colour input, as its sample sets.
+    const bool hdr = state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    create.flags = hdr ? u32{FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE} : 0u;
+    if (DebugMode() == '3') {
+        create.flags |= FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING;
+    }
     create.displaySize = {display.width, display.height};
     create.maxRenderSize = {std::max(display.width, 3840u), std::max(display.height, 2160u)};
     create.backBufferFormat = ffxApiGetSurfaceFormatVK(format);
@@ -259,8 +374,14 @@ bool CreateFrameGenContext(State& state, const Device& device, VkExtent2D displa
     provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     state.api->query(&state.frame_gen_context, &provider.header);
     state.version = provider.versionName ? provider.versionName : "unknown";
-    LOG_INFO(Render_Vulkan, "AMD frame generation: FSR frame generation {} ready at {}x{} on {}",
-             state.version, display.width, display.height, device.GetModelName());
+    LOG_INFO(Render_Vulkan, "AMD frame generation: FSR frame generation {} ready at {}x{} on {}{}",
+             state.version, display.width, display.height, device.GetModelName(),
+             hdr ? fmt::format(", HDR output {} {} (PQ)", string_VkFormat(format),
+                               string_VkColorSpaceKHR(state.color_space))
+                 : std::string{});
+    if (hdr) {
+        hdr_failed.store(false, std::memory_order_relaxed);
+    }
     PublishPrepareReady(state);
     return true;
 }
@@ -409,6 +530,7 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
     if (!device.GetFrameGenPresentQueue()) {
         return VK_NULL_HANDLE; // logged by the device
     }
+    const bool hdr = create_info.imageColorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     State& state = GetState();
     std::scoped_lock lock{state.mutex};
     // AMD's runtime kept something of a stopped game's device: the next game in the same process
@@ -564,6 +686,13 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
                          state.functions.pOutDestroySwapchainFFXAPI
                              ? ""
                              : " (no destroy function: the context destroys it)");
+                if (hdr && !state.functions.pOutSetHdrMetadataEXT) {
+                    LOG_WARNING(Render_Vulkan,
+                                "AMD frame generation: swapchain {} takes no HDR metadata: the "
+                                "display gets none, and generation decodes PQ to the peak the "
+                                "game was told",
+                                name);
+                }
                 break;
             }
             LOG_WARNING(Render_Vulkan,
@@ -572,6 +701,16 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
                         name, query, state.functions.pOutQueuePresentKHR != nullptr,
                         state.functions.pOutAcquireNextImageKHR != nullptr,
                         state.functions.pOutGetSwapchainImagesKHR != nullptr);
+            // Its real swapchain holds the window until it is destroyed, which its context
+            // doesn't do: the next version's, or a normal swapchain, couldn't be made. In the
+            // order DestroySwapchain uses.
+            state.api->destroy_context(&state.swapchain_context, nullptr);
+            state.swapchain_context = nullptr;
+            if (state.functions.pOutDestroySwapchainFFXAPI) {
+                state.functions.pOutDestroySwapchainFFXAPI(state.device, swapchain, nullptr,
+                                                           nullptr);
+            }
+            state.functions = {};
             result = FFX_API_RETURN_ERROR;
         } else {
             LOG_WARNING(Render_Vulkan, "AMD frame generation: swapchain {} failed ({})", name,
@@ -585,9 +724,12 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
     }
     if (result != FFX_API_RETURN_OK || swapchain == VK_NULL_HANDLE) {
         LOG_ERROR(Render_Vulkan, "AMD frame generation: no swapchain version worked ({}), using "
-                                 "a normal swapchain",
-                  result);
+                                 "a normal swapchain{}",
+                  result, hdr ? " (HDR output without frame generation)" : "");
         state.swapchain_context = nullptr;
+        if (hdr) {
+            hdr_failed.store(true, std::memory_order_relaxed);
+        }
         return VK_NULL_HANDLE;
     }
     state.swapchain = swapchain;
@@ -595,6 +737,21 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
     ResetFrames(state);
     state.display = create_info.imageExtent;
     state.format = create_info.imageFormat;
+    state.color_space = create_info.imageColorSpace;
+    state.hdr_checked = false;
+    state.dispatch_failure_logged = false;
+    state.hdr_metadata.reset();
+    // Until the HDR10 metadata comes (SetHdrMetadata): the peak the game was told, which the
+    // metadata carries.
+    state.hdr_peak.store(
+        hdr ? static_cast<f32>(Common::ResolveHdrOutput(
+                                   Common::DisplayHdrMonitor::Instance().Current(),
+                                   Settings::HdrMode::On,
+                                   Settings::values.hdr_peak_luminance.GetValue(),
+                                   Settings::values.hdr_reference_white.GetValue())
+                                   .peak_luminance)
+            : 0.0f,
+        std::memory_order_relaxed);
     state.context_retries = 0;
     state.suspended = false;
     if (!CreateFrameGenContext(state, device, create_info.imageExtent, create_info.imageFormat)) {
@@ -602,6 +759,70 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
     }
     swapchain_active.store(true, std::memory_order_release);
     return swapchain;
+}
+
+bool CanPresent(VkSurfaceFormatKHR format) {
+    if (!Requested()) {
+        // No AMD swapchain and no HDR reason: switched on later, the status bar shows RESTART.
+        last_output.store(Output::Sdr, std::memory_order_relaxed);
+        return false;
+    }
+    const Output output = OutputOf(format);
+    last_output.store(output, std::memory_order_relaxed);
+    if (output != Output::Unsupported) {
+        return true;
+    }
+    LOG_INFO(Render_Vulkan,
+             "AMD frame generation: off with {} {} output; set the HDR format to HDR10 to use it",
+             string_VkFormat(format.format), string_VkColorSpaceKHR(format.colorSpace));
+    return false;
+}
+
+OffReason LastOffReason() {
+    switch (last_output.load(std::memory_order_relaxed)) {
+    case Output::Unsupported:
+        return OffReason::HdrFormat;
+    case Output::Hdr10:
+        return hdr_failed.load(std::memory_order_relaxed) ? OffReason::HdrFailed
+                                                          : OffReason::None;
+    case Output::Sdr:
+        break;
+    }
+    return OffReason::None;
+}
+
+HdrMetadataResult SetHdrMetadata(VkSwapchainKHR swapchain, const VkHdrMetadataEXT& metadata) {
+    State& state = GetState();
+    std::scoped_lock lock{state.mutex};
+    if (swapchain != state.swapchain) {
+        return HdrMetadataResult::NotSent;
+    }
+    if (!state.functions.pOutSetHdrMetadataEXT) {
+        // Logged when it started. Generation decodes to the peak all the same (the callback).
+        state.hdr_peak.store(metadata.maxLuminance, std::memory_order_relaxed);
+        return HdrMetadataResult::NotSent;
+    }
+    if (state.hdr_metadata && SameHdrMetadata(*state.hdr_metadata, metadata)) {
+        return HdrMetadataResult::Sent;
+    }
+    // While it generates, its own threads acquire and present its real swapchain under a lock of
+    // their own, and its vkSetHdrMetadataEXT hands the metadata to that swapchain without it.
+    // Vulkan forbids that at the same time as a present, so a new swapchain takes the metadata
+    // before it generates again.
+    if (state.generating) {
+        LOG_INFO(Render_Vulkan,
+                 "AMD frame generation: new HDR10 metadata (peak {} nits) while generating; its "
+                 "next swapchain takes it",
+                 metadata.maxLuminance);
+        return HdrMetadataResult::NextSwapchain;
+    }
+    state.hdr_metadata = metadata;
+    state.hdr_peak.store(metadata.maxLuminance, std::memory_order_relaxed);
+    state.functions.pOutSetHdrMetadataEXT(state.device, 1, &swapchain, &metadata);
+    LOG_INFO(Render_Vulkan,
+             "AMD frame generation: HDR10 metadata through its swapchain, peak {} nits",
+             metadata.maxLuminance);
+    return HdrMetadataResult::Sent;
 }
 
 void WaitForPresents() {
@@ -683,6 +904,8 @@ void Shutdown() {
     // its scheduler counts ticks from the start.
     generated_frames.store(0, std::memory_order_relaxed);
     last_prepare_tick.store(0, std::memory_order_release);
+    last_output.store(Output::Sdr, std::memory_order_relaxed);
+    hdr_failed.store(false, std::memory_order_relaxed);
     if (!state.api) {
         return;
     }
@@ -737,6 +960,12 @@ VkResult Present(VkQueue queue, const VkPresentInfoKHR& info, const PresentTarge
         DestroyRetired(state, false);
         if (CreateFrameGenContext(state, *state.owner, state.display, state.format)) {
             LOG_INFO(Render_Vulkan, "AMD frame generation: back on after a retry");
+        } else if (state.context_retries == 5 &&
+                   state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            hdr_failed.store(true, std::memory_order_relaxed);
+            LOG_ERROR(Render_Vulkan, "AMD frame generation: no generation context with HDR "
+                                     "output after {} retries, presenting HDR without generation",
+                      state.context_retries);
         }
     }
     if (state.frame_gen_context) {
@@ -762,12 +991,7 @@ VkResult Present(VkQueue queue, const VkPresentInfoKHR& info, const PresentTarge
                                         "hudless frame");
             }
         }
-        // EDEN_NX2_AMD_FG_DEBUG=1 draws AMD's tear lines (coloured bars on generated frames),
-        // =2 its debug view (the motion vectors, depth and generated frame it works from).
-        static const char debug = [] {
-            const char* const value = std::getenv("EDEN_NX2_AMD_FG_DEBUG");
-            return value ? value[0] : '0';
-        }();
+        const char debug = DebugMode();
         config.flags = debug == '1'   ? FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES
                        : debug == '2' ? FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW
                                       : 0u;
@@ -783,9 +1007,13 @@ VkResult Present(VkQueue queue, const VkPresentInfoKHR& info, const PresentTarge
                                      "off",
                       result);
             RetireFrameGenContext(state);
+            if (state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                hdr_failed.store(true, std::memory_order_relaxed);
+            }
         } else {
             state.configured_frame_id = config.frameID;
-            if (generate) {
+            // With HDR10 output the frame generation callback counts it.
+            if (generate && state.color_space != VK_COLOR_SPACE_HDR10_ST2084_EXT) {
                 generated_frames.fetch_add(1, std::memory_order_relaxed);
             }
             if (generate != state.generating) {
@@ -874,6 +1102,9 @@ void Prepare(Scheduler& scheduler, const PrepareInputs& in) {
         if (result != FFX_API_RETURN_OK) {
             state.prepare_failed = true;
             PublishPrepareReady(state);
+            if (state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                hdr_failed.store(true, std::memory_order_relaxed);
+            }
             LOG_ERROR(Render_Vulkan, "AMD frame generation: prepare failed ({}), generation off",
                       result);
             return;
@@ -905,6 +1136,15 @@ u64 TakePreparedFrame() {
 
 VkSwapchainKHR CreateSwapchain(const Device&, std::mutex&, const VkSwapchainCreateInfoKHR&) {
     return VK_NULL_HANDLE;
+}
+bool CanPresent(VkSurfaceFormatKHR) {
+    return false;
+}
+OffReason LastOffReason() {
+    return OffReason::None;
+}
+HdrMetadataResult SetHdrMetadata(VkSwapchainKHR, const VkHdrMetadataEXT&) {
+    return HdrMetadataResult::NotSent;
 }
 void DestroySwapchain(const Device&, Scheduler*, VkSwapchainKHR) {}
 void WaitForPresents() {}
