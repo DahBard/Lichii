@@ -18,7 +18,8 @@ Priorities (owner, 2026-11-10):
   PreparationVersion: new builds have started with a cold AMD driver cache anyway, and the owner
   accepts slow shader loading once per build (2026-11-10).
 - Fritchii (Frizti/Lichii, branch `oot-gather-fix`, tags `fritchii-v*`): only features with a large
-  benefit for this setup or for Ocarina.
+  benefit for this setup or for Ocarina. From v6.0 (its own repository, 2026-11-13), the owner's
+  rule below replaces that bar.
 - CheezerWheezer/CheezyEmu: its FSR, FSR frame generation and Radeon optimizations, if they meet our
   standard.
 - Take changes from other forks only for a very good reason or when the owner names them. Vet
@@ -85,6 +86,13 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   A/B and other testing launchers (.bat) go, "unless they might be useful later"; (2) then wait
   for Fritchii's next release and upstream Lichii's multithreading release before adding
   anything else.
+- 2026-11-13, for 11:00 EST (a scheduled message fires then): "check for a new Fritchii Github
+  repository separate from the Current Lichii Fork called Fritchii. Find the Version 6.0, or if
+  there is a later version, try that one. Do a code review for Fritchii and find out what we could
+  benefit from and add it to our fork. Fritchii is highly specialized to run OOT, so bias our
+  decisions based on that. If something in fritchii v6 is already handled in our build
+  differently, default to changing to fritchii's unless our way of doing it is specifically tuned
+  to our Hardware specifications." It goes on top of merge 3; its pot room fix is the one wanted.
 - A scheduled task ("Resume Lichii work") resumes this session after a usage cut-off until this
   work is done, as the owner asked on 2026-11-12 ("When my usage runs out, resume when it renews
   ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the
