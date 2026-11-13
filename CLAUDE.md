@@ -85,9 +85,11 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   A/B and other testing launchers (.bat) go, "unless they might be useful later"; (2) then wait
   for Fritchii's next release and upstream Lichii's multithreading release before adding
   anything else.
-- A scheduled task ("Resume Lichii work", every 2 hours at minute 4) resumes this session after
-  a usage cut-off until this work is done, as the owner asked on 2026-11-12 ("When my usage runs
-  out, resume when it renews ... etc."). It ends its turn at once while work is running.
+- A scheduled task ("Resume Lichii work") resumes this session after a usage cut-off until this
+  work is done, as the owner asked on 2026-11-12 ("When my usage runs out, resume when it renews
+  ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the
+  owner's time, instead of every 2 hours), and each run re-arms it for the next renewal 5 hours
+  later. It doesn't interrupt work that is running.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
