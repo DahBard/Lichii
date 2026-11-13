@@ -61,9 +61,10 @@ Output OutputOf(VkSurfaceFormatKHR format) {
     if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         return Output::Sdr;
     }
-    // Not scRGB: it gets no HDR metadata, whose range generation divides by, and its colours
-    // outside BT.709 are negative, which generation's 8-bit motion search input can't hold. HDR10
-    // only in the format AMD's runtime has (no A2R10G10B10).
+    // Not scRGB: Lichii sends it no HDR metadata, so AMD's swapchain passes a 0-0 nits range,
+    // which its scRGB decode divides by. The callback could fill that in as for HDR10, but FSR
+    // FG 4's scRGB path is closed source and untested. HDR10 only in the format AMD's runtime has
+    // (no A2R10G10B10).
     if (format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT &&
         format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
         return Output::Hdr10;
