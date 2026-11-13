@@ -1,12 +1,12 @@
-"""Names the functions in a Lichii crash report (lichii-crash-<pid>.txt, src/yuzu/nx2_crash_dump.cpp).
+"""Names the functions in a Lichii crash report (the "Host crash:" lines of eden_log.txt).
 
 The report gives code addresses as `lichii.exe+0x<offset>`, the offset from the module's load
 address (an RVA). Given the unstripped lichii.exe of the same build (the CI's
 lichii-tuned-r<run>-<variant>-symbols artifact), this prints every report line that holds such an
 address with the function it falls in, read from the exe's COFF symbol table:
 
-    python3 -I symbolize_crash.py lichii-crash-1234.txt lichii.exe
-    python3 -I symbolize_crash.py lichii-crash-1234.txt lichii.exe --method symbolizer
+    python3 -I symbolize_crash.py eden_log.txt lichii.exe
+    python3 -I symbolize_crash.py eden_log.txt lichii.exe --method symbolizer
 
 --method nm (default) runs llvm-nm and gives function+offset; --method symbolizer runs
 llvm-symbolizer --relative-address (adds file:line and inlined frames only if the exe has debug

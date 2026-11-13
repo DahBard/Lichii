@@ -152,7 +152,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python lichii-tuned/fetch_pgo_profiles.py lichii-tuned/pgo
 
-      # Symbols for crash reports (lichii-crash-*.txt names lichii.exe+offset): MinGW links with
+      # Symbols for crash reports (the log's "Host crash:" lines name lichii.exe+offset): MinGW links with
       # the COFF symbol table, the symbols artifact keeps that exe, and Package strips the one
       # that ships. Only the checkout changes, not lichii-tuned.patch. Linked unstripped, lld also
       # writes a .buildid section and a CodeView debug entry, which the stripped exe keeps.
@@ -236,13 +236,13 @@ jobs:
           cmake -S . -B build/release -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTING=OFF \
-            -DYUZU_TESTS=OFF \
-            -DYUZU_CMD=OFF \
-            -DYUZU_ROOM=OFF \
-            -DYUZU_ROOM_STANDALONE=OFF \
-            -DYUZU_USE_BUNDLED_QT=OFF \
-            -DYUZU_USE_BUNDLED_SDL3=ON \
-            -DYUZU_USE_BUNDLED_FFMPEG=ON \
+            -DLICHII_TESTS=OFF \
+            -DLICHII_CMD=OFF \
+            -DLICHII_ROOM=OFF \
+            -DLICHII_ROOM_STANDALONE=OFF \
+            -DLICHII_USE_BUNDLED_QT=OFF \
+            -DLICHII_USE_BUNDLED_SDL3=ON \
+            -DLICHII_USE_BUNDLED_FFMPEG=ON \
             -DVulkanHeaders_FORCE_BUNDLED=ON \
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
             -DENABLE_UPDATE_CHECKER=OFF \
@@ -263,12 +263,12 @@ jobs:
           cmake -S . -B build/release -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=OFF
-          -DYUZU_TESTS=OFF
-          -DYUZU_CMD=OFF
-          -DYUZU_ROOM=OFF
-          -DYUZU_ROOM_STANDALONE=OFF
-          -DYUZU_USE_BUNDLED_QT=OFF
-          -DYUZU_USE_BUNDLED_SDL3=ON
+          -DLICHII_TESTS=OFF
+          -DLICHII_CMD=OFF
+          -DLICHII_ROOM=OFF
+          -DLICHII_ROOM_STANDALONE=OFF
+          -DLICHII_USE_BUNDLED_QT=OFF
+          -DLICHII_USE_BUNDLED_SDL3=ON
           -DENABLE_UPDATE_CHECKER=OFF
           -DUSE_DISCORD_PRESENCE=OFF
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
@@ -287,7 +287,7 @@ jobs:
         run: |
           ccache --zero-stats
           # -k 0: a failing file doesn't stop the others, so one run lists every error.
-          cmake --build build/release --target yuzu --parallel -- -k 0
+          cmake --build build/release --target lichii --parallel -- -k 0
           ccache --show-stats
 
       - name: Build MSVC
@@ -295,7 +295,7 @@ jobs:
         shell: bash
         run: |
           sccache --zero-stats
-          cmake --build build/release --target yuzu --parallel -- -k 0
+          cmake --build build/release --target lichii --parallel -- -k 0
           sccache --show-stats
 
       - name: Stop sccache
@@ -333,8 +333,8 @@ jobs:
           fi
           {
             echo "lichii-tuned r${GITHUB_RUN_NUMBER} ${{ matrix.variant }}, commit ${GITHUB_SHA}"
-            echo "Symbols for lichii-crash-*.txt of the lichii-tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }} package:"
-            echo "  python3 -I symbolize_crash.py lichii-crash-<pid>.txt lichii.exe"
+            echo "Symbols for the \"Host crash:\" lines of eden_log.txt from the lichii-tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }} package:"
+            echo "  python3 -I symbolize_crash.py eden_log.txt lichii.exe"
             sha256sum "$symbols/lichii.exe" | sed "s|  .*|  lichii.exe (this one, with symbols)|"
             sha256sum lichii.exe | sed "s|  .*|  lichii.exe (shipped, stripped)|"
           } > "$symbols/lichii-symbols.txt"

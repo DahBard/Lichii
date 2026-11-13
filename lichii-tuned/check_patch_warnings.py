@@ -10,7 +10,7 @@ and test files are skipped: review their added lines by hand.
 Needs clang++, g++ and the Boost headers (Ubuntu: clang g++ libboost-dev). The header-only
 dependencies are cloned at their cpmfile.json versions into --deps.
 
-usage: python3 -I lichii-tuned/check_patch_warnings.py <tuned4 checkout> [--base 2eb5f081c]
+usage: python3 -I lichii-tuned/check_patch_warnings.py <tuned4 checkout> [--base c169856090]
        [--deps DIR] [--jobs N]
 """
 import argparse
@@ -34,7 +34,7 @@ DEPS = {
     "spirv-headers": "include",
     "simpleini": ".",
 }
-SKIP = re.compile(r"^src/(yuzu|qt_common|tests|common/windows|android)/")
+SKIP = re.compile(r"^src/(lichii|qt_common|tests|common/windows|android)/")
 COMMON = ["-std=c++20", "-fsyntax-only", "-Wall", "-Wextra", "-Wno-unused-parameter",
           "-Wno-missing-field-initializers", "-Wno-invalid-offsetof", "-Wno-attributes",
           "-Wsign-compare", "-Wnon-virtual-dtor", "-DARCHITECTURE_x86_64=1", "-DHAS_OPENGL=1",
@@ -84,7 +84,7 @@ def added_lines(source: pathlib.Path, base: str) -> dict[str, set[int]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=pathlib.Path)
-    parser.add_argument("--base", default="2eb5f081c")
+    parser.add_argument("--base", default="c169856090")
     parser.add_argument("--deps", type=pathlib.Path,
                         default=pathlib.Path.home() / ".cache" / "lichii-tuned-deps")
     parser.add_argument("--jobs", type=int, default=4)
