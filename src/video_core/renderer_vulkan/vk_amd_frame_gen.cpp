@@ -104,8 +104,8 @@ std::atomic<bool> prepare_ready{false};
 /// The scheduler tick of the last prepare pass recorded, so a swapchain replacement can wait
 /// for the command buffer that holds it.
 std::atomic<u64> last_prepare_tick{0};
-/// The output of the last swapchain made while AMD's was asked for (CanPresent), and whether its
-/// swapchain or its generation last failed with HDR10 output: for LastOffReason.
+/// The output of the last swapchain made (CanPresent; Sdr while AMD's wasn't asked for), and
+/// whether its swapchain or its generation last failed with HDR10 output: for LastOffReason.
 std::atomic<Output> last_output{Output::Sdr};
 std::atomic<bool> hdr_failed{false};
 
@@ -762,6 +762,11 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
 }
 
 bool CanPresent(VkSurfaceFormatKHR format) {
+    if (!Requested()) {
+        // No AMD swapchain and no HDR reason: switched on later, the status bar shows RESTART.
+        last_output.store(Output::Sdr, std::memory_order_relaxed);
+        return false;
+    }
     const Output output = OutputOf(format);
     last_output.store(output, std::memory_order_relaxed);
     if (output != Output::Unsupported) {

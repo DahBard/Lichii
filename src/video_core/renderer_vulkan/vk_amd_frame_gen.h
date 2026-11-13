@@ -47,8 +47,9 @@ enum class Output : u8 {
 };
 [[nodiscard]] Output OutputOf(VkSurfaceFormatKHR format);
 
-/// OutputOf for a swapchain made while AMD's is asked for: whether AMD's may present it. Logs
-/// why not, and keeps the output for LastOffReason.
+/// For each swapchain made: whether AMD's may present it, which needs it asked for (Requested)
+/// and an output it presents (OutputOf). Logs an output it doesn't present, and keeps the output
+/// for LastOffReason (Sdr while it isn't asked for).
 [[nodiscard]] bool CanPresent(VkSurfaceFormatKHR format);
 
 /// Why AMD's frame generation is off with HDR output, for the status bar.

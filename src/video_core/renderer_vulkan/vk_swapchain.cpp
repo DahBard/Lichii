@@ -418,8 +418,9 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
               VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0
                  ? "supported"
                  : "unsupported");
-    // AMD's frame generation presents SDR and HDR10; other output gets a normal swapchain.
-    const bool amd_frame_gen = AmdFrameGen::Requested() && AmdFrameGen::CanPresent(surface_format);
+    // AMD's frame generation, when asked for, presents SDR and HDR10; other output gets a normal
+    // swapchain. Asked at every creation, so the status bar's reason fits this swapchain.
+    const bool amd_frame_gen = AmdFrameGen::CanPresent(surface_format);
 
     u32 requested_image_count{capabilities.minImageCount + 1};
     // Ensure Triple buffering if possible.
