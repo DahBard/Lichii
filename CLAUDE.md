@@ -84,16 +84,22 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   "Fritchii has a fix that will be in its next release later today." Review that release's fix
   when it is out.
 - 2026-11-13, the order after merge 3: (1) a code cleanup and a file system cleanup: most of the
-  A/B and other testing launchers (.bat) go, "unless they might be useful later"; (2) then wait
+  A/B and other testing launchers (.bat) go, "unless they might be useful later" (done in r61: 13
+  launchers kept; the code cleanup waits for the owner's test of r60/r61); (2) then wait
   for Fritchii's next release and upstream Lichii's multithreading release before adding
   anything else.
-- 2026-11-13, for 11:00 EST (a scheduled message fires then): "check for a new Fritchii Github
+- 2026-11-13, Fritchii v6 (first set for 11:00 EST): "check for a new Fritchii Github
   repository separate from the Current Lichii Fork called Fritchii. Find the Version 6.0, or if
   there is a later version, try that one. Do a code review for Fritchii and find out what we could
   benefit from and add it to our fork. Fritchii is highly specialized to run OOT, so bias our
   decisions based on that. If something in fritchii v6 is already handled in our build
   differently, default to changing to fritchii's unless our way of doing it is specifically tuned
-  to our Hardware specifications." It goes on top of merge 3; its pot room fix is the one wanted.
+  to our Hardware specifications." Its pot room fix is the one wanted. Later that day the owner
+  dropped the 11:00 check: v6 will be released soon, but where it will be hosted isn't known yet;
+  the owner says where once it is public.
+- 2026-11-13: "When you are finished with your current goals merge upstream Lichii with our 'not a
+  fork'": merge 4, upstream nx2 `87d84d513c` (17 commits after build 171), on branch
+  `r22-merge-nx2d`.
 - A scheduled task ("Resume Lichii work") resumes this session after a usage cut-off until this
   work is done, as the owner asked on 2026-11-12 ("When my usage runs out, resume when it renews
   ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the
