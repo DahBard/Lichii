@@ -1,10 +1,10 @@
 name: lichii-tuned
 
 # Windows builds of Lichii tuned for an Intel Arrow Lake (Core Ultra 200H) CPU and an AMD RDNA4
-# (RX 9070 XT) GPU; the source is this branch (upstream Lichii's tree, nx2 2eb5f081c since
-# 2026-11-12) plus lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the `tuned` branch that
-# touches the patch or this workflow builds the variants; so does a manual run. The CachyOS
-# (Linux) job was removed on 2026-11-11: the owner builds for Windows only.
+# (RX 9070 XT) GPU; the source is this branch (upstream's tree, build 171 since 2026-11-13) plus
+# lichii-tuned/lichii-tuned.patch (branch tuned4). Every push to the `tuned` branch that touches the
+# patch or this workflow builds pgo-lto; a manual run builds the variant it names (pgo-train records
+# a PGO profile). The CachyOS (Linux) job was removed on 2026-11-11: the owner builds for Windows only.
 on:
   push:
     branches: [tuned]
@@ -12,6 +12,17 @@ on:
       - "lichii-tuned/**"
       - ".github/workflows/lichii-tuned.yml"
   workflow_dispatch:
+    inputs:
+      variant:
+        description: Variant to build
+        type: choice
+        options: [pgo-lto, pgo, pgo-train]
+        default: pgo-lto
+
+env:
+  # Builds are numbered r<run + BUILD_OFFSET>: this repository's run #1 is r61, after r60, the
+  # last build before the move to this repository.
+  BUILD_OFFSET: 60
 
 permissions:
   contents: read
@@ -29,24 +40,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # MinGW clang + the repo's PGO profile + x86-64-v3 (AVX2/BMI2/FMA) tuned for Arrow Lake.
-          - variant: pgo
-            lto: "OFF"
-          # Same plus ThinLTO across the whole program.
-          - variant: pgo-lto
-            lto: "ON"
-          # The same source built with MSVC (no PGO, baseline x86-64), to tell compiler
-          # differences from source changes. Off until a glitch shows up only in the pgo builds;
-          # run lichii-tuned/check_patch_warnings.py before turning it on.
-          # - variant: msvc
-          #   lto: "OFF"
-          #   msvc: true
-          # Instrumented build that records an Ocarina profile while you play (slower).
-          # Profiles uploaded to lichii-tuned/pgo tune the next builds.
-          - variant: pgo-train
-            lto: "OFF"
-            train: true
+        # pgo-lto: MinGW clang + the repo's PGO profile + ThinLTO + x86-64-v3 (AVX2/BMI2/FMA) tuned
+        # for Arrow Lake. pgo: the same without LTO. pgo-train: instrumented, records an Ocarina
+        # profile while you play (slower); profiles uploaded to lichii-tuned/pgo tune the next
+        # builds. Pushes build pgo-lto only: Actions minutes and artifact storage are limited here.
+        # (An MSVC variant, msvc: true, tells compiler differences from source changes; run
+        # lichii-tuned/check_patch_warnings.py before adding it.)
+        include: ${{ fromJSON(format('[{0}]', (github.event_name == 'workflow_dispatch' && inputs.variant == 'pgo') && '{"variant":"pgo","lto":"OFF"}' || (github.event_name == 'workflow_dispatch' && inputs.variant == 'pgo-train') && '{"variant":"pgo-train","lto":"OFF","train":true}' || '{"variant":"pgo-lto","lto":"ON"}')) }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
@@ -71,9 +71,11 @@ jobs:
           else
             echo "No patch: building the branch as is"
           fi
-          # Name the build in the log and title bar: <commit>-tuned-r<run>-<variant>.
+          echo "BUILD_R=$((GITHUB_RUN_NUMBER + BUILD_OFFSET))" >> "$GITHUB_ENV"
+          BUILD_R=$((GITHUB_RUN_NUMBER + BUILD_OFFSET))
+          # Name the build in the log and title bar: <commit>-tuned-r<build>-<variant>.
           printf '%s' "$GITHUB_SHA" > GIT-COMMIT
-          printf '%s' "tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }}" > GIT-REFSPEC
+          printf '%s' "tuned-r${BUILD_R}-${{ matrix.variant }}" > GIT-REFSPEC
 
       - name: Set up MSYS2
         if: ${{ !matrix.msvc }}
@@ -332,8 +334,8 @@ jobs:
             cp "$GITHUB_WORKSPACE/lichii-tuned/symbolize_crash.py" "$symbols/"
           fi
           {
-            echo "lichii-tuned r${GITHUB_RUN_NUMBER} ${{ matrix.variant }}, commit ${GITHUB_SHA}"
-            echo "Symbols for the \"Host crash:\" lines of eden_log.txt from the lichii-tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }} package:"
+            echo "lichii-tuned r${BUILD_R} ${{ matrix.variant }}, commit ${GITHUB_SHA}"
+            echo "Symbols for the \"Host crash:\" lines of eden_log.txt from the lichii-tuned-r${BUILD_R}-${{ matrix.variant }} package:"
             echo "  python3 -I symbolize_crash.py eden_log.txt lichii.exe"
             sha256sum "$symbols/lichii.exe" | sed "s|  .*|  lichii.exe (this one, with symbols)|"
             sha256sum lichii.exe | sed "s|  .*|  lichii.exe (shipped, stripped)|"
@@ -407,26 +409,26 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-tuned-r${{ github.run_number }}-${{ matrix.variant }}
+          name: lichii-tuned-r${{ env.BUILD_R }}-${{ matrix.variant }}
           path: build/release/bin/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
       - name: Upload symbols
         if: ${{ !matrix.msvc }}
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-tuned-r${{ github.run_number }}-${{ matrix.variant }}-symbols
+          name: lichii-tuned-r${{ env.BUILD_R }}-${{ matrix.variant }}-symbols
           path: build/symbols/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
       - name: Summary
         if: always()
         shell: bash
         run: |
           {
-            echo "### lichii-tuned r${GITHUB_RUN_NUMBER} (${{ matrix.variant }})"
+            echo "### lichii-tuned r${BUILD_R} (${{ matrix.variant }})"
             echo "- base: \`${GITHUB_SHA::10}\` on \`${GITHUB_REF_NAME}\`"
             if [ "${{ matrix.msvc }}" = "true" ]; then
               echo "- flags: MSVC, as the official windows-x86_64 build"
@@ -437,7 +439,7 @@ jobs:
               echo "- patch: $(grep -c '^diff --git' lichii-tuned/lichii-tuned.patch) files"
             fi
             if [ -f build/symbols/lichii.exe ]; then
-              echo "- symbols: \`lichii-tuned-r${GITHUB_RUN_NUMBER}-${{ matrix.variant }}-symbols\` (lichii.exe before stripping)"
+              echo "- symbols: \`lichii-tuned-r${BUILD_R}-${{ matrix.variant }}-symbols\` (lichii.exe before stripping)"
             fi
             if [ -f merged.profdata ]; then
               echo "- profile: eglantine.profdata merged with recorded profiles"
