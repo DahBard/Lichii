@@ -2239,6 +2239,24 @@ Own changes:
      boundary after 2 unused frames (replaces `e6a4a2ef1`'s rule; `superseded_images.h`, tests),
      (3) square depth-only passes left unscaled. With open #1285 it reaches the 60 fps cap.
      Recommended: port #1314 after merge 3 (it meets texture_cache.h, which the merge changes).
+   - Owner (2026-11-12 evening, after r58: "the best looking and smoothest" build): AMD FSR frame
+     generation doesn't run with HDR output (r58 logs: 'AMD frame generation: off while HDR
+     output is active', merge 2's gate in vk_swapchain.cpp; the port is set up for SDR only); fix
+     it, and merge upstream up to build 169 (170 if released first). Both workflows were cut off
+     by the usage limit before any agent finished (22:00 UTC) and were resumed at 01:40 UTC:
+     - HDR frame generation: branch `r22-r59` (worktree scratchpad/wt-r59, from tuned4
+       `5fc428bdc`), workflow run `wf_333d0a13-43d` (two readers, design and challenger,
+       implementer, two reviews, fix; notes in scratchpad/hdrfg/).
+     - Merge 3: target `65745c243f` (refs/remotes/zortos/merge3-target), upstream's tip when the
+       owner said build 169 was out, so build 169 is this commit or an older one; 60 commits past
+       `2eb5f081c`, 289 files (+18597/-1371). Trial merge in scratchpad/wt-merge3 (branch
+       `r22-merge-nx2c`, uncommitted): 83 conflicted files, 199 hunks (texture_pass.cpp 14,
+       vk_graphics_pipeline.cpp 11, texture_handles.cpp 11, dma_pusher.cpp 7), 7 of them
+       modify/delete on upstream's own FSR 4 files that our tree removed for CheezyEmu's.
+       Survey and plan: workflow run `wf_13890ad5-04e` (scratchpad/merge3/). Upstream's nine
+       later commits (the rename of yuzu names, targets and directories to Lichii, #1541 and
+       #1550-#1553, 389 files with ~300 renames; #1544 dropping the yuzu SPDX line from 2512
+       files; #1521, #1539) are for a later merge.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
