@@ -1,0 +1,194 @@
+branch	commit	title
+upstream/nx2	87d84d513c	upstream's main branch on 2026-11-13 (17 commits after build 171)
+upstream/perf/gpu-parallel-record	f885e3af6c	upstream work branch (parallel command recording / multithreading)
+upstream/perf/nx2-parallel-record	d670857648	upstream work branch (parallel command recording / multithreading)
+upstream/test/all-in-one-mt	9b1a32dbb1	upstream work branch (parallel command recording / multithreading)
+upstream/pr/378	1c8f247083	vulkan_device: opt-in EDEN_AMD_FP16=1 to keep shaderFloat16 on the AMD driver
+upstream/pr/408	e99a000da8	Ocarina of Time: fix stutter from pipeline rebuilds and slow compute builds
+upstream/pr/417	14495155fe	Create build-linux.sh
+upstream/pr/543	3428cbaeff	input: drive the GameCube motor fully for any rumble (HD rumble titles felt on GC controllers)
+upstream/pr/559	3fc35388be	video_core: wait only for a macro DMA read's own query reports
+upstream/pr/586	de5da5398f	Modernize the game library and loading screen
+upstream/pr/612	3dc5c3d496	qt: share settings as short codes in Configure and game Properties
+upstream/pr/617	f488341383	Enumerate network interfaces on macOS via getifaddrs
+upstream/pr/618	3f8bf33bdc	OoT: photo mode (free camera, picture ratios, hotsampling, IGCS camera tools)
+upstream/pr/630	c6839b8806	vulkan: pad MoltenVK fallback uploads for reflected uniform arguments
+upstream/pr/631	2b1eae93d8	vulkan: initialize dimensionally matching sampled null textures on MoltenVK
+upstream/pr/632	7e948d2eb6	dynarmic: reject ARM64 return targets from cleared code caches
+upstream/pr/724	a0bf32e24f	friend, sockets: play Switch Sports Resort's Friend Lobby over rooms (LAN)
+upstream/pr/777	d3dafb4b32	vulkan: add opt-in texture binding optimizations
+upstream/pr/785	04e3c86a89	core_timing: don't scale the guest counter for CPU Boost/Overclock in Switch 2 titles (fixes #317)
+upstream/pr/810	be6e41eb97	common: let HostMemory::Protect share the placeholder lock (Ocarina of Time)
+upstream/pr/811	918cefbd87	shader: apply FMZ before SAT in FFMA and HFMA2, and translate half FMZ (#745)
+upstream/pr/814	0c793dabc4	vulkan: draw task/mesh through the compute fallback on AMD drivers, with a Mesh Shaders setting (GPU hangs, #316, #871)
+upstream/pr/823	b502cd7cd9	texture_cache: let an integrated GPU's memory share bound the textures only (#739)
+upstream/pr/836	eb915809e1	vulkan: recycle images instead of creating and freeing them every frame (Ocarina of Time)
+upstream/pr/839	22f82f9b42	qt_common: hide the launcher config home from external open handlers
+upstream/pr/840	36b94d4f37	video_core: add native Linux DLSS with live controls and neural rendering
+upstream/pr/843	b7d50fd5fa	Vibe/directstorage f13df5
+upstream/pr/854	fad8fb5605	shader: turn off Adreno LRZ on the Qualcomm driver (Ocarina of Time 8x8 holes)
+upstream/pr/861	cb3befcfaa	buffer_cache: preflush native titles' GPU readbacks, waiting for downloads in flight
+upstream/pr/863	df4fdefe7b	vulkan, shader: draw points and lines through the mesh compute fallback (Ocarina of Time foliage shadows)
+upstream/pr/864	bd56c3f9e8	video_core: skip the game's DLSS network passes while the replacement draws
+upstream/pr/869	4e3142e4f9	core: decompress Ocarina of Time's zstd on the host, streamed blocks …
+upstream/pr/870	1f6cd0f057	common, dynarmic: name JIT blocks by guest PC in the Windows sampler
+upstream/pr/875	8b26f6744c	vk_pipeline_cache_prebuild: build cached pipelines newest first (from Fritchii)
+upstream/pr/882	93e2a4cfbb	qt: keep per-game Properties buttons on screen at high DPI scaling
+upstream/pr/890	afc2a08868	ci: publish SHA-256 manifest for release packages
+upstream/pr/891	873704e39c	frontend_common: don't abort when installing keys from the keys folder itself
+upstream/pr/916	0bcf32ecf2	vk_scheduler: time sampled GPU frames by the source line that recorded each command
+upstream/pr/933	836062c496	vk_rasterizer: poll a suspended list copy without a kernel call each time
+upstream/pr/948	5fe989125a	vulkan: keep uneven-mip ASTC in BC on integrated GPUs and cards under 6 GiB
+upstream/pr/950	29a7da03c9	vulkan: create colour images without DCC on RADV before GFX10 (Ocarina of Time on RX 580)
+upstream/pr/954	eef399b13e	buffer_cache: keep the resolved index buffer while its range, mappings and buffers are
+upstream/pr/958	e90a6ab949	android: fix the nx2 build with NDK 28.2 (atomic_ref, std::max)
+upstream/pr/960	2756943c61	android: show the Ocarina of Time anti-aliasing option
+upstream/pr/963	01b36a30d6	vulkan: allow overriding VULKAN_CACHE_FLUSH_PIPELINES via EDEN_NX2_VULKAN_CACHE_FLUSH
+upstream/pr/964	94b4a39fb6	filesystem: return PathNotFound for missing cross-directory rename sources
+upstream/pr/967	2018a83be6	build: allow linking a local clang_rt.builtins with clang-cl
+upstream/pr/970	f4b0a8c374	video_core: read texture descriptors without flushing during shader translation
+upstream/pr/971	b3044753c4	vulkan: skip native draws without a depth target only while many pipelines are pending
+upstream/pr/973	539788af8a	filesystem: reject transfers larger than their IPC buffers
+upstream/pr/974	7e843d3245	video_core: keep per-draw writes that change no resolve from breaking fast draws
+upstream/pr/976	db0c346e03	Ocarina of Time: fix the Castle Town guard house freeze and its device-memory blowup (#247, #449)
+upstream/pr/994	b75fa24db2	vulkan: keep unused graphics pipelines until the disk cache size is exceeded (desktop)
+upstream/pr/995	949852b17c	vulkan: compile pointer-slot compute rebuilds on a worker instead of waiting in the dispatch
+upstream/pr/1005	7a755fbc2c	common: keep a faulting stack walk from taking the sampler's process down
+upstream/pr/1008	ca5842a4da	shader: prove Ocarina's per-tap gathers and call links through IMAD, USHF and uniform LEA
+upstream/pr/1051	16b2c8f38b	shader: saturate F32 to S32 before integer conversion
+upstream/pr/1052	f045607104	video_core: serialize concurrent SPIR-V dump writes
+upstream/pr/1053	c72442efe1	vulkan: attribute mesh fallback pipeline waits in stutter traces
+upstream/pr/1072	702c50ade2	tools: validate complete frame-time windows and physical-input audit metadata
+upstream/pr/1076	fe7c182853	vulkan: skip pipeline builds a driver crash ended the last start on (shader cache v2)
+upstream/pr/1081	67e2cc5aa9	video_core: gate fast-draw and texture-memo verification on post-lock/post-resolve state
+upstream/pr/1083	d4f48aad92	vulkan: decode an ASTC array a few layers at a time when it does not fit
+upstream/pr/1094	3d03c95986	video_core: wait less for the writers of command lists (port of #805's lists 18 and 43)
+upstream/pr/1099	c0b8b7b51a	query_cache: keep fence-flagged payload releases synchronized at low accuracy (#337 perf regression, rebase of #874)
+upstream/pr/1103	e18b6563de	vk_device: let RADV keep its own pipeline cache (port of Eglantine #714)
+upstream/pr/1105	f46c2caaeb	common: port worker cleanup completion fix with admission coverage
+upstream/pr/1107	2f7cce3094	video_core: scale the unused prebuilt pipeline budget with device memory
+upstream/pr/1110	b20598d352	shader, vulkan: trim emulated passthrough geometry outputs (AMD crash at Bananza loading screen)
+upstream/pr/1113	1cb8dd2649	vulkan: timestamp and pair pipeline build trace intervals
+upstream/pr/1114	8ee303b71f	dma: repeat CONST_A values at the configured component width
+upstream/pr/1129	49a1cd23f9	texture_cache: scale the collector's ceiling with the device budget on 10+ GiB cards (Ocarina's periodic texture stalls)
+upstream/pr/1130	92b29fb513	texture_cache: EDEN_NX2_TC_TRACE logs every image the cache creates and deletes
+upstream/pr/1137	3f91be476a	video_core: support Ocarina 1.0 output passes in No Sharpening
+upstream/pr/1144	f37374c122	shader precache: open a game kept as a folder through its main file
+upstream/pr/1150	89bb661712	Android: build, boot Switch 2 titles without PAuth, and fit mid-range phones
+upstream/pr/1155	26afe4854b	video_core: flush texture descriptor pools up to 4 MiB for stage translation on workers
+upstream/pr/1156	30c92c28e6	vulkan: keep images in video memory and leave the last 1536 MiB to render targets
+upstream/pr/1161	3039a0f131	Ocarina of Time: #805 + #573 + #874 + #836 integration and cheaper draws at the Kokiri water, up to date with nx2 (replaces #1069)
+upstream/pr/1166	8eb8dc28d5	shader: build shared shader functions as calls instead of inlining them (compute and graphics)
+upstream/pr/1172	2f67a0dee7	qt: keep "Limit Speed Percent" as the user set it after a game closes
+upstream/pr/1173	0701304a02	vulkan: gather the graphics pipeline create state in one struct (no behaviour change)
+upstream/pr/1174	66cd18aad0	vulkan: the precache marker records a variant, so a build or setting that changes the compute precache runs it again
+upstream/pr/1177	04ab9e6d28	vulkan: link graphics pipelines from per-stage shader libraries (Shader libraries setting)
+upstream/pr/1178	391c2061e2	tools: offline warm file scripts and shader-sweep --guess-missing
+upstream/pr/1180	1169d58c5e	Ocarina: keep water ripples running with the FPS patches
+upstream/pr/1181	87ac53a290	shader: shadow high registers of SHF with a uniform shift amount
+upstream/pr/1183	942ff9c920	vulkan, shader_warm: graphics warm-up from the game files (warm-graphics.bin)
+upstream/pr/1186	0c757afb53	shader: shadow high registers of seven more instruction forms (Ocarina of Time)
+upstream/pr/1188	c875d9a2a7	vulkan: graphics warm-up marker records link mode and a variant; fewer warm-up threads when commit memory is low
+upstream/pr/1203	9b96ba1b62	vulkan: read the mesh grid size on RADV before 26.2.5 (GPU hang on native mesh draws, #316, #871)
+upstream/pr/1204	40e9509bbe	common: keep the ZBIC decoder out of PGO training builds too
+upstream/pr/1205	d257a266f3	ci: an Ocarina-trained Linux PGO profile merged with eglantine.profdata
+upstream/pr/1214	bf2ac7219c	ci: retrain the Windows PGO profile on today's nx2 (Ocarina of Time, +7% on a PGO build)
+upstream/pr/1218	abdaa5cc3e	nx2: call the GPU memory registry and address space listeners outside their locks
+upstream/pr/1220	2bc557461e	shader_recompiler: let a task or mesh program read back its output stage buffer (#1043)
+upstream/pr/1223	5fab1d9f10	tests: fix linking with OpenGL disabled
+upstream/pr/1225	3336881770	nx2: JIT warm-up from a per-title block list (no more compile bursts after loading)
+upstream/pr/1233	82b10cc0ae	Add native Discord Rich Presence integration
+upstream/pr/1241	08a53f4e73	texture_cache: start new render targets unuploaded when the cache holds no overlapping copy (#834)
+upstream/pr/1242	099821a125	windows: enable Segment Heap
+upstream/pr/1243	2545ca5662	tools: add game-free Vulkan tensor and compute pipeline profiling
+upstream/pr/1248	5cde0ae890	shader_cache_v2: migrate a legacy Vulkan cache without holding it three times over (#1237)
+upstream/pr/1250	462a385d67	Pin nixpkgs to 26.05 and load Mesa Vulkan drivers for all GPUs
+upstream/pr/1256	afe586953c	file_sys: revert corrupted dump workaround 
+upstream/pr/1265	ac01af8084	dynarmic: no perf map lock or name per compiled block without PERF_BUILDID_DIR
+upstream/pr/1266	0e806dbf1c	nx2: skip dynarmic's IR verification pass outside Debugging and Paranoid accuracy
+upstream/pr/1267	6e91c4dcaf	puller: flush pending commands before forcing a fence release again (#925)
+upstream/pr/1268	7db0e35f3e	qt_common: log the Qt platform and session type at startup
+upstream/pr/1269	51356525a3	tools: add Switch 2 emulator diagnostics MCP server (2024-11-05)
+upstream/pr/1271	d465c93bc5	Linux: hand freed heap memory back after pipeline evictions, and fill the memory trace's system commit
+upstream/pr/1283	e680e97cd5	shader: round software HMMA results to fp16 with a native conversion
+upstream/pr/1285	502d1f9ddc	texture_cache: delete dead render targets early while over budget (OoT Market device loss on 8 GB)
+upstream/pr/1289	b75722f9b5	loader: run Ocarina's sound manager at 60 Hz under FPS Unlock (sounds and music stop above 60 fps)
+upstream/pr/1291	371a73dc45	vulkan: NVIDIA DLSS Frame Generation (DLSS-G / MFG 2x-4x) with Reflex, for every game
+upstream/pr/1295	be87623b9f	video_core: recognize Star Fox cutscene prepass for spatial display repair
+upstream/pr/1296	f138ff8ad5	vulkan: preserve native font atlas draws without depth
+upstream/pr/1298	494fcad9d2	audio: refill sysmix headroom to prevent brief output gaps
+upstream/pr/1301	f9bade0281	yuzu: raise the NVIDIA shader disk cache limit on Linux
+upstream/pr/1305	2d487baef4	[desktop] Add manual update checks and optional window-size preservation
+upstream/pr/1306	e3af7cb315	texture_cache: collect faster the further past the critical memory (Ocarina of Time out-of-memory crash)
+upstream/pr/1308	ef277a8e45	i18n(zh_CN): complete graphics settings, menus and recommended-settings dialog
+upstream/pr/1311	5d9a8f5a12	texture_cache: keep emergency eviction active with TC_MIN_AGE overrides
+upstream/pr/1314	c52fa0ed7c	texture_cache: Ocarina of Time guard house from 4-7 to 53-59 fps (padded shadow maps, superseded images, unscaled shadow passes)
+upstream/pr/1338	668f957597	input: fix Any device selection on Linux
+upstream/pr/1339	bfe81d105a	qt: preserve window geometry on Linux
+upstream/pr/1348	803f8c3e60	streamline: NVIDIA DLSS Frame Generation for Ocarina of Time (DLSS-G with Reflex and PCL)
+upstream/pr/1350	48d3f61f64	qt: scroll configuration pages on Linux
+upstream/pr/1353	fe2f322828	core: keep ZeroTrim allocation failure from terminating the emulator (#1346)
+upstream/pr/1356	9933a3715a	vulkan: replace NaN in float colour outputs of fragment shaders (port from Hookshot)
+upstream/pr/1358	2d93f35d09	Signed title patch catalogue and ALPN passthrough
+upstream/pr/1366	4bd2be176f	Precompiled pipelines built from the player's own play, prepared in the background (follow-up to #895/#896, no shared recipes)
+upstream/pr/1367	9835042b3b	Add a Hypervisor.framework CPU backend for Apple silicon
+upstream/pr/1368	528413646a	Enable VK_KHR_portability_subset when the Vulkan device exposes it
+upstream/pr/1369	32327b747e	Split overlapping query result copies into disjoint regions
+upstream/pr/1372	2d783c060b	dynarmic arm64: store block relocations and fastmem patch info in flat maps
+upstream/pr/1374	1a5311630b	Keep the Vulkan screenshot capture frame as a renderer member
+upstream/pr/1375	e5cd012149	Give cached and null buffers a zero-filled 64 KiB tail on MoltenVK
+upstream/pr/1378	0783db8c7c	Reuse translated shaders between graphics pipelines whose translation inputs match
+upstream/pr/1379	e31f0f776d	Translate skippable native graphics pipelines as shader jobs from detached environments
+upstream/pr/1386	45e17623d2	docs: point the build guide at Lichii
+upstream/pr/1393	bd426c6e4e	profile import: accept an old profile folder that is a link to another drive
+upstream/pr/1394	0171b77765	configure: widen the dialog to fit the open page
+upstream/pr/1395	22ade6eca1	status bar: give each setting chip its own color in Lichii Dark
+upstream/pr/1396	f33c174cd9	Motion: drop the integral term that makes the orientation swing on after the controller stops
+upstream/pr/1401	bdb034db74	game list: store custom artwork and names per program ID instead of rewriting the game
+upstream/pr/1402	c44d80551b	game list: optional SteamGridDB artwork with the user's own API key
+upstream/pr/1406	493a540445	vulkan: keep the pipeline binary store on for AMD's proprietary driver
+upstream/pr/1407	6aaa03705c	shader cache v2: keep what a session used of the pipeline binaries on AMD
+upstream/pr/1408	c4213c13f1	game list: show the size of loose dump folders once the list is shown
+upstream/pr/1414	a0b7ae4a0a	Game grid: wrap titles to the icon width
+upstream/pr/1417	930dfb43b8	core: closing a game during the shader load no longer hangs, and the next launch works
+upstream/pr/1422	219163f381	Text speed add-ons: dialogue at 2x, 4x or instant (built-in patch, port of Hookshot#402)
+upstream/pr/1423	bf721ade44	Custom themes from a themes folder, with an accent colour
+upstream/pr/1425	2cef38d4b3	game library: library styles (Canvas, Showcase, Channels, Dual Pane, Home Row, Cartridges, Box Shelf, Dense Grid)
+upstream/pr/1443	ad70f2f0ca	shader_environment: compile an empty texture descriptor as a 2D texture (Pokémon Legends Z-A blank screen, #846)
+upstream/pr/1447	ca7117b05d	vk_graphics_pipeline: keep each draw's sampled textures and image descriptors across frames
+upstream/pr/1475	ede29d400f	logging: prevent std::terminate when formatting fails under host OOM
+upstream/pr/1481	5037eeeb2a	build: MinGW fixes (process memory counters, NX converter, keep symbols)
+upstream/pr/1483	c749748389	buffer_cache: remember linear spans in the virtual range cache
+upstream/pr/1490	3d28f85c3e	The Duskbloods: native local stack, fp32 NaN preserve on NVIDIA, zero clears reach buffers
+upstream/pr/1494	af5c1f8909	video_core: log when Ocarina temporal upscaling stops and resumes, and why
+upstream/pr/1495	bcb1fa1b3e	vulkan: samplers without mipmap filtering honour explicit LODs (The Duskbloods)
+upstream/pr/1498	b8f3b988c6	[security fix] openssl: drop eMudhra emSign roots from the bundled CA list
+upstream/pr/1501	5609642a0d	texture_cache: write back GPU-written overlaps instead of dropping them (The Duskbloods)
+upstream/pr/1506	2d6e39459c	common: read installed RAM from udev on Linux for the Switch 2 RAM warning
+upstream/pr/1507	46dc7745f1	shader: account for texel-buffer arrays in the sampled-image budget
+upstream/pr/1522	a47eac6fc7	video_core: make the game DLSS health check work for The Duskbloods (render region, exposure)
+upstream/pr/1527	350309e5b6	shader: lower the remaining Ampere forms in The Duskbloods, bind its loaded pointers
+upstream/pr/1534	184f870aaf	buffer_cache: don't join a large buffer that only shares a page with the new range (Yoshi book page slowdown and crash)
+upstream/pr/1540	d271654be6	vulkan: recognize core Vulkan 1.2 buffer device address for FSR 4 on RADV
+upstream/pr/1542	555d559058	texture_cache: write back badly overlapping images before the collector drops them
+upstream/pr/1557	7810deb40a	network, acc: private server profiles and launcher switches for the host redirect
+upstream/pr/1558	a9cd132709	lichii: loading screen no longer freezes in borderless fullscreen on Windows
+upstream/pr/1559	dd91eb3a07	video_core: draw GPU-written indexed draw lists on the host GPU, and mark only what a draw's stores reach (Donkey Kong Bananza, 45 to 56 FPS at 3x)
+upstream/pr/1560	0010491b83	hotkeys: restored amiibo keyboard shortcut
+upstream/pr/1562	2624685725	video: fix Bananza tutorial rendering and playback stalls
+upstream/pr/1563	a07beb09a5	texture_cache: answer device-local memory that VMA places in host memory
+upstream/pr/1564	9d2df05489	shader_warm: the compute precache marker follows the file's contents and the shader lowering
+upstream/pr/1565	f303dcf84f	tools: add measured progress status page
+upstream/pr/1568	d6cbce6a2e	device_memory: skip cold hints for placeholder addresses
+upstream/pr/1571	fab2816836	texture_cache: delete overwritten render targets after ten unused frames
+upstream/pr/1583	8976a65b9d	input_common: optional trigger rumble on controllers with trigger motors
+upstream/pr/1584	c934089efa	vulkan: permit read-only global memory in packed R16 shadow dispatches
+upstream/pr/1587	200699af4f	Ocarina: keep four step-driven counters at real speed with FPS Unlock above 60 fps
+upstream/pr/1593	d71677bbd9	sockets: implement numeric IPv4 GetNameInfoRequestWithOptions
+upstream/pr/1594	bb9d3ee0f6	network: preserve proxy endpoints and stable ENet room source identity
+upstream/pr/1595	eea1d1f0fb	vulkan: use fsr4-vk's legacy backend descriptor on Linux
+upstream/pr/1596	5bb179b34a	core: cast the selected user index to the launch parameter's type (MSVC C4244)
+upstream/pr/1602	eef53e67c5	video_core: guest writes that find the caches busy wait for the next gather
+upstream/pr/1603	b169132328	lichii: show the commit beside published builds in About
+upstream/pr/1609	829166e1e7	Ocarina: moving platforms carry the player again with FPS Unlock above 100 fps
+upstream/pr/1610	533d4aa1d6	common: convert httplib::Params for ParseCallback

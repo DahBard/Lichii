@@ -41,6 +41,16 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   are kept 3 days, and builds are numbered run + 60: run #1 here is r61. The pgo builds read the
   recorded profile from this repository's 'PGO profile r49' release (tag `pgo-r49`, asset
   lichii-pgo-22360.zip); without it they build with the repo's eglantine.profdata alone.
+- Backup of upstream (owner, 2026-11-13, "so they can be merged later without worry"): branches
+  `upstream/nx2` (its main branch, 87d84d513c, 17 commits after build 171), `upstream/pr/<N>` for
+  each of the 189 pull requests open that day, and `upstream/perf/gpu-parallel-record`,
+  `upstream/perf/nx2-parallel-record` and `upstream/test/all-in-one-mt` (its parallel command
+  recording work, the multithreading the owner waits for). The list with commits and titles is
+  lichii-tuned/upstream-backup-2026-11-13.tsv. Merge from them as from upstream itself (e.g.
+  `git merge origin/upstream/nx2`). Their names don't trigger any workflow (checked: no push
+  trigger in their 579 workflow files matches `upstream/...`). `upstream-nx2` is a stray copy of
+  `upstream/nx2` that this session's git proxy can't delete; delete it on GitHub. This session's
+  proxy also refuses tag pushes and more than about 20 refs per push.
 - Since 2026-11-13 (r60): branch `tuned` = upstream Lichii build 171, nx2 `c169856090` (merged in
   `8619a1df3`; `2eb5f081c` in `526c0ab1c`, `17baed716` in `2d9ea59c5`) + the workflow + this
   folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
