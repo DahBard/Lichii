@@ -572,6 +572,16 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
                         name, query, state.functions.pOutQueuePresentKHR != nullptr,
                         state.functions.pOutAcquireNextImageKHR != nullptr,
                         state.functions.pOutGetSwapchainImagesKHR != nullptr);
+            // Its real swapchain holds the window until it is destroyed, which its context
+            // doesn't do: the next version's, or a normal swapchain, couldn't be made. In the
+            // order DestroySwapchain uses.
+            state.api->destroy_context(&state.swapchain_context, nullptr);
+            state.swapchain_context = nullptr;
+            if (state.functions.pOutDestroySwapchainFFXAPI) {
+                state.functions.pOutDestroySwapchainFFXAPI(state.device, swapchain, nullptr,
+                                                           nullptr);
+            }
+            state.functions = {};
             result = FFX_API_RETURN_ERROR;
         } else {
             LOG_WARNING(Render_Vulkan, "AMD frame generation: swapchain {} failed ({})", name,
