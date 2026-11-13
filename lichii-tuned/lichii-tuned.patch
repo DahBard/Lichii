@@ -41,10 +41,10 @@ index 256f09a736..ae99918678 100644
              set(sha256 b61fecfad224d2f0b6a040c23663e5f6915eb500be9fc36016e3ffcb0aa66e52)
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..af0f716832
+index 0000000000..4099ed61de
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,550 @@
+@@ -0,0 +1,557 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -125,7 +125,12 @@ index 0000000000..af0f716832
 +     through AMD's own swapchain and pacing. LICHII_FG_PACING only applies to the built-in
 +     Optical Flow and LSFG types. "AMD Frame Generation Version" is Auto (FSR 4's on the
 +     RX 9070 XT) or FSR 3.1 (lighter). The HUD is masked, so it stays still in generated
-+     frames.
++     frames. Since r59 it also runs with HDR output in the HDR10 format (Graphics > HDR
++     format), through the same AMD swapchain, which hands the display Lichii's HDR10 metadata.
++     With scRGB it stays off and the FG button shows "(SCRGB)"; if AMD's swapchain can't start
++     with HDR, Lichii presents HDR without frame generation and the button shows "(HDR)" (the
++     log's "AMD frame generation" lines say why; AMD Frame Generation Version FSR 3.1 is worth
++     a try then).
 +   The status bar, and the performance overlay in fullscreen, show "FSR 4.x.x" while FSR
 +   upscales. When it doesn't, they show "FSR (reason)", for example RES 1X, or NO CAMERA in
 +   menus. Clicking it turns FSR on or off. With AMD frame generation the FG button shows
@@ -133,8 +138,8 @@ index 0000000000..af0f716832
 +   overlay's footer shows "FG +60" with the FSR/FG line under it.
 + * Since the upstream merge of 2026-11-12, the first launch switches the theme to Lichii Dark
 +   and shows a What's new dialog, once each (Configure > General > UI switches the theme back).
-+   HDR output (Configure > Graphics) is Off by default; AMD frame generation is off while HDR
-+   output is active.
++   HDR output (Configure > Graphics) is Off by default; since r59 AMD frame generation runs
++   with HDR output in the HDR10 format (not scRGB).
 + * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
 +   GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
 + * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with
@@ -416,6 +421,8 @@ index 0000000000..af0f716832
 +     back thread a few tenths of a millisecond a frame (the FSR actors zone).
 +   - No NX converter in this build: upstream's library for it links only with MSVC.
 +     Loading .nx games is not affected.
++ * r59: r58 with AMD frame generation under HDR output (HDR10; see the frame generation notes
++   above). Nothing changes with HDR off.
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -1235,10 +1242,10 @@ index 196c014699..697a6c3223 100644
 +# 8). 0 removes the limit.
 +#EDEN_NX2_HEAVY_BUILD_SLOTS=2
 diff --git a/docs/native-dlss-replacement.md b/docs/native-dlss-replacement.md
-index d1e3f1895c..2f5a388afe 100644
+index d1e3f1895c..f93a884863 100644
 --- a/docs/native-dlss-replacement.md
 +++ b/docs/native-dlss-replacement.md
-@@ -37,86 +37,50 @@ and should remain private. No shaders are skipped or game files changed by this
+@@ -37,86 +37,56 @@ and should remain private. No shaders are skipped or game files changed by this
  ## Ocarina of Time
  
  The Legend of Zelda: Ocarina of Time (`0400486024DEC000`) has no DLSS of its own. Its
@@ -1341,6 +1348,12 @@ index d1e3f1895c..2f5a388afe 100644
 +  replaced frame records AMD's prepare pass from the same depth and motion, with the motion
 +  cleared and the depth nearest under a per-pixel HUD mask (the upscaled scene before the HUD
 +  against the same image after it).
++- With HDR output it runs in the HDR10 format. AMD's swapchain presents the PQ frames, takes
++  the HDR10 metadata through its own `vkSetHdrMetadataEXT`, and its generation decodes PQ up
++  to the metadata's peak. New metadata while it generates waits for the next swapchain. The 4K
++  mode's composite takes SDR images only, so under HDR the game's 1440p frame is shown and the
++  HUD mask is made the in-place way. With scRGB it stays off (the status bar shows `SCRGB`);
++  when it can't start with HDR10, Lichii presents HDR without it (`HDR`).
 +- FXAA and SMAA are skipped on frames the upscaler drew.
  - Any unexpected input, a busy frame slot, a rescaled image (resolution scale other than 1x) or
    a failed evaluation leaves the game's pass to run. The log names the reason as
@@ -1361,7 +1374,7 @@ index d1e3f1895c..2f5a388afe 100644
  
  ## Settings and comparison runs
  
-@@ -137,8 +101,11 @@ from the upstream implementation remain available for diagnostic comparisons.
+@@ -137,8 +107,11 @@ from the upstream implementation remain available for diagnostic comparisons.
  ## Build and distribution
  
  FSR needs no external runtime. Keep `externals/FidelityFX-SDK/LICENSE.txt` and its attribution
@@ -13933,9 +13946,20 @@ index 09a83585b3..0f176f4556 100644
  }
  
 diff --git a/src/qt_common/config/shared_translation.cpp b/src/qt_common/config/shared_translation.cpp
-index 70a6874c12..622428f9af 100644
+index 70a6874c12..cbaf4eedd7 100644
 --- a/src/qt_common/config/shared_translation.cpp
 +++ b/src/qt_common/config/shared_translation.cpp
+@@ -150,8 +150,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+               "On: HDR whenever the display driver offers an HDR format.\n"
+               "The game is told the display is HDR only while Lichii really presents HDR. SDR "
+               "games and menus are shown at the reference white.\n"
+-              "While HDR is active, anti-aliasing, post-processing, FSR/SGSR upscaling and frame "
+-              "generation are off and the window is scaled bilinearly.\n"
++              "While HDR is active, anti-aliasing, post-processing and FSR/SGSR upscaling are off "
++              "and the window is scaled bilinearly. Frame generation keeps working.\n"
+               "Screenshots are tone mapped to SDR."));
+     INSERT(Settings, hdr_swapchain, tr("HDR format:"),
+            tr("HDR10: 10-bit PQ, what HDR displays take.\n"
 @@ -195,16 +195,14 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
             tr("Strength of RCAS (AMD's contrast-adaptive sharpening) on the upscaler used in place "
                "of a game's DLSS (AMD FSR 3.1); 0% turns it off.\nAlso sets the sharpening "
@@ -13988,11 +14012,14 @@ index 70a6874c12..622428f9af 100644
      INSERT(Settings, post_shader_chain, QString(), QString());
      INSERT(Settings, post_shader_preset, QString(), QString());
      INSERT(Settings, post_shader_enabled, tr("Enable post-processing effects"),
-@@ -304,9 +322,22 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+@@ -303,10 +321,24 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+     INSERT(Settings, bg_blue, QString(), QString());
  
      INSERT(Settings, frame_gen, tr("Enable Frame Generation"),
-            tr("Paused while HDR output is active."));
+-           tr("Paused while HDR output is active."));
 -    INSERT(Settings, frame_gen_type, tr("Frame Generation Type"), QString());
++           tr("While HDR output is active, AMD FSR Frame Generation needs the HDR10 format (not "
++              "scRGB)."));
 +    INSERT(Settings, frame_gen_type, tr("Frame Generation Type"),
 +           tr("AMD FSR Frame Generation: AMD's frame generation for Ocarina of Time (Windows, "
 +              "Resolution 1X; restart Lichii after picking it).\nOptical Flow Interpolation and "
@@ -14013,7 +14040,7 @@ index 70a6874c12..622428f9af 100644
      INSERT(Settings, frame_gen_flow_scale_auto, tr("Auto Flow Scale"), QString());
      INSERT(Settings, frame_gen_flow_scale, tr("Flow Scale"), QString());
      INSERT(Settings, frame_gen_queue_target, tr("Queue Target"), QString());
-@@ -651,6 +682,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
+@@ -651,6 +683,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                            {
                                PAIR(FrameGenType, Lsfg, tr("Lossless Scaling (LSFG)")),
                                PAIR(FrameGenType, Fsr3, tr("Optical Flow Interpolation (built-in)")),
@@ -14026,7 +14053,7 @@ index 70a6874c12..622428f9af 100644
                            }});
      translations->insert({Settings::EnumMetadata<Settings::ScalingFilter>::Index(),
                            {
-@@ -682,6 +719,20 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
+@@ -682,6 +720,20 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                                PAIR(OotAntiAliasing, Game, tr("Game")),
                                PAIR(OotAntiAliasing, NoSharpening, tr("No sharpening")),
                            }});
@@ -17045,6 +17072,65 @@ index 0000000000..8f372c4284
 +    f.SetArguments(100, 100);
 +    f.DrawAgain();
 +    CHECK(f.rasterizer.draws.back() == Range{0, 2});
++}
+diff --git a/src/tests/video_core/hdr_output.cpp b/src/tests/video_core/hdr_output.cpp
+index 6e05057370..f8183503cb 100644
+--- a/src/tests/video_core/hdr_output.cpp
++++ b/src/tests/video_core/hdr_output.cpp
+@@ -2,10 +2,12 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
+ #include <array>
++#include <limits>
+ 
+ #include <catch2/catch_test_macros.hpp>
+ 
+ #include "video_core/renderer_vulkan/present/hdr_convert.h"
++#include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
+ #include "video_core/renderer_vulkan/vk_swapchain.h"
+ 
+ using Settings::HdrSwapchain;
+@@ -78,3 +80,41 @@ TEST_CASE("Layers are converted only where their encoding differs from the frame
+     REQUIRE(Vulkan::NeedsHdrConvert(rescaled));
+     REQUIRE(rescaled.nits_per_unit == 100.0f);
+ }
++
++TEST_CASE("AMD frame generation presents SDR and HDR10 only", "[hdr_output]") {
++    using Vulkan::AmdFrameGen::Output;
++    using Vulkan::AmdFrameGen::OutputOf;
++    // Every SDR swapchain, whatever its format, as before HDR output.
++    REQUIRE(OutputOf(Sdr) == Output::Sdr);
++    REQUIRE(OutputOf({VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}) ==
++            Output::Sdr);
++    REQUIRE(OutputOf(Hdr10) == Output::Hdr10);
++    REQUIRE(OutputOf(Scrgb) == Output::Unsupported);
++    // HDR10 only as A2B10G10R10: AMD's runtime has no format for A2R10G10B10.
++    REQUIRE(OutputOf({VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT}) ==
++            Output::Unsupported);
++    REQUIRE(OutputOf({VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT}) ==
++            Output::Unsupported);
++    REQUIRE(OutputOf({VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_NATIVE_AMD}) ==
++            Output::Unsupported);
++}
++
++TEST_CASE("AMD frame generation decodes HDR10 frames as PQ up to a peak", "[hdr_output]") {
++    using Vulkan::AmdFrameGen::CompleteHdr10Decode;
++    using Vulkan::AmdFrameGen::HdrDecode;
++    constexpr u32 srgb = 0;
++    constexpr u32 pq = 1;
++    constexpr f32 told_peak = 1400.0f;
++    // What AMD's swapchain passes once the HDR10 metadata reached it: kept, its peak included.
++    const HdrDecode complete{pq, 0.0f, 1400.0f};
++    REQUIRE(CompleteHdr10Decode(complete, told_peak) == complete);
++    const HdrDecode other_peak{pq, 0.0f, 1000.0f};
++    REQUIRE(CompleteHdr10Decode(other_peak, told_peak) == other_peak);
++    // Before any metadata the range is 0 nits, which generation divides by.
++    REQUIRE(CompleteHdr10Decode({pq, 0.0f, 0.0f}, told_peak) == HdrDecode{pq, 0.0f, told_peak});
++    const HdrDecode nan{pq, 0.0f, std::numeric_limits<f32>::quiet_NaN()};
++    REQUIRE(CompleteHdr10Decode(nan, told_peak) == HdrDecode{pq, 0.0f, told_peak});
++    // A swapchain that took the colour space for SDR.
++    REQUIRE(CompleteHdr10Decode({srgb, 0.0f, 0.0f}, told_peak) == HdrDecode{pq, 0.0f, told_peak});
++    REQUIRE(CompleteHdr10Decode({srgb, 0.0f, 600.0f}, told_peak) == HdrDecode{pq, 0.0f, 600.0f});
 +}
 diff --git a/src/tests/video_core/heavy_build_slots.cpp b/src/tests/video_core/heavy_build_slots.cpp
 new file mode 100644
@@ -39595,7 +39681,7 @@ index 7c75fcd4b2..96948734e9 100644
          !device.IsHostFloat16Supported()) {
          if (wanted) {
 diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
-index a555194649..62bc5146a5 100644
+index a555194649..ff2522c09b 100644
 --- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 +++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
 @@ -245,13 +245,20 @@ try
@@ -39673,6 +39759,15 @@ index a555194649..62bc5146a5 100644
  
      const auto presenting = trace ? std::chrono::steady_clock::now()
                                    : std::chrono::steady_clock::time_point{};
+@@ -367,7 +388,7 @@ HdrPresent RendererVulkan::UpdateHdrPresent() {
+         if (output_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+             LOG_INFO(Render_Vulkan,
+                      "HDR output: {} {}, reference white {} nits, peak {} nits. Anti-aliasing, "
+-                     "post-processing, upscaling filters and frame generation are off",
++                     "post-processing and upscaling filters are off",
+                      string_VkFormat(output_format.format),
+                      string_VkColorSpaceKHR(output_format.colorSpace), output_reference_white,
+                      output_peak);
 @@ -401,6 +422,33 @@ void RendererVulkan::Report() const {
      LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
      LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
@@ -39803,10 +39898,10 @@ index a109edc713..dc8566cb85 100644
      None,
 diff --git a/src/video_core/renderer_vulkan/vk_amd_frame_gen.cpp b/src/video_core/renderer_vulkan/vk_amd_frame_gen.cpp
 new file mode 100644
-index 0000000000..7b3dcf124a
+index 0000000000..5a3d4e423b
 --- /dev/null
 +++ b/src/video_core/renderer_vulkan/vk_amd_frame_gen.cpp
-@@ -0,0 +1,934 @@
+@@ -0,0 +1,1174 @@
 +// SPDX-FileCopyrightText: Copyright 2026 CheezyEmu contributors
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -39823,11 +39918,15 @@ index 0000000000..7b3dcf124a
 +#include <utility>
 +#include <vector>
 +
++#include <fmt/format.h>
++
++#include "common/display_hdr.h"
 +#include "common/logging.h"
 +#include "common/settings.h"
 +#include "video_core/renderer_vulkan/vk_amd_frame_gen.h"
 +#include "video_core/renderer_vulkan/vk_ffx_runtime.h"
 +#include "video_core/renderer_vulkan/vk_scheduler.h"
++#include "video_core/vulkan_common/vk_enum_string_helper.h"
 +#include "video_core/vulkan_common/vulkan_device.h"
 +
 +#ifdef _WIN32
@@ -39855,10 +39954,36 @@ index 0000000000..7b3dcf124a
 +
 +namespace {
 +std::atomic<u64> generated_frames{0};
++constexpr u32 TRANSFER_FUNCTION_PQ = 1; // FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ
 +} // Anonymous namespace
 +
 +u64 GeneratedFrames() {
 +    return generated_frames.load(std::memory_order_relaxed);
++}
++
++Output OutputOf(VkSurfaceFormatKHR format) {
++    if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++        return Output::Sdr;
++    }
++    // Not scRGB: Lichii sends it no HDR metadata, so AMD's swapchain passes a 0-0 nits range,
++    // which its scRGB decode divides by. The callback could fill that in as for HDR10, but FSR
++    // FG 4's scRGB path is closed source and untested. HDR10 only in the format AMD's runtime has
++    // (no A2R10G10B10).
++    if (format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT &&
++        format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
++        return Output::Hdr10;
++    }
++    return Output::Unsupported;
++}
++
++HdrDecode CompleteHdr10Decode(const HdrDecode& given, f32 peak) {
++    HdrDecode decode = given;
++    decode.transfer_function = TRANSFER_FUNCTION_PQ;
++    if (!(given.max_luminance > 0.0f)) {
++        decode.min_luminance = 0.0f;
++        decode.max_luminance = peak;
++    }
++    return decode;
 +}
 +
 +bool Requested() {
@@ -39883,6 +40008,36 @@ index 0000000000..7b3dcf124a
 +/// The scheduler tick of the last prepare pass recorded, so a swapchain replacement can wait
 +/// for the command buffer that holds it.
 +std::atomic<u64> last_prepare_tick{0};
++/// The output of the last swapchain made (CanPresent; Sdr while AMD's wasn't asked for), and
++/// whether its swapchain or its generation last failed with HDR10 output: for LastOffReason.
++std::atomic<Output> last_output{Output::Sdr};
++std::atomic<bool> hdr_failed{false};
++
++static_assert(TRANSFER_FUNCTION_PQ == FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ);
++
++/// EDEN_NX2_AMD_FG_DEBUG=1 draws AMD's tear lines (coloured bars on generated frames), =2 its
++/// debug view (the motion vectors, depth and generated frame it works from), =3 turns on its
++/// parameter checks, which report to the log. 1 and 2 write raw values, which HDR10 shows at up
++/// to 10000 nits.
++char DebugMode() {
++    static const char mode = [] {
++        const char* const value = std::getenv("EDEN_NX2_AMD_FG_DEBUG");
++        return value ? value[0] : '0';
++    }();
++    return mode;
++}
++
++bool SameHdrMetadata(const VkHdrMetadataEXT& a, const VkHdrMetadataEXT& b) {
++    const auto same = [](const VkXYColorEXT& p, const VkXYColorEXT& q) {
++        return p.x == q.x && p.y == q.y;
++    };
++    return same(a.displayPrimaryRed, b.displayPrimaryRed) &&
++           same(a.displayPrimaryGreen, b.displayPrimaryGreen) &&
++           same(a.displayPrimaryBlue, b.displayPrimaryBlue) && same(a.whitePoint, b.whitePoint) &&
++           a.maxLuminance == b.maxLuminance && a.minLuminance == b.minLuminance &&
++           a.maxContentLightLevel == b.maxContentLightLevel &&
++           a.maxFrameAverageLightLevel == b.maxFrameAverageLightLevel;
++}
 +
 +VkDeviceContext DeviceContext(const Device& device) {
 +    return VkDeviceContext{
@@ -39908,6 +40063,13 @@ index 0000000000..7b3dcf124a
 +    const Device* owner{};          ///< For recreating the generation context after a failure.
 +    VkExtent2D display{};
 +    VkFormat format{};
++    VkColorSpaceKHR color_space{}; ///< The swapchain's: sRGB, or HDR10 (PQ frames)
++    /// HDR10: the nits generation decodes PQ to 1.0 at, the peak the game tone maps to. Atomic:
++    /// AMD's frame generation callback reads it.
++    std::atomic<f32> hdr_peak{};
++    bool hdr_checked{}; ///< The decode its swapchain passes with HDR10 output was logged
++    bool dispatch_failure_logged{}; ///< A failed generation dispatch was logged (per swapchain)
++    std::optional<VkHdrMetadataEXT> hdr_metadata; ///< The HDR10 metadata it has
 +    u32 context_retries{};
 +    ffxContext swapchain_context{};
 +    ffxContext frame_gen_context{};
@@ -39949,7 +40111,49 @@ index 0000000000..7b3dcf124a
 +
 +ffxReturnCode_t DispatchFrameGeneration(ffxDispatchDescFrameGeneration* params, void* user) {
 +    State& state = *static_cast<State*>(user);
-+    return state.api->dispatch(&state.frame_gen_context, &params->header);
++    const bool hdr10 = state.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT;
++    if (hdr10) {
++        // AMD's swapchain takes the transfer function from the colour space and the luminance
++        // range from its vkSetHdrMetadataEXT, 0 until that is called. The description is AMD's
++        // copy for this dispatch: what is missing is filled in here.
++        const HdrDecode given{params->backbufferTransferFunction, params->minMaxLuminance[0],
++                              params->minMaxLuminance[1]};
++        const HdrDecode decode =
++            CompleteHdr10Decode(given, state.hdr_peak.load(std::memory_order_relaxed));
++        if (!std::exchange(state.hdr_checked, true)) {
++            LOG_INFO(Render_Vulkan,
++                     "AMD frame generation: its swapchain decodes HDR10 frames with transfer "
++                     "function {} (1 is PQ), {}-{} nits{}",
++                     given.transfer_function, given.min_luminance, given.max_luminance,
++                     decode == given ? std::string{}
++                                     : fmt::format("; using PQ, {}-{} nits", decode.min_luminance,
++                                                   decode.max_luminance));
++        }
++        params->backbufferTransferFunction = decode.transfer_function;
++        params->minMaxLuminance[0] = decode.min_luminance;
++        params->minMaxLuminance[1] = decode.max_luminance;
++    }
++    const ffxReturnCode_t result = state.api->dispatch(&state.frame_gen_context, &params->header);
++    if (result != FFX_API_RETURN_OK) {
++        // FSR 3.1 gives no reason, and its swapchain presents an older generated frame instead.
++        if (!std::exchange(state.dispatch_failure_logged, true)) {
++            LOG_ERROR(Render_Vulkan, "AMD frame generation: generation dispatch failed ({}){}",
++                      result,
++                      hdr10 ? fmt::format(", HDR10 decode with transfer function {} (1 is PQ), "
++                                          "{}-{} nits",
++                                          params->backbufferTransferFunction,
++                                          params->minMaxLuminance[0], params->minMaxLuminance[1])
++                            : std::string{});
++        }
++        if (hdr10) {
++            hdr_failed.store(true, std::memory_order_relaxed);
++        }
++    } else if (hdr10) {
++        // With HDR10 output a generated frame counts once its dispatch succeeded (in SDR, Present
++        // counts it when it asks for one), so the status bar shows a failing generation.
++        generated_frames.fetch_add(1, std::memory_order_relaxed);
++    }
++    return result;
 +}
 +
 +void DestroyRetired(State& state, bool all) {
@@ -40039,7 +40243,13 @@ index 0000000000..7b3dcf124a
 +    version.version = FFX_FRAMEGENERATION_VERSION;
 +    ffxCreateContextDescFrameGeneration create{};
 +    create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-+    create.flags = 0; // depth grows with distance, tonemapped colour, unjittered motion
++    // Depth grows with distance and motion is unjittered. HDR10 frames are PQ: AMD's flag for HDR
++    // colour input, as its sample sets.
++    const bool hdr = state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++    create.flags = hdr ? u32{FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE} : 0u;
++    if (DebugMode() == '3') {
++        create.flags |= FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING;
++    }
 +    create.displaySize = {display.width, display.height};
 +    create.maxRenderSize = {std::max(display.width, 3840u), std::max(display.height, 2160u)};
 +    create.backBufferFormat = ffxApiGetSurfaceFormatVK(format);
@@ -40068,8 +40278,14 @@ index 0000000000..7b3dcf124a
 +    provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
 +    state.api->query(&state.frame_gen_context, &provider.header);
 +    state.version = provider.versionName ? provider.versionName : "unknown";
-+    LOG_INFO(Render_Vulkan, "AMD frame generation: FSR frame generation {} ready at {}x{} on {}",
-+             state.version, display.width, display.height, device.GetModelName());
++    LOG_INFO(Render_Vulkan, "AMD frame generation: FSR frame generation {} ready at {}x{} on {}{}",
++             state.version, display.width, display.height, device.GetModelName(),
++             hdr ? fmt::format(", HDR output {} {} (PQ)", string_VkFormat(format),
++                               string_VkColorSpaceKHR(state.color_space))
++                 : std::string{});
++    if (hdr) {
++        hdr_failed.store(false, std::memory_order_relaxed);
++    }
 +    PublishPrepareReady(state);
 +    return true;
 +}
@@ -40218,6 +40434,7 @@ index 0000000000..7b3dcf124a
 +    if (!device.GetFrameGenPresentQueue()) {
 +        return VK_NULL_HANDLE; // logged by the device
 +    }
++    const bool hdr = create_info.imageColorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 +    State& state = GetState();
 +    std::scoped_lock lock{state.mutex};
 +    // AMD's runtime kept something of a stopped game's device: the next game in the same process
@@ -40373,6 +40590,13 @@ index 0000000000..7b3dcf124a
 +                         state.functions.pOutDestroySwapchainFFXAPI
 +                             ? ""
 +                             : " (no destroy function: the context destroys it)");
++                if (hdr && !state.functions.pOutSetHdrMetadataEXT) {
++                    LOG_WARNING(Render_Vulkan,
++                                "AMD frame generation: swapchain {} takes no HDR metadata: the "
++                                "display gets none, and generation decodes PQ to the peak the "
++                                "game was told",
++                                name);
++                }
 +                break;
 +            }
 +            LOG_WARNING(Render_Vulkan,
@@ -40381,6 +40605,16 @@ index 0000000000..7b3dcf124a
 +                        name, query, state.functions.pOutQueuePresentKHR != nullptr,
 +                        state.functions.pOutAcquireNextImageKHR != nullptr,
 +                        state.functions.pOutGetSwapchainImagesKHR != nullptr);
++            // Its real swapchain holds the window until it is destroyed, which its context
++            // doesn't do: the next version's, or a normal swapchain, couldn't be made. In the
++            // order DestroySwapchain uses.
++            state.api->destroy_context(&state.swapchain_context, nullptr);
++            state.swapchain_context = nullptr;
++            if (state.functions.pOutDestroySwapchainFFXAPI) {
++                state.functions.pOutDestroySwapchainFFXAPI(state.device, swapchain, nullptr,
++                                                           nullptr);
++            }
++            state.functions = {};
 +            result = FFX_API_RETURN_ERROR;
 +        } else {
 +            LOG_WARNING(Render_Vulkan, "AMD frame generation: swapchain {} failed ({})", name,
@@ -40394,9 +40628,12 @@ index 0000000000..7b3dcf124a
 +    }
 +    if (result != FFX_API_RETURN_OK || swapchain == VK_NULL_HANDLE) {
 +        LOG_ERROR(Render_Vulkan, "AMD frame generation: no swapchain version worked ({}), using "
-+                                 "a normal swapchain",
-+                  result);
++                                 "a normal swapchain{}",
++                  result, hdr ? " (HDR output without frame generation)" : "");
 +        state.swapchain_context = nullptr;
++        if (hdr) {
++            hdr_failed.store(true, std::memory_order_relaxed);
++        }
 +        return VK_NULL_HANDLE;
 +    }
 +    state.swapchain = swapchain;
@@ -40404,6 +40641,21 @@ index 0000000000..7b3dcf124a
 +    ResetFrames(state);
 +    state.display = create_info.imageExtent;
 +    state.format = create_info.imageFormat;
++    state.color_space = create_info.imageColorSpace;
++    state.hdr_checked = false;
++    state.dispatch_failure_logged = false;
++    state.hdr_metadata.reset();
++    // Until the HDR10 metadata comes (SetHdrMetadata): the peak the game was told, which the
++    // metadata carries.
++    state.hdr_peak.store(
++        hdr ? static_cast<f32>(Common::ResolveHdrOutput(
++                                   Common::DisplayHdrMonitor::Instance().Current(),
++                                   Settings::HdrMode::On,
++                                   Settings::values.hdr_peak_luminance.GetValue(),
++                                   Settings::values.hdr_reference_white.GetValue())
++                                   .peak_luminance)
++            : 0.0f,
++        std::memory_order_relaxed);
 +    state.context_retries = 0;
 +    state.suspended = false;
 +    if (!CreateFrameGenContext(state, device, create_info.imageExtent, create_info.imageFormat)) {
@@ -40411,6 +40663,70 @@ index 0000000000..7b3dcf124a
 +    }
 +    swapchain_active.store(true, std::memory_order_release);
 +    return swapchain;
++}
++
++bool CanPresent(VkSurfaceFormatKHR format) {
++    if (!Requested()) {
++        // No AMD swapchain and no HDR reason: switched on later, the status bar shows RESTART.
++        last_output.store(Output::Sdr, std::memory_order_relaxed);
++        return false;
++    }
++    const Output output = OutputOf(format);
++    last_output.store(output, std::memory_order_relaxed);
++    if (output != Output::Unsupported) {
++        return true;
++    }
++    LOG_INFO(Render_Vulkan,
++             "AMD frame generation: off with {} {} output; set the HDR format to HDR10 to use it",
++             string_VkFormat(format.format), string_VkColorSpaceKHR(format.colorSpace));
++    return false;
++}
++
++OffReason LastOffReason() {
++    switch (last_output.load(std::memory_order_relaxed)) {
++    case Output::Unsupported:
++        return OffReason::HdrFormat;
++    case Output::Hdr10:
++        return hdr_failed.load(std::memory_order_relaxed) ? OffReason::HdrFailed
++                                                          : OffReason::None;
++    case Output::Sdr:
++        break;
++    }
++    return OffReason::None;
++}
++
++HdrMetadataResult SetHdrMetadata(VkSwapchainKHR swapchain, const VkHdrMetadataEXT& metadata) {
++    State& state = GetState();
++    std::scoped_lock lock{state.mutex};
++    if (swapchain != state.swapchain) {
++        return HdrMetadataResult::NotSent;
++    }
++    if (!state.functions.pOutSetHdrMetadataEXT) {
++        // Logged when it started. Generation decodes to the peak all the same (the callback).
++        state.hdr_peak.store(metadata.maxLuminance, std::memory_order_relaxed);
++        return HdrMetadataResult::NotSent;
++    }
++    if (state.hdr_metadata && SameHdrMetadata(*state.hdr_metadata, metadata)) {
++        return HdrMetadataResult::Sent;
++    }
++    // While it generates, its own threads acquire and present its real swapchain under a lock of
++    // their own, and its vkSetHdrMetadataEXT hands the metadata to that swapchain without it.
++    // Vulkan forbids that at the same time as a present, so a new swapchain takes the metadata
++    // before it generates again.
++    if (state.generating) {
++        LOG_INFO(Render_Vulkan,
++                 "AMD frame generation: new HDR10 metadata (peak {} nits) while generating; its "
++                 "next swapchain takes it",
++                 metadata.maxLuminance);
++        return HdrMetadataResult::NextSwapchain;
++    }
++    state.hdr_metadata = metadata;
++    state.hdr_peak.store(metadata.maxLuminance, std::memory_order_relaxed);
++    state.functions.pOutSetHdrMetadataEXT(state.device, 1, &swapchain, &metadata);
++    LOG_INFO(Render_Vulkan,
++             "AMD frame generation: HDR10 metadata through its swapchain, peak {} nits",
++             metadata.maxLuminance);
++    return HdrMetadataResult::Sent;
 +}
 +
 +void WaitForPresents() {
@@ -40492,6 +40808,8 @@ index 0000000000..7b3dcf124a
 +    // its scheduler counts ticks from the start.
 +    generated_frames.store(0, std::memory_order_relaxed);
 +    last_prepare_tick.store(0, std::memory_order_release);
++    last_output.store(Output::Sdr, std::memory_order_relaxed);
++    hdr_failed.store(false, std::memory_order_relaxed);
 +    if (!state.api) {
 +        return;
 +    }
@@ -40546,6 +40864,12 @@ index 0000000000..7b3dcf124a
 +        DestroyRetired(state, false);
 +        if (CreateFrameGenContext(state, *state.owner, state.display, state.format)) {
 +            LOG_INFO(Render_Vulkan, "AMD frame generation: back on after a retry");
++        } else if (state.context_retries == 5 &&
++                   state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++            hdr_failed.store(true, std::memory_order_relaxed);
++            LOG_ERROR(Render_Vulkan, "AMD frame generation: no generation context with HDR "
++                                     "output after {} retries, presenting HDR without generation",
++                      state.context_retries);
 +        }
 +    }
 +    if (state.frame_gen_context) {
@@ -40571,12 +40895,7 @@ index 0000000000..7b3dcf124a
 +                                        "hudless frame");
 +            }
 +        }
-+        // EDEN_NX2_AMD_FG_DEBUG=1 draws AMD's tear lines (coloured bars on generated frames),
-+        // =2 its debug view (the motion vectors, depth and generated frame it works from).
-+        static const char debug = [] {
-+            const char* const value = std::getenv("EDEN_NX2_AMD_FG_DEBUG");
-+            return value ? value[0] : '0';
-+        }();
++        const char debug = DebugMode();
 +        config.flags = debug == '1'   ? FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES
 +                       : debug == '2' ? FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW
 +                                      : 0u;
@@ -40592,9 +40911,13 @@ index 0000000000..7b3dcf124a
 +                                     "off",
 +                      result);
 +            RetireFrameGenContext(state);
++            if (state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++                hdr_failed.store(true, std::memory_order_relaxed);
++            }
 +        } else {
 +            state.configured_frame_id = config.frameID;
-+            if (generate) {
++            // With HDR10 output the frame generation callback counts it.
++            if (generate && state.color_space != VK_COLOR_SPACE_HDR10_ST2084_EXT) {
 +                generated_frames.fetch_add(1, std::memory_order_relaxed);
 +            }
 +            if (generate != state.generating) {
@@ -40683,6 +41006,9 @@ index 0000000000..7b3dcf124a
 +        if (result != FFX_API_RETURN_OK) {
 +            state.prepare_failed = true;
 +            PublishPrepareReady(state);
++            if (state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++                hdr_failed.store(true, std::memory_order_relaxed);
++            }
 +            LOG_ERROR(Render_Vulkan, "AMD frame generation: prepare failed ({}), generation off",
 +                      result);
 +            return;
@@ -40715,6 +41041,15 @@ index 0000000000..7b3dcf124a
 +VkSwapchainKHR CreateSwapchain(const Device&, std::mutex&, const VkSwapchainCreateInfoKHR&) {
 +    return VK_NULL_HANDLE;
 +}
++bool CanPresent(VkSurfaceFormatKHR) {
++    return false;
++}
++OffReason LastOffReason() {
++    return OffReason::None;
++}
++HdrMetadataResult SetHdrMetadata(VkSwapchainKHR, const VkHdrMetadataEXT&) {
++    return HdrMetadataResult::NotSent;
++}
 +void DestroySwapchain(const Device&, Scheduler*, VkSwapchainKHR) {}
 +void WaitForPresents() {}
 +void Shutdown() {}
@@ -40743,10 +41078,10 @@ index 0000000000..7b3dcf124a
 +} // namespace Vulkan::AmdFrameGen
 diff --git a/src/video_core/renderer_vulkan/vk_amd_frame_gen.h b/src/video_core/renderer_vulkan/vk_amd_frame_gen.h
 new file mode 100644
-index 0000000000..73a3f71b19
+index 0000000000..30a594619b
 --- /dev/null
 +++ b/src/video_core/renderer_vulkan/vk_amd_frame_gen.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,149 @@
 +// SPDX-FileCopyrightText: Copyright 2026 CheezyEmu contributors
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -40778,18 +41113,66 @@ index 0000000000..73a3f71b19
 +[[nodiscard]] bool Requested();
 +
 +/// Frames AMD's swapchain was asked to generate so far (one per game frame presented while
-+/// generating), for the frame rate shown with the game's.
++/// generating; with HDR10 output, one per generation dispatch that succeeded), for the frame rate
++/// shown with the game's.
 +[[nodiscard]] u64 GeneratedFrames();
 +
 +/// Whether AMD's frame generation swapchain is in use (it is set up when the emulator starts).
 +/// Lock free, so the rasterizer gates the frame generation passes on it.
 +[[nodiscard]] bool SwapchainActive();
 +
++/// The swapchain output AMD's frame generation presents: SDR, and HDR10, whose PQ frames its
++/// generation decodes up to the HDR10 metadata's peak. scRGB and any other HDR output get a
++/// normal swapchain.
++enum class Output : u8 {
++    Sdr,
++    Hdr10,
++    Unsupported,
++};
++[[nodiscard]] Output OutputOf(VkSurfaceFormatKHR format);
++
++/// For each swapchain made: whether AMD's may present it, which needs it asked for (Requested)
++/// and an output it presents (OutputOf). Logs an output it doesn't present, and keeps the output
++/// for LastOffReason (Sdr while it isn't asked for).
++[[nodiscard]] bool CanPresent(VkSurfaceFormatKHR format);
++
++/// Why AMD's frame generation is off with HDR output, for the status bar.
++enum class OffReason : u8 {
++    None,      ///< No HDR reason
++    HdrFormat, ///< HDR output in a format it doesn't present (scRGB)
++    HdrFailed, ///< HDR10 output, and its swapchain or its generation couldn't start or failed
++};
++[[nodiscard]] OffReason LastOffReason();
++
++/// What AMD's swapchain hands its generation to decode an HDR10 frame with.
++struct HdrDecode {
++    u32 transfer_function; ///< FfxApiBackbufferTransferFunction: 1 is PQ
++    f32 min_luminance;     ///< nits
++    f32 max_luminance;     ///< nits; PQ decodes to 1.0 there
++
++    bool operator==(const HdrDecode&) const = default;
++};
++/// That decode with what AMD's swapchain left out filled in: PQ, and 0 to `peak` nits (the peak
++/// the game tone maps to) while it has no luminance range, which generation divides by.
++[[nodiscard]] HdrDecode CompleteHdr10Decode(const HdrDecode& given, f32 peak);
++
 +/// Creates AMD's frame generation swapchain in place of vkCreateSwapchainKHR. Returns
 +/// VK_NULL_HANDLE when it can't (missing DLL, no spare present queue, creation failed); the caller
 +/// then creates a normal swapchain.
 +[[nodiscard]] VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
 +                                             const VkSwapchainCreateInfoKHR& create_info);
++
++/// What became of HDR10 metadata given to AMD's swapchain.
++enum class HdrMetadataResult : u8 {
++    Sent,          ///< It has it (also when it had the same already)
++    NotSent,       ///< Its version takes none (logged when it started)
++    NextSwapchain, ///< It presents from its own threads while generating: a new one takes it
++};
++/// HDR10 metadata for AMD's swapchain, through its replacement of vkSetHdrMetadataEXT (its handle
++/// isn't the driver's). It hands the metadata on to the display, and its generation decodes PQ
++/// up to the metadata's peak.
++[[nodiscard]] HdrMetadataResult SetHdrMetadata(VkSwapchainKHR swapchain,
++                                               const VkHdrMetadataEXT& metadata);
 +
 +/// Waits for AMD's presents and the last recorded prepare pass, then destroys the swapchain and
 +/// its context. scheduler is null when nothing recorded will be submitted any more (shutdown).
@@ -43813,7 +44196,7 @@ index f580c25d35..f02ce1369c 100644
      std::condition_variable_any wait_cv;
      std::queue<Waitable> wait_queue;  ///< Queue for the fences to be waited on by the wait thread.
 diff --git a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
-index 1512865e68..6866cfd465 100644
+index 1512865e68..b9df95326d 100644
 --- a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
 +++ b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.cpp
 @@ -2,24 +2,27 @@
@@ -44758,7 +45141,7 @@ index 1512865e68..6866cfd465 100644
      auto& state = *impl;
      constexpr VkExtent2D extent{2560, 1440};
      if (!state.native_scene_view) {
-@@ -829,14 +828,60 @@ void OcarinaUpscaler::SaveSceneReference(VkImageView color) {
+@@ -829,14 +828,64 @@ void OcarinaUpscaler::SaveSceneReference(VkImageView color) {
              state.device, state.scheduler, state.pool, OCARINA_DLSS_4K_REFERENCE_COMP_SPV);
      }
      state.queue.Acquire(state.scheduler, 2);
@@ -44768,9 +45151,10 @@ index 1512865e68..6866cfd465 100644
      state.reference_pass->Record(state.scheduler, state.queue.UpdateData(), *state.native_scene,
 -                                 extent, this);
 +                                 extent, state.upscaler.get());
-+    state.scheduler.InvalidateState();
-+}
-+
+     state.scheduler.InvalidateState();
+ }
+ 
+-void OcarinaUpscaler::Composite4k(VkImageView native_composite, u64 frame) {
 +void OcarinaLiveDlss::MakeHudMask4k(VkImageView native_composite) {
 +    auto& state = *impl;
 +    if (!state.native_scene_view || !native_composite) {
@@ -44782,6 +45166,10 @@ index 1512865e68..6866cfd465 100644
 +void OcarinaLiveDlss::MakeHudMask(VkImageView before_hud, VkImageView after_hud,
 +                                  VkExtent2D extent) {
 +    MakeHudMaskWith(false, before_hud, after_hud, extent);
++}
++
++void OcarinaLiveDlss::ResetHudMask() {
++    impl->hud_mask_ready = false;
 +}
 +
 +void OcarinaLiveDlss::MakeHudMaskWith(bool four_k, VkImageView before_hud, VkImageView after_hud,
@@ -44810,19 +45198,18 @@ index 1512865e68..6866cfd465 100644
 +    state.queue.AddSampledImage(after_hud, state.upscaler->PointSampler());
 +    state.queue.AddImage(*state.hud_mask_view);
 +    pass.Record(state.scheduler, state.queue.UpdateData(), *state.hud_mask, extent, false);
-     state.scheduler.InvalidateState();
++    state.scheduler.InvalidateState();
 +    if (!std::exchange(state.hud_mask_ready, true)) {
 +        LOG_INFO(Render_Vulkan, "AMD frame generation: the HUD is masked per pixel ({}x{})",
 +                 extent.width, extent.height);
 +    }
- }
- 
--void OcarinaUpscaler::Composite4k(VkImageView native_composite, u64 frame) {
++}
++
 +void OcarinaLiveDlss::Composite4k(VkImageView native_composite, u64 frame) {
      auto& state = *impl;
      if (state.composited_frame == frame) {
          return;
-@@ -852,83 +897,38 @@ void OcarinaUpscaler::Composite4k(VkImageView native_composite, u64 frame) {
+@@ -852,83 +901,38 @@ void OcarinaUpscaler::Composite4k(VkImageView native_composite, u64 frame) {
      state.scheduler.RequestOutsideRenderPassOperationContext();
      state.queue.Acquire(state.scheduler, 4);
      const auto sampler = state.LinearSampler();
@@ -44917,7 +45304,7 @@ index 1512865e68..6866cfd465 100644
          return false;
      }
      state.scheduler.GetMasterSemaphore().Refresh();
-@@ -942,57 +942,156 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -942,57 +946,156 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
          *slot = std::make_unique<OcarinaFrameSlot>(state.device, state.allocator, extent);
      }
      auto& resources = **slot;
@@ -45110,7 +45497,7 @@ index 1512865e68..6866cfd465 100644
              .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,
                        VK_IMAGE_ASPECT_COLOR_BIT},
              .depth = {depth, depth_image, VK_FORMAT_D32_SFLOAT, DEPTH_RANGE, VK_IMAGE_ASPECT_DEPTH_BIT},
-@@ -1009,88 +1108,67 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -1009,88 +1112,67 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
          state.scheduler.InvalidateState();
          return false;
      }
@@ -45249,7 +45636,7 @@ index 1512865e68..6866cfd465 100644
                                          target_extent, frame, reset);
      }
      state.scheduler.InvalidateState();
-@@ -1098,19 +1176,4 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
+@@ -1098,19 +1180,4 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
      state.last_view_projection = current;
      return true;
  }
@@ -45270,7 +45657,7 @@ index 1512865e68..6866cfd465 100644
 -
  } // namespace Vulkan
 diff --git a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.h b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.h
-index 5bc8be1010..ac0fcfc81e 100644
+index 5bc8be1010..fdf52d6aaa 100644
 --- a/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.h
 +++ b/src/video_core/renderer_vulkan/vk_ocarina_camera_motion.h
 @@ -5,10 +5,10 @@
@@ -45315,7 +45702,7 @@ index 5bc8be1010..ac0fcfc81e 100644
      std::vector<u16> indices;
      std::array<f32, 4> current_origin;
      std::array<f32, 4> previous_origin;
-@@ -33,35 +43,41 @@ struct OcarinaActorMesh {
+@@ -33,35 +43,44 @@ struct OcarinaActorMesh {
      std::array<f32, 280 * 12> previous_bones;
  };
  
@@ -45355,6 +45742,9 @@ index 5bc8be1010..ac0fcfc81e 100644
 +    /// The same for the 4K mode (1440p scene, HUD composited over the 4K output): the 1440p scene
 +    /// saved before the HUD against the game's 1440p composite, which differ slightly everywhere.
 +    void MakeHudMask4k(VkImageView native_composite);
++    /// Forgets the HUD mask (the output went from SDR to HDR or back, whose masks are made apart):
++    /// motion is not cleared until the next one is made.
++    void ResetHudMask();
  
 -    /// Queue motion, temporal evaluation and guest writeback for one frame. A false return leaves
 +    /// Queue motion, DLSS evaluation and guest writeback for one frame. A false return leaves
@@ -49546,7 +49936,7 @@ index 76d4f129e4..0fd73b49ed 100644
      impl->hcr_setup.flags = is_equal ? 0 : VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT;
      impl->hcr_is_set = true;
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
-index d4ce5b022d..1342e597ad 100644
+index d4ce5b022d..b048d036c8 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
 @@ -6,6 +6,7 @@
@@ -50767,7 +51157,7 @@ index d4ce5b022d..1342e597ad 100644
 +                texture_cache.WriteMemory(addr, size);
 +            }
 +        }
-     }
++    }
 +    {
 +        std::scoped_lock lock{buffer_cache.mutex};
 +        for (const auto& [addr, size] : ranges) {
@@ -50775,7 +51165,7 @@ index d4ce5b022d..1342e597ad 100644
 +                buffer_cache.WriteMemory(addr, size);
 +            }
 +        }
-+    }
+     }
 +    pipeline_cache.InvalidateRegions(ranges);
  }
  
@@ -50843,7 +51233,7 @@ index d4ce5b022d..1342e597ad 100644
      if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
          scheduler.DeferFragmentBarrier();
          fence_manager.SignalOrdering();
-@@ -2918,37 +3575,177 @@ void RasterizerVulkan::TracePendingCpuWrites(bool compute, std::span<const u64>
+@@ -2918,37 +3575,188 @@ void RasterizerVulkan::TracePendingCpuWrites(bool compute, std::span<const u64>
      });
  }
  
@@ -50904,6 +51294,17 @@ index d4ce5b022d..1342e597ad 100644
 +    return {"WINDOWS ONLY", "AMD frame generation runs on Windows only. On Linux and macOS, pick "
 +                            "another Frame Generation Type."};
 +#else
++    switch (AmdFrameGen::LastOffReason()) {
++    case AmdFrameGen::OffReason::HdrFormat:
++        return {"SCRGB", "AMD frame generation needs the HDR10 format while HDR output is active. "
++                         "Set Graphics > HDR format to HDR10, or turn HDR output off."};
++    case AmdFrameGen::OffReason::HdrFailed:
++        return {"HDR", "AMD frame generation couldn't start with HDR output (see the log for "
++                       "\"AMD frame generation\"), so Lichii presents HDR without it. Try AMD "
++                       "Frame Generation Version FSR 3.1, or turn HDR output off."};
++    case AmdFrameGen::OffReason::None:
++        break;
++    }
 +    if (!AmdFrameGen::SwapchainActive()) {
 +        return {"RESTART", "AMD frame generation starts with Lichii: close and reopen Lichii after "
 +                           "changing the Frame Generation Type. If it still shows this, AMD's "
@@ -51032,7 +51433,7 @@ index d4ce5b022d..1342e597ad 100644
          return;
      }
      // Reflections and half-size passes share the camera layout; the upscale reads the largest.
-@@ -2969,94 +3766,182 @@ void RasterizerVulkan::TrackOcarinaCamera() {
+@@ -2969,94 +3777,182 @@ void RasterizerVulkan::TrackOcarinaCamera() {
          device_memory.ReadBlockUnsafe(binding.device_addr, camera.data(), sizeof(camera));
          constexpr size_t extent_offset = 0x120 / sizeof(f32);
          constexpr size_t projection_wz = 0xa8 / sizeof(f32);
@@ -51218,13 +51619,13 @@ index d4ce5b022d..1342e597ad 100644
 +        default:
 +            return 0;
 +        }
++    };
++    const auto is_weight = [](VkFormat f) {
++        return f == VK_FORMAT_R8_UNORM || f == VK_FORMAT_R8G8_UNORM || f == VK_FORMAT_R8G8B8A8_UNORM;
      };
 -    if (!attribute(0, VK_FORMAT_R32G32B32_SFLOAT, 0) ||
 -        !attribute(4, VK_FORMAT_R8G8B8A8_UNORM, 40) || !attribute(5, VK_FORMAT_R8G8B8A8_UNORM, 44) ||
 -        !attribute(6, VK_FORMAT_R16G16B16A16_UINT, 12) || !attribute(7, VK_FORMAT_R16G16B16A16_UINT, 20)) {
-+    const auto is_weight = [](VkFormat f) {
-+        return f == VK_FORMAT_R8_UNORM || f == VK_FORMAT_R8G8_UNORM || f == VK_FORMAT_R8G8B8A8_UNORM;
-+    };
 +    const auto is_joint = [](VkFormat f) {
 +        return f == VK_FORMAT_R8_UINT || f == VK_FORMAT_R8G8_UINT || f == VK_FORMAT_R8G8B8A8_UINT ||
 +               f == VK_FORMAT_R16_UINT || f == VK_FORMAT_R16G16_UINT ||
@@ -51280,7 +51681,7 @@ index d4ce5b022d..1342e597ad 100644
      bool origin_found{}, bones_found{};
      buffer_cache.ForEachBoundBuffer(false, [&](u32 stage, bool storage, u32 index, bool,
                                                  const auto& binding, u32 size, const auto*, u32) {
-@@ -3065,27 +3950,43 @@ void RasterizerVulkan::TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool
+@@ -3065,27 +3961,43 @@ void RasterizerVulkan::TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool
              return;
          }
          if (index == 4 && size >= 0x40 + 3 * sizeof(f32)) {
@@ -51337,7 +51738,7 @@ index d4ce5b022d..1342e597ad 100644
          return;
      }
      const auto read = [&](GPUVAddr address, void* dst, size_t size) {
-@@ -3101,40 +4002,118 @@ void RasterizerVulkan::ReadOcarinaActor(OcarinaActorMesh& mesh) {
+@@ -3101,40 +4013,118 @@ void RasterizerVulkan::ReadOcarinaActor(OcarinaActorMesh& mesh) {
          gpu_memory->ReadBlockUnsafe(address, dst, size);
          return true;
      };
@@ -51481,7 +51882,7 @@ index d4ce5b022d..1342e597ad 100644
      const auto read_tic = [this](u32 index) -> std::optional<Tegra::Texture::TICEntry> {
          const auto& table = kepler_compute->regs.tic;
          using Entry = Tegra::Texture::TICEntry;
-@@ -3170,37 +4149,55 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
+@@ -3170,37 +4160,55 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
      // Logs why the game's own upscale draws, when the reason changes and every 120th repeat.
      const auto fail = [this](const char* reason) {
          if (reason != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
@@ -51555,7 +51956,7 @@ index d4ce5b022d..1342e597ad 100644
      const auto* backing = depth.BackingImage();
      if (!backing || depth.IsRescaled() || depth.format != VideoCore::Surface::PixelFormat::D32_FLOAT ||
          depth.range != VideoCommon::SubresourceRange{} || backing->info.num_samples != 1) {
-@@ -3216,13 +4213,30 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
+@@ -3216,13 +4224,30 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
      auto& target = texture_cache.GetImageView(written[0]);
      using VideoCore::Surface::PixelFormat;
      const auto extent = oot_motion.extent;
@@ -51593,7 +51994,7 @@ index d4ce5b022d..1342e597ad 100644
      if (!valid_extents || !color.BackingImage() || !target.BackingImage() ||
          color.IsRescaled() || target.IsRescaled() ||
          color.Samples() != VK_SAMPLE_COUNT_1_BIT || target.Samples() != VK_SAMPLE_COUNT_1_BIT ||
-@@ -3230,6 +4244,17 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
+@@ -3230,6 +4255,17 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
          color.format != PixelFormat::E5B9G9R9_FLOAT || target.format != PixelFormat::B10G11R11_FLOAT ||
          color.size.width != extent.width || color.size.height != extent.height ||
          color.ImageHandle() == target.ImageHandle() || depth.ImageHandle() == target.ImageHandle()) {
@@ -51611,7 +52012,7 @@ index d4ce5b022d..1342e597ad 100644
          return fail("unexpected upscale images");
      }
  
-@@ -3241,54 +4266,81 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
+@@ -3241,54 +4277,82 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
          MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, true, target.format).format != output_format) {
          return fail("unsupported storage format");
      }
@@ -51697,8 +52098,9 @@ index d4ce5b022d..1342e597ad 100644
 +        oot_hud_frame.reset();
 +        oot_hud_view = VK_NULL_HANDLE;
 +        // AMD frame generation's HUD mask compares FSR's output before the HUD with the same
-+        // image at the final pass (the 4K mode compares in AccelerateDisplay instead).
-+        if (AmdFrameGen::SwapchainActive() && !four_k) {
++        // image at the final pass. The 4K mode compares its SDR composite in AccelerateDisplay
++        // instead; with HDR output, which has no composite, it is made this way too.
++        if (AmdFrameGen::SwapchainActive() && (!four_k || oot_hdr_present)) {
 +            SaveOcarinaPreHud(
 +                target.ImageHandle(),
 +                MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, true, target.format).format,
@@ -51720,7 +52122,7 @@ index d4ce5b022d..1342e597ad 100644
          return false;
      }
  }
-@@ -3542,6 +4594,92 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
+@@ -3542,6 +4606,92 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
      pipeline_cache.InvalidateRegion(*cpu_addr, copy_size);
  }
  
@@ -51813,7 +52215,35 @@ index d4ce5b022d..1342e597ad 100644
  std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
      const Tegra::FramebufferConfig& config, DAddr framebuffer_addr, u32 pixel_stride) {
      if (!framebuffer_addr) {
-@@ -3584,15 +4722,19 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
+@@ -3577,6 +4727,27 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
+     info.scaled_width = scaled ? resolution.ScaleUp(info.width) : info.width;
+     info.scaled_height = scaled ? resolution.ScaleUp(info.height) : info.height;
+     info.anti_aliased = oot_dlss_frame == render_trace_frame && !oot_live_dlss->EvaluationFailed();
++    if (oot_dlss_frame == render_trace_frame) {
++        const bool hdr = config.color_space == Tegra::ColorSpace::RGB2020_PQ;
++        if (std::exchange(oot_hdr_present, hdr) != hdr) {
++            // SDR and HDR make their HUD masks apart: neither uses the other's.
++            oot_live_dlss->ResetHudMask();
++        }
++        // With HDR output the final pass may be another shader than SDR's: the mask it would have
++        // made, while FSR's output still holds this frame and its HUD.
++        if (hdr && oot_pre_hud_frame == render_trace_frame &&
++            oot_hud_frame == render_trace_frame && oot_hud_view &&
++            AmdFrameGen::SwapchainActive()) {
++            oot_live_dlss->MakeHudMask(*oot_pre_hud_view, oot_hud_view, oot_pre_hud_extent);
++            oot_hud_frame.reset();
++            oot_hud_view = VK_NULL_HANDLE;
++            static bool logged = false;
++            if (!std::exchange(logged, true)) {
++                LOG_INFO(Render_Vulkan, "AMD frame generation: with HDR output the HUD mask is "
++                                        "made at presentation (the final pass isn't SDR's)");
++            }
++        }
++    }
+     if (oot_4k_scene_frame == render_trace_frame && info.image &&
+         info.image == oot_4k_guest_present && info.image_view &&
+         info.width == 2560 && info.height == 1440 && !scaled &&
+@@ -3584,15 +4755,19 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
          !oot_live_dlss->EvaluationFailed() && !frame_dump.Capturing()) {
          try {
              oot_live_dlss->Composite4k(info.image_view, render_trace_frame);
@@ -51835,7 +52265,7 @@ index d4ce5b022d..1342e597ad 100644
          }
      }
      return info;
-@@ -3603,6 +4745,12 @@ void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_load
+@@ -3603,6 +4778,12 @@ void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_load
      pipeline_cache.LoadDiskResources(title_id, stop_loading, callback);
  }
  
@@ -51848,7 +52278,7 @@ index d4ce5b022d..1342e597ad 100644
  void RasterizerVulkan::FlushWork() {
  #ifdef __ANDROID__
      static constexpr bool android = true;
-@@ -3623,7 +4771,13 @@ void RasterizerVulkan::FlushWork() {
+@@ -3623,7 +4804,13 @@ void RasterizerVulkan::FlushWork() {
              }
              return std::nullopt;
          }();
@@ -51863,7 +52293,7 @@ index d4ce5b022d..1342e597ad 100644
      }
      u32 legacy_budget = 4096;
      if (!native && !android) {
-@@ -3651,17 +4805,30 @@ void RasterizerVulkan::FlushWork() {
+@@ -3651,17 +4838,30 @@ void RasterizerVulkan::FlushWork() {
      }
  }
  
@@ -51897,7 +52327,7 @@ index d4ce5b022d..1342e597ad 100644
      buffer_cache.Nx2CollectListCopies(true);
      const bool copied = buffer_cache.DMACopy(src_address, dest_address, amount);
      if (buffer_cache.Nx2CopyListPages(scheduler.CurrentTick())) {
-@@ -3675,6 +4842,7 @@ template <bool IS_IMAGE_UPLOAD>
+@@ -3675,6 +4875,7 @@ template <bool IS_IMAGE_UPLOAD>
  bool AccelerateDMA::DmaBufferImageCopy(const Tegra::DMA::ImageCopy& copy_info,
                                         const Tegra::DMA::BufferOperand& buffer_operand,
                                         const Tegra::DMA::ImageOperand& image_operand) {
@@ -51905,7 +52335,7 @@ index d4ce5b022d..1342e597ad 100644
      std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
      const auto image_id = texture_cache.DmaImageId(image_operand, IS_IMAGE_UPLOAD);
      if (image_id == VideoCommon::NULL_IMAGE_ID) {
-@@ -3857,8 +5025,8 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
+@@ -3857,8 +5058,8 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
              height = -height;
          }
          VkViewport viewport{
@@ -51916,7 +52346,7 @@ index d4ce5b022d..1342e597ad 100644
              .width = width,
              .height = height,
              .minDepth = 0.0f,
-@@ -3875,7 +5043,7 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
+@@ -3875,7 +5076,7 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
      }
      const bool is_rescaling{texture_cache.IsRescaling()};
      const float scale = is_rescaling ? Settings::values.resolution_info.up_factor : 1.0f;
@@ -51925,7 +52355,7 @@ index d4ce5b022d..1342e597ad 100644
          GetViewportState(device, regs, 0, scale),  GetViewportState(device, regs, 1, scale),
          GetViewportState(device, regs, 2, scale),  GetViewportState(device, regs, 3, scale),
          GetViewportState(device, regs, 4, scale),  GetViewportState(device, regs, 5, scale),
-@@ -3885,12 +5053,6 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
+@@ -3885,12 +5086,6 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
          GetViewportState(device, regs, 12, scale), GetViewportState(device, regs, 13, scale),
          GetViewportState(device, regs, 14, scale), GetViewportState(device, regs, 15, scale),
      };
@@ -51939,7 +52369,7 @@ index d4ce5b022d..1342e597ad 100644
          const u32 num_viewports = std::min<u32>(device.GetMaxViewports(), Maxwell::NumViewports);
          const vk::Span<VkViewport> viewports(viewport_list.data(), num_viewports);
 diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.h b/src/video_core/renderer_vulkan/vk_rasterizer.h
-index 9371d3cedb..f6d99bbdfc 100644
+index 9371d3cedb..5b19cfe239 100644
 --- a/src/video_core/renderer_vulkan/vk_rasterizer.h
 +++ b/src/video_core/renderer_vulkan/vk_rasterizer.h
 @@ -7,8 +7,12 @@
@@ -52103,7 +52533,7 @@ index 9371d3cedb..f6d99bbdfc 100644
      struct OcarinaMotionTrace {
          const Tegra::MemoryManager* camera_channel{};
          const Tegra::MemoryManager* depth_channel{};
-@@ -308,32 +354,55 @@ private:
+@@ -308,32 +354,58 @@ private:
          GPUVAddr depth_address{};
          u32 depth_tic{};
          VkExtent2D extent{};
@@ -52140,6 +52570,9 @@ index 9371d3cedb..f6d99bbdfc 100644
 +    VkImage oot_scene_image{};  ///< FSR's output this frame, only compared, never used
 +    VkImageView oot_hud_view{}; ///< That image as the last HUD draw into it had it bound
 +    std::optional<u64> oot_hud_frame;
++    /// The last upscaled frame was presented as PQ (the game was told HDR), which the 4K
++    /// composite doesn't take: the HUD mask is then made as in place.
++    bool oot_hdr_present{};
      struct OcarinaActorPose {
 -        u64 frame{};
 +        OcarinaVertexLayout layout;
@@ -52169,7 +52602,7 @@ index 9371d3cedb..f6d99bbdfc 100644
      u64 render_trace_frame = 0;
      u32 render_trace_draws = 0;
      u32 render_trace_clears = 0;
-@@ -407,6 +476,8 @@ private:
+@@ -407,6 +479,8 @@ private:
          HandleBind,
          HandleData,
          SampledImages,
@@ -52178,7 +52611,7 @@ index 9371d3cedb..f6d99bbdfc 100644
          Count,
      };
      /// Why a recorded draw can't be followed by a delta draw.
-@@ -442,6 +513,17 @@ private:
+@@ -442,6 +516,17 @@ private:
          /// StateChanged draws by the reason of the last break, and by its 3D method.
          std::array<u64, static_cast<size_t>(VideoCommon::Nx2FastDraw::Reason::Count)> breaks{};
          std::array<u32, Maxwell::NUM_REGS> break_methods{};
@@ -52196,7 +52629,7 @@ index 9371d3cedb..f6d99bbdfc 100644
          u64 window_start{};
      };
      /// The pipeline the draw can take the delta path with, or null for a full resolve. Clears
-@@ -453,6 +535,8 @@ private:
+@@ -453,6 +538,8 @@ private:
      void NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_indexed, bool is_indirect, u64 serial,
                            u64 map_serial);
      void ReportFastDraws();
@@ -53110,7 +53543,7 @@ index 1000aed081..b2d5d31552 100644
          ++buffer_index;
          buffer.SetObjectNameEXT(fmt::format("Staging Buffer {}", buffer_index).c_str());
 diff --git a/src/video_core/renderer_vulkan/vk_swapchain.cpp b/src/video_core/renderer_vulkan/vk_swapchain.cpp
-index e018bf1e09..408d3e4c5e 100644
+index e018bf1e09..54239b1233 100644
 --- a/src/video_core/renderer_vulkan/vk_swapchain.cpp
 +++ b/src/video_core/renderer_vulkan/vk_swapchain.cpp
 @@ -29,8 +29,9 @@ namespace Vulkan {
@@ -53293,7 +53726,7 @@ index e018bf1e09..408d3e4c5e 100644
  
      has_mailbox = std::find(present_modes.begin(), present_modes.end(), VK_PRESENT_MODE_MAILBOX_KHR)
                    != present_modes.end();
-@@ -344,10 +407,24 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
+@@ -344,10 +407,20 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
                                   VK_PRESENT_MODE_FIFO_RELAXED_KHR) != present_modes.end();
  
      const VkCompositeAlphaFlagBitsKHR alpha_flags{ChooseAlphaFlags(capabilities)};
@@ -53309,27 +53742,26 @@ index e018bf1e09..408d3e4c5e 100644
 +              VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0
 +                 ? "supported"
 +                 : "unsupported");
-+    // AMD's frame generation is set up for SDR only (no HDR flags or metadata). Like the built-in
-+    // frame generation, it is off while HDR output is active: HDR gets a normal swapchain.
-+    const bool amd_frame_gen = AmdFrameGen::Requested() &&
-+                               surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-+    if (AmdFrameGen::Requested() && !amd_frame_gen) {
-+        LOG_INFO(Render_Vulkan, "AMD frame generation: off while HDR output is active");
-+    }
++    // AMD's frame generation, when asked for, presents SDR and HDR10; other output gets a normal
++    // swapchain. Asked at every creation, so the status bar's reason fits this swapchain.
++    const bool amd_frame_gen = AmdFrameGen::CanPresent(surface_format);
  
      u32 requested_image_count{capabilities.minImageCount + 1};
      // Ensure Triple buffering if possible.
-@@ -419,12 +496,30 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
+@@ -419,12 +492,33 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
      // Request the size again to reduce the possibility of a TOCTOU race condition.
      const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
      swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
 -    // Don't add code within this and the swapchain creation.
 -    swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
 +    // The window starts as a tiny placeholder; AMD's swapchain waits for the real size. After a
-+    // few failures at real sizes the session keeps normal swapchains.
++    // few failures at real sizes the session keeps normal swapchains, for SDR and HDR apart.
 +    const bool real_size =
 +        swapchain_ci.imageExtent.width >= 320 && swapchain_ci.imageExtent.height >= 240;
-+    if (amd_frame_gen && real_size && frame_gen_failures < 3) {
++    u32& failures = surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
++                        ? frame_gen_failures
++                        : frame_gen_hdr_failures;
++    if (amd_frame_gen && real_size && failures < 3) {
 +        // AMD's swapchain takes a plain create info: no format list, no mutable format.
 +        VkSwapchainCreateInfoKHR frame_gen_ci = swapchain_ci;
 +        frame_gen_ci.pNext = nullptr;
@@ -53337,7 +53769,7 @@ index e018bf1e09..408d3e4c5e 100644
 +        frame_gen_swapchain =
 +            AmdFrameGen::CreateSwapchain(device, scheduler.submit_mutex, frame_gen_ci);
 +        if (frame_gen_swapchain == VK_NULL_HANDLE) {
-+            ++frame_gen_failures;
++            ++failures;
 +        }
 +    }
 +    if (!frame_gen_swapchain) {
@@ -53353,7 +53785,7 @@ index e018bf1e09..408d3e4c5e 100644
      image_count = static_cast<u32>(images.size());
  #ifdef __ANDROID__
      // Android is already ordered the same as Switch.
-@@ -446,15 +541,21 @@ void Swapchain::CreateSemaphores() {
+@@ -446,14 +540,19 @@ void Swapchain::CreateSemaphores() {
                            [this] { return device.GetLogical().CreateSemaphore(); });
  }
  
@@ -53370,15 +53802,34 @@ index e018bf1e09..408d3e4c5e 100644
 +    }
  }
  
- void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) const {
--    if (!device.IsExtHdrMetadataEnabled() ||
-+    // AMD's frame generation swapchain (no `swapchain`) never presents HDR.
-+    if (!swapchain || !device.IsExtHdrMetadataEnabled() ||
+-void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) const {
++void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) {
+     if (!device.IsExtHdrMetadataEnabled() ||
          surface_format.colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT) {
          return;
-     }
+@@ -473,7 +572,19 @@ void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) const {
+         .maxContentLightLevel = static_cast<float>(peak_luminance),
+         .maxFrameAverageLightLevel = 0.0f,
+     };
+-    device.GetLogical().SetHdrMetadataEXT(*swapchain, metadata);
++    if (frame_gen_swapchain) {
++        // AMD's frame generation swapchain is its own object, not the driver's: it takes the
++        // metadata through its own function and hands it on.
++        const auto result = AmdFrameGen::SetHdrMetadata(frame_gen_swapchain, metadata);
++        if (result == AmdFrameGen::HdrMetadataResult::NextSwapchain) {
++            is_suboptimal = true; // recreated before the next present, then given the metadata
++        }
++        if (result != AmdFrameGen::HdrMetadataResult::Sent) {
++            return;
++        }
++    } else {
++        device.GetLogical().SetHdrMetadataEXT(*swapchain, metadata);
++    }
+     LOG_INFO(Render_Vulkan, "HDR10 metadata: peak {} nits (reference white {} nits)",
+              peak_luminance, reference_white);
+ }
 diff --git a/src/video_core/renderer_vulkan/vk_swapchain.h b/src/video_core/renderer_vulkan/vk_swapchain.h
-index 652e5d0923..ff30d13003 100644
+index 652e5d0923..4c97c6d767 100644
 --- a/src/video_core/renderer_vulkan/vk_swapchain.h
 +++ b/src/video_core/renderer_vulkan/vk_swapchain.h
 @@ -13,6 +13,7 @@
@@ -53427,7 +53878,17 @@ index 652e5d0923..ff30d13003 100644
      }
  
      /// Returns true when the swapchain is outdated.
-@@ -152,7 +170,7 @@ private:
+@@ -111,7 +129,8 @@ public:
+     }
+ 
+     /// Hands the display the HDR10 mastering metadata (VK_EXT_hdr_metadata) of an HDR10 swapchain.
+-    void SetHdrMetadata(u16 peak_luminance, u16 reference_white) const;
++    /// While AMD's frame generation can't take it, the swapchain is marked for recreation.
++    void SetHdrMetadata(u16 peak_luminance, u16 reference_white);
+ 
+     /// Returns the cached SDR surface format, including while an HDR swapchain is active.
+     VkFormat GetSdrImageFormat() const {
+@@ -152,7 +171,7 @@ private:
      void CreateSemaphores();
      void CreateImageViews();
  
@@ -53436,16 +53897,17 @@ index 652e5d0923..ff30d13003 100644
  
      bool NeedsPresentModeUpdate() const;
  
-@@ -162,6 +180,8 @@ private:
+@@ -162,6 +181,9 @@ private:
      Scheduler& scheduler;
  
      vk::SwapchainKHR swapchain;
 +    VkSwapchainKHR frame_gen_swapchain{}; ///< AMD's, in place of `swapchain` when picked.
 +    u32 frame_gen_failures{};             ///< AMD's swapchain failed to start this many times.
++    u32 frame_gen_hdr_failures{};         ///< The same with HDR output, so SDR keeps its tries.
  
      std::size_t image_count{};
      std::vector<VkImage> images;
-@@ -174,6 +194,7 @@ private:
+@@ -174,6 +196,7 @@ private:
  
      u32 image_index{};
      u32 frame_index{};

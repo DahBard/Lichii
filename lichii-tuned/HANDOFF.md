@@ -2267,6 +2267,26 @@ Own changes:
        only 7 beyond step 1's: the same frontend files at their src/lichii paths (git carries our
        src/yuzu changes across the rename; the SPDX removal adds none). Afterwards our own
        additions follow the rename (no yuzu names or yuzu SPDX lines beyond what upstream keeps).
+   - r59 (2026-11-13; branch `r22-r59`, tuned4 `134cfab02`): r58 plus AMD frame generation under
+     HDR output (workflow run `wf_333d0a13-43d`: two readers, design, challenger, implementer, two
+     reviews, fix; notes in scratchpad/hdrfg/). Cause: merge 2's SDR-only gate, set because the
+     CheezyEmu port had no HDR support: the context lacked FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE,
+     the HDR10 metadata never reached AMD's swapchain (its handle is AMD's own object; the metadata
+     goes through pOutSetHdrMetadataEXT, the only place AMD learns the luminance range its PQ decode
+     divides by), and in docked 4K the HUD mask came only from the 8-bit SDR composite. Now:
+     - HDR10 (A2B10G10R10, HDR10_ST2084) presents through AMD's swapchain with the flag and the
+       metadata; the frame generation callback fills in PQ and a 0-to-peak range where AMD passes
+       neither, and logs the decode once per swapchain;
+     - under HDR the 4K mode takes its HUD mask from the in-place comparison;
+     - scRGB keeps a normal swapchain (FG button "(SCRGB)"); if AMD's swapchain can't start in HDR,
+       a normal HDR swapchain with "(HDR)" and the reason in the log (HDR failures counted apart
+       from SDR's); a failed generation dispatch under HDR10 is logged and shows "(HDR)";
+     - a swapchain version AMD turns down is destroyed before the next is tried (it held the
+       window). With HDR off this is the only change, on a path r58's runs never took.
+     Owner test: HDR10 with AMD frame generation, FSR 4's and FSR 3.1's; the HUD steady and the
+     world moving smoothly in generated frames; the log's 'AMD frame generation' lines (the ready
+     line ends ", HDR output ... (PQ)"; one decode line); SDR as r58. Nothing ran on Windows or a
+     GPU before that test. Merge 3 takes r59 in after step 1.
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
