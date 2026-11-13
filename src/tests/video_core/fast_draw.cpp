@@ -262,16 +262,6 @@ TEST_CASE("Fast draw breaks on state and texture headers", "[fast_draw]") {
         }
         CHECK(covered);
     }
-    // EDEN_NX2_TEST_1161_DRAWS=0: a full list ends draw reuse, as before.
-    FastDraw::g_test_1161_draws.store(false);
-    CHECK(breaks([&] {
-        f.SetConstantBuffer(0x60000, 0x1000, 0);
-        for (u32 i = 0; i <= FastDraw::Delta::MaxWrites; ++i) {
-            f.Write(MAXWELL3D_REG_INDEX(const_buffer.offset), i * 0x20);
-            f.Write(MAXWELL3D_REG_INDEX(const_buffer.buffer), i);
-        }
-    }));
-    FastDraw::g_test_1161_draws.store(true);
 }
 
 TEST_CASE("Fast draw breaks on texture header data written through another mapping",
@@ -524,4 +514,27 @@ TEST_CASE("Fast draw breaks on a release that signals a fence", "[fast_draw]") {
     CHECK(FastDraw::g_delta.write_end[1] == 0x30104);
     f.Write(query, short_query); // short release: a fence
     CHECK(FastDraw::Serial() != serial);
+}
+
+TEST_CASE("Fast draw keeps vertex attribute formats light only with dynamic vertex input",
+          "[fast_draw]") {
+    DeltaFixture f;
+    constexpr u32 formats = MAXWELL3D_REG_INDEX(vertex_attrib_format);
+    const auto light = [&](u32 method) {
+        FastDraw::g_delta = {};
+        const u64 serial = FastDraw::Serial();
+        f.Write(method, f.Reg(method) + 0x40); // the attribute's offset
+        return FastDraw::Serial() == serial;
+    };
+    const bool previous = FastDraw::g_dynamic_vertex_input.exchange(false);
+    CHECK_FALSE(light(formats)); // the formats are in the pipeline key
+    FastDraw::g_dynamic_vertex_input.store(true);
+    CHECK(light(formats));
+    CHECK(light(formats + Maxwell3D::Regs::NumVertexAttributes - 1));
+    CHECK_FALSE(light(formats + Maxwell3D::Regs::NumVertexAttributes));
+    f.DrawArrays(0, 3);
+    f.Write(formats + 2, f.Reg(formats + 2) + 0x40);
+    f.DrawArrays(3, 3);
+    CHECK(f.Reusable());
+    FastDraw::g_dynamic_vertex_input.store(previous);
 }

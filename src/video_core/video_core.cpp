@@ -34,11 +34,11 @@
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_indirect.h"
 #include "video_core/nx2_list_indirect_stats.h"
+#include "video_core/nx2_list_macro_trace.h"
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_null/renderer_null.h"
 #ifdef HAS_OPENGL
@@ -71,12 +71,8 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
 /// the renderer latched its own: a launcher whose switch did not take effect shows here, not as a
 /// null A/B result.
 void LogTestSwitches(const Core::System& system) {
-    namespace Test = VideoCommon::Nx2Test;
     namespace FastDraw = VideoCommon::Nx2FastDraw;
-    const std::array<std::pair<const char*, bool>, 7> switches{{
-        {"EDEN_NX2_TEST_1161_DRAWS", FastDraw::g_test_1161_draws.load(std::memory_order_relaxed)},
-        {"EDEN_NX2_TEST_1161_HANDLES", Test::Handles1161()},
-        {"EDEN_NX2_TEST_1161_REPORTS", Test::Reports1161()},
+    const std::array<std::pair<const char*, bool>, 4> switches{{
         {"EDEN_NX2_TEST_1216", FastDraw::g_test_1216.load(std::memory_order_relaxed)},
         {"EDEN_NX2_ZERO_TRIM", system.DeviceMemory().ZeroTrimRunning()},
         {"EDEN_NX2_KSPIN", Kernel::Nx2Wait::Enabled()},
@@ -132,6 +128,7 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     Tegra::Nx2ListIndirect::ReadSwitch();
     Tegra::Nx2ListIndirect::Stats::ReadSwitch();
     VideoCommon::ReadUniformStreamReuseSwitch();
+    VideoCommon::ListMacroTrace::ReadSwitch();
     VideoCore::AsyncReadback::ReadSwitch();
     VideoCommon::Nx2Perf::ReadSwitch();
 

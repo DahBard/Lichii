@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdlib>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,6 +35,8 @@ struct TextureInst {
     ConstBufferAddr cbuf;
     IR::Inst* inst;
     IR::Block* block;
+    /// The handle word reaches the handle only as the address of a load (see ReachesOutsideLoads)
+    bool pointer_word{};
 };
 
 using TextureInstVector = boost::container::small_vector<TextureInst, 24>;
@@ -126,10 +127,19 @@ u32 SaturatingSub(u32 lhs, u32 rhs) {
     return lhs > rhs ? lhs - rhs : 0;
 }
 
+// Whether a descriptor is an array, which the descriptor limits shrink. A texture the shader
+// indexes stays one when they leave it a single element.
+[[nodiscard]] bool IsDescriptorArray(const TextureBufferDescriptor& desc) noexcept {
+    return desc.count > 1;
+}
+[[nodiscard]] bool IsDescriptorArray(const TextureDescriptor& desc) noexcept {
+    return desc.count > 1 || desc.is_descriptor_array;
+}
+
 template <typename T>
 [[nodiscard]] u32 StaticDescriptorCount(T const& descriptors) noexcept {
     return std::accumulate(descriptors.cbegin(), descriptors.cend(), 0U, [](auto const& acc, auto const& e) {
-        return acc + (e.count <= 1 ? e.count : 0);
+        return acc + (IsDescriptorArray(e) ? 0 : e.count);
     });
 }
 
@@ -158,32 +168,49 @@ u32 DynamicSampledTextureCap(const Info& info, const HostTranslateInfo& host_inf
     return (std::min)({DESCRIPTOR_MAX_COUNT, sampled_limit, sampler_limit, resource_limit});
 }
 
+// Whether opcode is an instruction past the texture pass reading a texture (or a texel buffer).
+bool IsSampledImageOpcode(IR::Opcode opcode) {
+    switch (opcode) {
+    case IR::Opcode::ImageSampleImplicitLod:
+    case IR::Opcode::ImageSampleExplicitLod:
+    case IR::Opcode::ImageSampleDrefImplicitLod:
+    case IR::Opcode::ImageSampleDrefExplicitLod:
+    case IR::Opcode::ImageGather:
+    case IR::Opcode::ImageGatherDref:
+    case IR::Opcode::ImageFetch:
+    case IR::Opcode::ImageQueryDimensions:
+    case IR::Opcode::ImageQueryLod:
+    case IR::Opcode::ImageGradient:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void MergeTextureDescriptors(IR::Program& program);
+
 // Shrinks the texture arrays of a program to at most cap elements, clamping the element index of
-// every instruction that reads an array it shrank.
+// every instruction that reads an array it shrank, and merges the descriptors that the cut makes
+// equal.
 void CapTextureArrays(IR::Program& program, u32 cap) {
     auto& descriptors = program.info.texture_descriptors;
     boost::container::small_vector<bool, 16> shrunk(descriptors.size());
+    bool any_shrunk{};
     for (size_t index = 0; index < descriptors.size(); ++index) {
         if (descriptors[index].count > cap) {
             descriptors[index].count = cap;
+            if (cap == 1) {
+                // One element has no stride: it takes a single texture's, which makes the array
+                // equal to a descriptor of its texture the shader reads on its own.
+                descriptors[index].size_shift = DESCRIPTOR_SIZE_SHIFT;
+            }
             shrunk[index] = true;
+            any_shrunk = true;
         }
     }
     for (IR::Block* const block : program.post_order_blocks) {
         for (IR::Inst& inst : block->Instructions()) {
-            switch (inst.GetOpcode()) {
-            case IR::Opcode::ImageSampleImplicitLod:
-            case IR::Opcode::ImageSampleExplicitLod:
-            case IR::Opcode::ImageSampleDrefImplicitLod:
-            case IR::Opcode::ImageSampleDrefExplicitLod:
-            case IR::Opcode::ImageGather:
-            case IR::Opcode::ImageGatherDref:
-            case IR::Opcode::ImageFetch:
-            case IR::Opcode::ImageQueryDimensions:
-            case IR::Opcode::ImageQueryLod:
-            case IR::Opcode::ImageGradient:
-                break;
-            default:
+            if (!IsSampledImageOpcode(inst.GetOpcode())) {
                 continue;
             }
             const auto flags = inst.Flags<IR::TextureInstInfo>();
@@ -200,6 +227,9 @@ void CapTextureArrays(IR::Program& program, u32 cap) {
             inst.SetArg(0, ir.UMin(IR::U32{inst.Arg(0)}, ir.Imm32(count - 1)));
         }
     }
+    if (any_shrunk) {
+        MergeTextureDescriptors(program);
+    }
 }
 
 // The textures of a pipeline's stages. Each is a combined image sampler, which the descriptor set
@@ -215,7 +245,7 @@ struct PipelineTextures {
         for (const IR::Program* const program : programs) {
             for (const auto& desc : program->info.texture_descriptors) {
                 samplers += desc.count;
-                if (desc.count > 1) {
+                if (IsDescriptorArray(desc)) {
                     ++arrays;
                 } else {
                     fixed_samplers += desc.count;
@@ -332,16 +362,49 @@ bool IsStorageImageOpcode(IR::Opcode opcode) {
     }
 }
 
-u32 DynamicSampledTextureArrayCount(const TextureInstVector& to_replace) {
+// The size_shift of the descriptor of the handle at cbuf (see TextureDescriptor). The index of an
+// array of handle program results is the element itself.
+u32 DescriptorSizeShift(const ConstBufferAddr& cbuf) {
+    return cbuf.count <= 1              ? DESCRIPTOR_SIZE_SHIFT
+           : cbuf.handle_program != ~0U ? 0U
+                                        : DynamicDescriptorSizeShift(cbuf.dynamic_offset);
+}
+
+TextureType ResolvedTextureType(Environment& env, const TextureInst& texture_inst,
+                                IR::Opcode opcode,
+                                const std::unordered_map<u32, TextureType>& handle_program_types);
+
+u32 DynamicSampledTextureArrayCount(
+    Environment& env, const TextureInstVector& to_replace,
+    const std::unordered_map<u32, TextureType>& handle_program_types) {
     // Arrays, not instructions: every instruction reading an array shares its descriptor (a
-    // light loop samples one table of shadow maps from dozens of places).
-    boost::container::small_vector<std::tuple<u32, u32, u32, u32, bool>, 8> arrays;
+    // light loop samples one table of shadow maps from dozens of places). Arrays differ where
+    // their descriptors do (Descriptors::Add) but for the count, which the cap sets: two arrays
+    // differing only in count share a descriptor once both reach it.
+    boost::container::small_vector<
+        std::tuple<u32, u32, u32, bool, u32, u32, u32, u32, u32, u32, bool>, 8>
+        arrays;
     for (const TextureInst& inst : to_replace) {
-        const auto flags{inst.inst->Flags<IR::TextureInstInfo>()};
-        if (inst.cbuf.count > 1 && !IsStorageImageOpcode(IndexedInstruction(*inst.inst)) &&
-            flags.type != TextureType::Buffer) {
-            const std::tuple array{inst.cbuf.index, inst.cbuf.offset, inst.cbuf.handle_program,
-                                   static_cast<u32>(flags.type.Value()), flags.is_depth != 0};
+        const ConstBufferAddr& cbuf{inst.cbuf};
+        const IR::Opcode opcode{IndexedInstruction(*inst.inst)};
+        if (cbuf.count <= 1 || IsStorageImageOpcode(opcode)) {
+            continue;
+        }
+        // The type the replace loop gives the instruction: a size query carries none until then.
+        auto flags{inst.inst->Flags<IR::TextureInstInfo>()};
+        flags.type.Assign(ResolvedTextureType(env, inst, opcode, handle_program_types));
+        if (flags.type != TextureType::Buffer) {
+            const std::tuple array{cbuf.index,
+                                   cbuf.offset,
+                                   cbuf.shift_left,
+                                   cbuf.has_secondary,
+                                   cbuf.secondary_index,
+                                   cbuf.secondary_offset,
+                                   cbuf.secondary_shift_left,
+                                   DescriptorSizeShift(cbuf),
+                                   cbuf.handle_program,
+                                   static_cast<u32>(flags.type.Value()),
+                                   flags.is_depth != 0};
             if (std::ranges::find(arrays, array) == arrays.end()) {
                 arrays.push_back(array);
             }
@@ -491,6 +554,39 @@ bool IsFloatValue(const IR::Inst& inst) {
                               IR::Type::F32x3 | IR::Type::F32x4 | IR::Type::F64x2 |
                               IR::Type::F64x3 | IR::Type::F64x4};
     return (inst.Type() & floats) != IR::Type::Void;
+}
+
+// Whether target is reachable from value without passing through a memory load. A word reached
+// only through loads is part of an address the program dereferences, never the handle itself.
+bool ReachesOutsideLoads(const IR::Value& value, const IR::Inst* target, const IR::Block* block) {
+    const IR::Value start{ResolveConditionalPhi(value, block)};
+    if (target == nullptr || start.IsImmediate()) {
+        return true;
+    }
+    std::unordered_set<const IR::Inst*> visited{start.InstRecursive()};
+    std::queue<const IR::Inst*> queue;
+    queue.push(start.InstRecursive());
+    while (!queue.empty()) {
+        const IR::Inst* const inst{queue.front()};
+        queue.pop();
+        if (inst == target) {
+            return true;
+        }
+        if (IsMemoryLoad(inst->GetOpcode())) {
+            continue;
+        }
+        for (size_t arg = inst->NumArgs(); arg--;) {
+            const IR::Value arg_value{ResolveConditionalPhi(inst->Arg(arg), block)};
+            if (arg_value.IsImmediate()) {
+                continue;
+            }
+            const IR::Inst* const arg_inst{arg_value.InstRecursive()};
+            if (visited.insert(arg_inst).second) {
+                queue.push(arg_inst);
+            }
+        }
+    }
+    return false;
 }
 
 std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, const HostTranslateInfo& host_info, const IR::Block* block) {
@@ -965,19 +1061,7 @@ void TrimTrailingTees(std::vector<u32>& code) {
 
 // Elements of the descriptor array of a handle read from a table at an index word (see
 // g_handle_index_allowed): the table entries a draw binds, larger indices taking the last one.
-// LICHII_BINDLESS_TABLE overrides it (1 to 1024), 0 turning such arrays off (the shader then
-// gets whatever constant buffer word the earlier search finds, as before them).
-u32 HandleTableSize() {
-    static const u32 size = [] {
-        const char* const value = std::getenv("LICHII_BINDLESS_TABLE");
-        if (value == nullptr || value[0] == '\0') {
-            return 64U;
-        }
-        const long parsed = std::strtol(value, nullptr, 10);
-        return static_cast<u32>(std::clamp(parsed, 0L, 1024L));
-    }();
-    return size;
-}
+constexpr u32 HANDLE_TABLE_SIZE = 64;
 
 // The block of each instruction and the immediate dominator of each block of the program the
 // pass on this thread runs on, built when a handle program first needs them (Cooper, Harvey and
@@ -1230,8 +1314,7 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
             // as written.
             const bool sampled{!IsStorageImageOpcode(IndexedInstruction(inst)) &&
                                inst.Flags<IR::TextureInstInfo>().type != TextureType::Buffer};
-            if (!built && g_handle_programs && sampled && host_info.support_handle_table_arrays &&
-                HandleTableSize() > 0) {
+            if (!built && g_handle_programs && sampled && host_info.support_handle_table_arrays) {
                 // Read from a table at an index each invocation reads for itself: a descriptor
                 // array of the table's entries, which the shader indexes with that index.
                 code.clear();
@@ -1246,21 +1329,32 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
             if (!built) {
                 // Not computable for a whole draw (a handle that changes in a loop): keep the
                 // earlier search through loads, which at least gives the shader a texture.
+                const IR::Inst* legacy_inst{};
                 const std::optional<ConstBufferAddr> legacy{IR::BreadthFirstSearch(inst.Arg(0),
-                    [&env, &host_info, block](const IR::Inst* candidate) {
-                        return TryGetConstBuffer(candidate, env, host_info, block);
+                    [&env, &host_info, block, &legacy_inst](const IR::Inst* candidate) {
+                        std::optional found{TryGetConstBuffer(candidate, env, host_info, block)};
+                        if (found) {
+                            legacy_inst = candidate;
+                        }
+                        return found;
                     }, [&](IR::Value operand) { return ResolveConditionalPhi(operand, block); })};
                 if (!legacy) {
                     throw NotImplementedException("Failed to track bindless texture constant buffer (stopped at {}, budget {})",
                                                   g_handle_failure, budget);
                 }
+                // The word the search found may be the pointer a load reads the handle through
+                // (a light table's address): that binds no texture.
+                const bool pointer_word{!ReachesOutsideLoads(inst.Arg(0), legacy_inst, block)};
                 static std::atomic<int> warnings{};
                 if (warnings.fetch_add(1, std::memory_order_relaxed) < 32) {
                     LOG_WARNING(Shader, "Bindless {} handle not computable per draw (stopped at {}): "
-                                "taking cbuf{}+{:#x}, likely not the texture the shader reads",
-                                inst.GetOpcode(), g_handle_failure, legacy->index, legacy->offset);
+                                "taking cbuf{}+{:#x}{}",
+                                inst.GetOpcode(), g_handle_failure, legacy->index, legacy->offset,
+                                pointer_word ? ", a pointer: no texture"
+                                             : ", likely not the texture the shader reads");
                 }
-                return TextureInst{.cbuf = *legacy, .inst = &inst, .block = block};
+                return TextureInst{
+                    .cbuf = *legacy, .inst = &inst, .block = block, .pointer_word = pointer_word};
             }
             TrimTrailingTees(code);
             auto& programs{*g_handle_programs};
@@ -1278,7 +1372,7 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
                     g_dominance.emplace(*g_program);
                 }
                 if (g_dominance->Dominates(index.InstRecursive(), &inst)) {
-                    count = HandleTableSize();
+                    count = HANDLE_TABLE_SIZE;
                 }
             }
             addr = ConstBufferAddr{
@@ -1383,11 +1477,13 @@ public:
                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
                    desc.secondary_shift_left == existing.secondary_shift_left &&
                    desc.count == existing.count && desc.size_shift == existing.size_shift &&
-                   desc.handle_program == existing.handle_program;
+                   desc.handle_program == existing.handle_program &&
+                   desc.handle_is_pointer_word == existing.handle_is_pointer_word;
         })};
         // TODO: Read this from TIC
         texture_descriptors[index].is_multisample |= desc.is_multisample;
         texture_descriptors[index].is_integer |= desc.is_integer;
+        texture_descriptors[index].is_descriptor_array |= desc.is_descriptor_array;
         return index;
     }
 
@@ -1423,6 +1519,26 @@ private:
     TextureDescriptors& texture_descriptors;
     ImageDescriptors& image_descriptors;
 };
+
+// Keeps one of the texture descriptors that bind the same textures, as the pass adds them: a cut
+// can leave an array with the elements of another descriptor of its texture, or with the single
+// texture a descriptor of its own reads. Points the instructions at the descriptors kept.
+void MergeTextureDescriptors(IR::Program& program) {
+    Info& info{program.info};
+    TextureDescriptors merged;
+    Descriptors descriptors{info.texture_buffer_descriptors, info.image_buffer_descriptors, merged,
+                            info.image_descriptors};
+    JoinedDescriptors indices;
+    indices.textures.reserve(info.texture_descriptors.size());
+    for (const TextureDescriptor& desc : info.texture_descriptors) {
+        indices.textures.push_back(descriptors.Add(desc));
+    }
+    if (merged.size() == info.texture_descriptors.size()) {
+        return;
+    }
+    info.texture_descriptors = std::move(merged);
+    RemapTextureDescriptors(program, indices);
+}
 
 // Expects the sample's descriptor to be assigned: the size query reads the same texture (and
 // the same element of a descriptor array).
@@ -1487,6 +1603,36 @@ void PatchTexelFetch(IR::Block& block, IR::Inst& inst, TexturePixelFormat pixel_
                               ir.FPMul(ir.ConvertSToF(32, 32, ir.BitCast<IR::U32>(w)), max_value));
     inst.ReplaceUsesWith(converted);
 }
+
+// The type TexturePass gives the texture an instruction reads, opcode being its indexed one. A
+// size query carries none: it takes that of another instruction with the same handle program, or
+// the one its handle reads as.
+TextureType ResolvedTextureType(Environment& env, const TextureInst& texture_inst,
+                                IR::Opcode opcode,
+                                const std::unordered_map<u32, TextureType>& handle_program_types) {
+    const ConstBufferAddr& cbuf{texture_inst.cbuf};
+    const TextureType type{texture_inst.inst->Flags<IR::TextureInstInfo>().type.Value()};
+    switch (opcode) {
+    case IR::Opcode::ImageQueryDimensions:
+        if (const auto it{handle_program_types.find(cbuf.handle_program)};
+            it != handle_program_types.end()) {
+            return it->second;
+        }
+        return ReadTextureTypeCached(env, cbuf);
+    case IR::Opcode::ImageFetch:
+        // Replace with the bound texture type only when it's a texture buffer
+        // If the instruction is 1D and the bound type is 2D, don't change the code and let
+        // the rasterizer robustness handle it
+        // This happens on Fire Emblem: Three Houses
+        if (type == TextureType::Color1D &&
+            ReadTextureTypeCached(env, cbuf) == TextureType::Buffer) {
+            return TextureType::Buffer;
+        }
+        return type;
+    default:
+        return type;
+    }
+}
 } // Anonymous namespace
 
 void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo& host_info) {
@@ -1522,7 +1668,6 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
         program.info.texture_descriptors,
         program.info.image_descriptors,
     };
-    const u32 sampled_dynamic_cap = DynamicSampledTextureCap(program.info, host_info, DynamicSampledTextureArrayCount(to_replace));
     bool has_last_is_integer{false};
     u32 last_cbuf_index{};
     u32 last_cbuf_offset{};
@@ -1554,6 +1699,9 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                 texture_inst.inst->Flags<IR::TextureInstInfo>().type.Value());
         }
     }
+    const u32 sampled_dynamic_cap = DynamicSampledTextureCap(
+        program.info, host_info,
+        DynamicSampledTextureArrayCount(env, to_replace, handle_program_types));
     for (TextureInst& texture_inst : to_replace) {
         // TODO: Handle arrays
         IR::Inst* const inst{texture_inst.inst};
@@ -1565,12 +1713,8 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
         bool is_rect_sample{false};
         switch (inst->GetOpcode()) {
         case IR::Opcode::ImageQueryDimensions:
-            if (const auto it{handle_program_types.find(cbuf.handle_program)};
-                it != handle_program_types.end()) {
-                flags.type.Assign(it->second);
-            } else {
-                flags.type.Assign(ReadTextureTypeCached(env, cbuf));
-            }
+            flags.type.Assign(
+                ResolvedTextureType(env, texture_inst, inst->GetOpcode(), handle_program_types));
             inst->SetFlags(flags);
             break;
         case IR::Opcode::ImageSampleImplicitLod:
@@ -1587,25 +1731,14 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
             } else {
                 inst->SetArg(4, IR::U32{});
             }
-            if (flags.type != TextureType::Color1D) {
-                break;
-            }
-            if (ReadTextureTypeCached(env, cbuf) == TextureType::Buffer) {
-                // Replace with the bound texture type only when it's a texture buffer
-                // If the instruction is 1D and the bound type is 2D, don't change the code and let
-                // the rasterizer robustness handle it
-                // This happens on Fire Emblem: Three Houses
-                flags.type.Assign(TextureType::Buffer);
-            }
+            flags.type.Assign(
+                ResolvedTextureType(env, texture_inst, inst->GetOpcode(), handle_program_types));
             break;
         default:
             break;
         }
         u32 index;
-        // The index of an array of handle program results is the element itself.
-        u32 size_shift = cbuf.count <= 1                ? DESCRIPTOR_SIZE_SHIFT
-                         : cbuf.handle_program != ~0U ? 0U
-                                                       : DynamicDescriptorSizeShift(cbuf.dynamic_offset);
+        const u32 size_shift{DescriptorSizeShift(cbuf)};
         u32 count = cbuf.count;
         switch (inst->GetOpcode()) {
         case IR::Opcode::ImageRead:
@@ -1718,9 +1851,21 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                     .secondary_cbuf_offset = cbuf.secondary_offset,
                     .secondary_shift_left = cbuf.secondary_shift_left,
                     .count = count,
-                    .size_shift = size_shift,
+                    // One element has no stride (see CapTextureArrays).
+                    .size_shift = count > 1 ? size_shift : DESCRIPTOR_SIZE_SHIFT,
                     .handle_program = cbuf.handle_program,
+                    .is_descriptor_array = cbuf.count > 1,
+                    .handle_is_pointer_word = texture_inst.pointer_word,
                 });
+                if (texture_inst.pointer_word &&
+                    std::ranges::none_of(program.info.storage_buffers_descriptors,
+                                         [&cbuf](const auto& storage) {
+                                             return storage.cbuf_index == cbuf.index &&
+                                                    cbuf.offset >= storage.cbuf_offset &&
+                                                    cbuf.offset - storage.cbuf_offset < sizeof(u64);
+                                         })) {
+                    program.info.binds_unmapped_pointer_word = true;
+                }
                 flags.is_integer.Assign(is_integer ? 1 : 0);
             }
             break;
@@ -1754,8 +1899,10 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
 
 void LimitSampledTextureArrays(IR::Program& program, const HostTranslateInfo& host_info) {
     auto& info = program.info;
+    // Arrays a cap (the pass's, or this one's for a half of a joined stage) has cut to a single
+    // element count too: the stage must still fit with them.
     const u32 arrays = static_cast<u32>(std::ranges::count_if(
-        info.texture_descriptors, [](const auto& desc) { return desc.count > 1; }));
+        info.texture_descriptors, [](const auto& desc) { return IsDescriptorArray(desc); }));
     if (arrays == 0) {
         return;
     }
@@ -1807,8 +1954,32 @@ void LimitPipelineSampledTextureArrays(std::span<IR::Program* const> programs,
     }
 }
 
-void JoinTextureInfo(Info& base, Info& source, std::span<const u32> storage_bindings) {
+void LimitSharedStageSampledTextureArrays(std::span<IR::Program* const> programs,
+                                          const HostTranslateInfo& host_info,
+                                          u32 auxiliary_resources) {
+    u32 other_resources{auxiliary_resources};
+    for (const IR::Program* const program : programs) {
+        const Info& info{program->info};
+        other_resources += NumDescriptors(info.constant_buffer_descriptors) +
+                           NumDescriptors(info.storage_buffers_descriptors) +
+                           NumDescriptors(info.image_buffer_descriptors) +
+                           NumDescriptors(info.image_descriptors);
+    }
+    // The pipeline limiter already counts every texture array and texel buffer across programs.
+    // Give it the budget of their shared host stage, after the non-sampled resources.
+    HostTranslateInfo shared{host_info};
+    shared.max_descriptor_set_samplers = (std::min)(host_info.max_descriptor_set_samplers,
+                                                    host_info.max_per_stage_descriptor_samplers);
+    shared.max_descriptor_set_sampled_images =
+        (std::min)({host_info.max_descriptor_set_sampled_images,
+                    host_info.max_per_stage_descriptor_sampled_images,
+                    SaturatingSub(host_info.max_per_stage_resources, other_resources)});
+    LimitPipelineSampledTextureArrays(programs, shared);
+}
+
+JoinedDescriptors JoinTextureInfo(Info& base, Info& source, std::span<const u32> storage_bindings) {
     base.requires_coherent_image_memory |= source.requires_coherent_image_memory;
+    base.binds_unmapped_pointer_word |= source.binds_unmapped_pointer_word;
     // The handle programs of source join those of base (once each, as the pass keeps them),
     // reading its storage buffers at their bindings in base.
     std::vector<u32> program_index(source.handle_programs.size());
@@ -1835,23 +2006,58 @@ void JoinTextureInfo(Info& base, Info& source, std::span<const u32> storage_bind
         base.texture_descriptors,
         base.image_descriptors,
     };
-    const auto add = [&](auto desc) {
+    JoinedDescriptors joined;
+    const auto add = [&](auto desc, std::vector<u32>& indices) {
         if (desc.handle_program != ~0U) {
             desc.handle_program = program_index[desc.handle_program];
         }
-        descriptors.Add(desc);
+        indices.push_back(descriptors.Add(desc));
     };
     for (auto& desc : source.texture_buffer_descriptors) {
-        add(desc);
+        add(desc, joined.texture_buffers);
     }
     for (auto& desc : source.image_buffer_descriptors) {
-        add(desc);
+        add(desc, joined.image_buffers);
     }
     for (auto& desc : source.texture_descriptors) {
-        add(desc);
+        add(desc, joined.textures);
     }
     for (auto& desc : source.image_descriptors) {
-        add(desc);
+        add(desc, joined.images);
+    }
+    return joined;
+}
+
+void RemapTextureDescriptors(IR::Program& program, const JoinedDescriptors& descriptors) {
+    const auto remap = [](const std::vector<u32>& indices, u32 index) {
+        return index < indices.size() ? indices[index] : index;
+    };
+    for (IR::Block* const block : program.post_order_blocks) {
+        for (IR::Inst& inst : block->Instructions()) {
+            const IR::Opcode opcode{inst.GetOpcode()};
+            if (opcode == IR::Opcode::IsTextureScaled || opcode == IR::Opcode::IsImageScaled) {
+                // The rescaling pass's test of a descriptor, which the pipeline's rescaling bits
+                // number as the texture and image descriptors are.
+                if (inst.Arg(0).IsImmediate()) {
+                    const auto& indices{opcode == IR::Opcode::IsTextureScaled ? descriptors.textures
+                                                                              : descriptors.images};
+                    inst.SetArg(0, IR::Value{remap(indices, inst.Arg(0).U32())});
+                }
+                continue;
+            }
+            const bool is_image{IsStorageImageOpcode(opcode)};
+            if (!is_image && !IsSampledImageOpcode(opcode)) {
+                continue;
+            }
+            // The lists the texture pass took the descriptor from.
+            auto flags{inst.Flags<IR::TextureInstInfo>()};
+            const bool is_buffer{flags.type == TextureType::Buffer};
+            const auto& indices{
+                is_image ? (is_buffer ? descriptors.image_buffers : descriptors.images)
+                         : (is_buffer ? descriptors.texture_buffers : descriptors.textures)};
+            flags.descriptor_index.Assign(remap(indices, flags.descriptor_index));
+            inst.SetFlags(flags);
+        }
     }
 }
 

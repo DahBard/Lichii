@@ -5,14 +5,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
-#include <cstdlib>
 #include <thread>
 
 #include "common/display_hdr.h"
+#include "common/dkb_frame_trace.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
+#ifdef _WIN32
+#include "common/windows/timer_resolution.h"
+#endif
 #include "core/frontend/emu_window.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
@@ -25,6 +30,9 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_surface.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#ifdef EGLANTINE_STREAMLINE
+#include "video_core/vulkan_common/streamline.h"
+#endif
 
 namespace Vulkan {
 
@@ -36,6 +44,22 @@ constexpr u32 MAX_PRESENT_ATTEMPTS = 3;
 #ifdef HAS_LSFG
 static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
 #endif
+
+// Sleeps until the deadline, without spinning: it may pass by up to a timer tick (about 0.5 ms
+// on Windows), well within a refresh, and the next deadline counts from the actual present.
+void SleepUntil(std::chrono::steady_clock::time_point deadline) {
+    while (true) {
+        const auto left = deadline - std::chrono::steady_clock::now();
+        if (left <= std::chrono::steady_clock::duration::zero()) {
+            return;
+        }
+#ifdef _WIN32
+        Common::Windows::SleepForOneTick();
+#else
+        std::this_thread::sleep_for(left);
+#endif
+    }
+}
 
 bool CanStoreToFrame(const vk::PhysicalDevice& physical_device, VkFormat format) {
 #ifdef HAS_LSFG
@@ -137,7 +161,10 @@ PresentManager::PresentManager(const vk::Instance& instance_,
     , swapchain{swapchain_}
     , surface{surface_}
     , storage_supported{CanStoreToFrame(device.GetPhysical(), swapchain.GetImageFormat())}
-    , use_present_thread{Settings::values.async_presentation.GetValue()}
+    // Frame generation needs the present thread to space generated frames without stalling the
+    // emulator.
+    , use_present_thread{Settings::values.async_presentation.GetValue() ||
+                         Settings::values.frame_gen.GetValue()}
 {
     SetImageCount();
 
@@ -183,12 +210,44 @@ PresentManager::PresentManager(const vk::Instance& instance_,
             std::jthread([this](std::stop_token token) { PresentWaitThread(token); });
     }
     if (use_present_thread) {
-        present_thread = std::jthread([this](std::stop_token token) { PresentThread(token); });
+        StartPresentThread();
+    }
+}
+
+void PresentManager::StartPresentThread() {
+    use_present_thread = true;
+    present_thread = std::jthread([this](std::stop_token token) { PresentThread(token); });
+}
+
+void PresentManager::LogPacing(const Frame* frame, std::chrono::steady_clock::duration took,
+                               std::chrono::steady_clock::time_point now) {
+    if (!Settings::values.frame_gen.GetValue()) {
+        return;
+    }
+    const bool generated = frame->present_spacing.count() != 0;
+    ++(generated ? pacing_log.generated : pacing_log.real);
+    pacing_log.spacing += frame->present_spacing;
+    pacing_log.present_time += took;
+    if (pacing_log.since == std::chrono::steady_clock::time_point{}) {
+        pacing_log.since = now;
+    } else if (now - pacing_log.since >= std::chrono::seconds(10)) {
+        const auto ms = [](auto duration) {
+            return std::chrono::duration<double, std::milli>(duration).count();
+        };
+        const u64 total = pacing_log.real + pacing_log.generated;
+        LOG_INFO(Render_Vulkan,
+                 "Frame gen pacing (10 s): {} real and {} generated presents, spacing {:.2f} ms "
+                 "after each generated frame, {:.2f} ms average wait and present",
+                 pacing_log.real, pacing_log.generated,
+                 pacing_log.generated ? ms(pacing_log.spacing) / pacing_log.generated : 0.0,
+                 total ? ms(pacing_log.present_time) / total : 0.0);
+        pacing_log = {.since = now};
     }
 }
 
 PresentManager::~PresentManager() {
-    // The present thread uses the pacer and the wait queue: stop it first.
+    // The present thread uses the pacer and the wait queue, and FrameGenSuspend uses state only
+    // the present thread touches: stop it first.
     if (present_thread.joinable()) {
         present_thread.request_stop();
         present_thread.join();
@@ -197,12 +256,16 @@ PresentManager::~PresentManager() {
         present_wait_thread.request_stop();
         present_wait_thread.join();
     }
+#ifdef EGLANTINE_STREAMLINE
+    Streamline::FrameGenSuspend();
+#endif
 }
 
 Frame* PresentManager::GetRenderFrame() {
 
     VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::PresentWait};
     // Wait for free presentation frames
+    const auto waiting = std::chrono::steady_clock::now();
     std::unique_lock lock{free_mutex};
     if (free_queue.empty() && !scheduler.IsSubmitted(AmdFrameGen::LastPrepareTick())) {
         // Replacing AMD's swapchain on the present thread waits for the last prepare pass:
@@ -219,13 +282,24 @@ Frame* PresentManager::GetRenderFrame() {
 
     // Wait for the presentation to be finished so all frame resources are free
     frame->present_done.Wait();
+    blocked_time.fetch_add((std::chrono::steady_clock::now() - waiting).count(),
+                           std::memory_order_relaxed);
     frame->present_done.Reset();
     frame->color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    frame->present_spacing = {};
+#ifdef EGLANTINE_STREAMLINE
+    frame->frame_gen = false;
+#endif
 
     return frame;
 }
 
 void PresentManager::Present(Frame* frame) {
+    if (!use_present_thread && Settings::values.frame_gen.GetValue()) {
+        // Frame generation was turned on from the status bar while a game runs. Earlier frames
+        // were presented here, so none are in flight.
+        StartPresentThread();
+    }
     if (use_present_thread) {
         scheduler.Record([this, frame](vk::CommandBuffer) {
             frame->queued_at = std::chrono::steady_clock::now();
@@ -403,13 +477,6 @@ void PresentManager::PresentThread(std::stop_token token) {
                 held = PaceFrame(next, token);
                 lock.lock();
             }
-            {
-                // Held at the queue's front like PaceFrame's frames, with no lock taken.
-                const Frame* const next = present_queue.front();
-                lock.unlock();
-                PaceGeneratedFrame(next, token);
-                lock.lock();
-            }
             // Take the frame and notify anyone waiting
             Frame* frame = present_queue.front();
             present_queue.pop_front();
@@ -419,8 +486,17 @@ void PresentManager::PresentThread(std::stop_token token) {
             // before the queue lock goes out of scope. This way the swapchain
             // lock in WaitPresent is guaranteed to occur after here.
             void(std::exchange(lock, std::unique_lock{swapchain_mutex}));
+            const bool trace = Common::DkbFrameTrace::Enabled();
+            const auto ready = trace ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
+            SleepUntil(next_present);
             last_present_id = 0;
             CopyToSwapchain(frame);
+            const auto presented = std::chrono::steady_clock::now();
+            next_present = presented + frame->present_spacing;
+            if (trace) {
+                LogPacing(frame, presented - ready, presented);
+            }
             if (present_wait_enabled) {
                 const auto submitted = std::chrono::steady_clock::now();
                 pacer.NoteSubmitted(last_present_id, submitted, held);
@@ -439,85 +515,6 @@ void PresentManager::PresentThread(std::stop_token token) {
             free_cv.notify_one();
         }
     }
-}
-
-void PresentManager::PaceGeneratedFrame(const Frame* frame, std::stop_token token) {
-    using Clock = std::chrono::steady_clock;
-    // LICHII_FG_PACING=0: generated frames go out back to back with their game frame, as
-    // upstream does. That suits a fixed refresh at a multiple of the game's rate, where the
-    // vblanks space them. With variable refresh (or another rate) the generated frame shows for
-    // one refresh and the game frame right after it, so motion looks as it did without them.
-    static const bool enabled = [] {
-        const char* const value = std::getenv("LICHII_FG_PACING");
-        return value == nullptr || value[0] != '0';
-    }();
-    if (frame->generated_index == 0) {
-        // The game frame interval, from when game frames reached the queue.
-        if (last_game_frame_queued != Clock::time_point{}) {
-            const auto measured = frame->queued_at - last_game_frame_queued;
-            if (measured > std::chrono::nanoseconds{0} && measured < std::chrono::milliseconds{250}) {
-                game_frame_interval = game_frame_interval == std::chrono::nanoseconds{0}
-                                          ? measured
-                                          : game_frame_interval + (measured - game_frame_interval) / 4;
-            }
-        }
-        last_game_frame_queued = frame->queued_at;
-    }
-    auto& stats = generated_pacing;
-    const auto note_present = [&] {
-        const auto now = Clock::now();
-        if (frame->generated_count != 0 && stats.last_present != Clock::time_point{}) {
-            const double gap = std::chrono::duration<double, std::milli>(now - stats.last_present).count();
-            if (frame->generated_index == 0) {
-                stats.to_game_ms += gap;
-                ++stats.to_game_count;
-            } else {
-                stats.to_generated_ms += gap;
-                ++stats.to_generated_count;
-            }
-        }
-        stats.last_present = now;
-        if (stats.window_start == Clock::time_point{}) {
-            stats.window_start = now;
-        } else if (now - stats.window_start >= std::chrono::seconds{10}) {
-            if (stats.to_game_count != 0 && stats.to_generated_count != 0) {
-                LOG_INFO(Render_Vulkan,
-                         "Frame generation pacing{}: game frames every {:.1f} ms; a generated "
-                         "frame went out {:.1f} ms after the frame before it, its game frame "
-                         "{:.1f} ms after it",
-                         enabled ? "" : " (off, LICHII_FG_PACING=0)",
-                         std::chrono::duration<double, std::milli>(game_frame_interval).count(),
-                         stats.to_generated_ms / stats.to_generated_count,
-                         stats.to_game_ms / stats.to_game_count);
-            }
-            stats = {.window_start = now, .last_present = now};
-        }
-    };
-    if (!enabled || frame->generated_count == 0 ||
-        game_frame_interval == std::chrono::nanoseconds{0}) {
-        next_generated_present = {};
-        note_present();
-        return;
-    }
-    const auto spacing = game_frame_interval / (frame->generated_count + 1);
-    // The first generated frame starts its game frame's sequence; each later frame waits a
-    // spacing after the one before, never longer than a spacing from now.
-    if (frame->generated_index != 1) {
-        const auto until = std::min(next_generated_present, Clock::now() + spacing);
-        while (!token.stop_requested()) {
-            const auto left = until - Clock::now();
-            if (left <= Clock::duration::zero()) {
-                break;
-            }
-            if (left > std::chrono::milliseconds{2}) {
-                std::this_thread::sleep_for(left - std::chrono::milliseconds{1});
-            } else {
-                std::this_thread::yield();
-            }
-        }
-    }
-    next_generated_present = Clock::now() + spacing;
-    note_present();
 }
 
 bool PresentManager::PaceFrame(Frame* frame, std::stop_token token) {
@@ -576,8 +573,8 @@ bool PresentManager::PaceFrame(Frame* frame, std::stop_token token) {
     // getting a frame for the next one, so every frame arrived right after the last was shown
     // and waited a whole frame (~30 ms of input lag). The game's pacing lines its frames up with
     // the refreshes instead (g_host_phase_ns).
-    if (VideoCommon::Nx2Perf::g_guest_frame_interval_ns.load(std::memory_order_relaxed) >=
-        25'000'000) {
+    if (static_cast<long long>(Tegra::g_nx2_guest_frame_interval_ns.load(
+            std::memory_order_relaxed)) >= 25'000'000) {
         VideoCommon::Nx2Perf::g_host_phase_ns.store(pacer.NsToNextRefresh(start),
                                                     std::memory_order_relaxed);
         // Only a short hold, for a frame that would be shown a refresh early (after a late
@@ -683,6 +680,9 @@ bool PresentManager::RecreateSwapchain(Frame* frame) {
             ReportShown(item.id, std::chrono::steady_clock::now(), true);
         }
     }
+#ifdef EGLANTINE_STREAMLINE
+    Streamline::FrameGenSuspend();
+#endif
     if (swapchain.Create(*surface, frame->width, frame->height, frame->format,
                          frame->color_space)) {
         SetImageCount();
@@ -749,6 +749,13 @@ void PresentManager::DiscardFrame(Frame* frame) {
 }
 
 void PresentManager::CopyToSwapchain(Frame* frame) {
+#ifdef EGLANTINE_STREAMLINE
+    SCOPE_EXIT {
+        if (frame->frame_gen) {
+            Streamline::FrameGenClosePresent(frame->frame_gen_frame.index);
+        }
+    };
+#endif
     bool requires_recreation = false;
 
     for (u32 attempt = 0; attempt < MAX_PRESENT_ATTEMPTS; ++attempt) {
@@ -978,7 +985,24 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
                        scale(rect_height, extent.height, frame->height)},
         };
     }
+#ifdef EGLANTINE_STREAMLINE
+    if (frame->frame_gen) {
+        Streamline::FrameGenBeforePresent({
+            .frame = frame->frame_gen_frame,
+            .guest_rect = frame->guest_rect,
+            .frame_extent = {frame->width, frame->height},
+            .swapchain_extent = extent,
+            .swapchain_format = swapchain.GetImageFormat(),
+            .swapchain_images = static_cast<u32>(swapchain.GetImageCount()),
+        });
+    }
+#endif
     last_present_id = swapchain.Present(render_semaphore, frame_gen);
+#ifdef EGLANTINE_STREAMLINE
+    if (frame->frame_gen) {
+        Streamline::FrameGenAfterPresent(frame->frame_gen_frame.index);
+    }
+#endif
 }
 
 } // namespace Vulkan

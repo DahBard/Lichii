@@ -81,6 +81,8 @@ static const std::map<Settings::FrameGenType, QString> frame_gen_type_texts_map 
     {Settings::FrameGenType::Lsfg, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "LSFG"))},
     {Settings::FrameGenType::Fsr3, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "Optical Flow"))},
     {Settings::FrameGenType::AmdFsr, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "AMD FSR"))},
+    {Settings::FrameGenType::NvidiaDlssG,
+     QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "NVIDIA DLSS Frame Generation"))},
 };
 
 static const std::map<Settings::ScalingFilter, QString> scaling_filter_texts_map = {

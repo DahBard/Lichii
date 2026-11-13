@@ -30,6 +30,9 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#if defined(EGLANTINE_STREAMLINE) && !defined(HAS_LSFG)
+#include "video_core/vulkan_common/streamline.h"
+#endif
 
 namespace Core::Memory {
 class Memory;
@@ -84,6 +87,12 @@ public:
 #ifdef HAS_LSFG
         return {.state = lsfg_status.state, .generated_frames = generated};
 #else
+#ifdef EGLANTINE_STREAMLINE
+        if (Streamline::FrameGenActive()) {
+            return {.state = VideoCore::FrameGenState::NvidiaFrameGen,
+                    .generated_frames = generated};
+        }
+#endif
         return {.state = VideoCore::FrameGenState::UnsupportedBuild, .generated_frames = generated};
 #endif
     }
@@ -135,6 +144,8 @@ private:
     VkCommandBuffer BeginSingleTimeCommands();
     void EndSingleTimeCommands(VkCommandBuffer command_buffer);
     void Report() const;
+    /// The surface the swapchain is made for, once the device exists.
+    VkSurfaceKHR PresentationSurface();
 
     /// The encoding and luminances this frame is presented with; picks the swapchain format
     /// again when the HDR settings or the monitor's state changed.

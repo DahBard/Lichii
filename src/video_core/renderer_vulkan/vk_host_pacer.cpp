@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "common/logging.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/renderer_vulkan/vk_host_pacer.h"
 
@@ -230,8 +231,8 @@ HostPacer::Clock::time_point HostPacer::Target(Clock::time_point now) {
     // fast frames arrive: holding frames slows the game, and the pacer then locked itself to
     // the slower rate (a loading screen's 25 ms frames held Ocarina at 40 fps). Unknown: only
     // one frame per refresh.
-    const long long guest_ns =
-        VideoCommon::Nx2Perf::g_guest_frame_interval_ns.load(std::memory_order_relaxed);
+    const long long guest_ns = static_cast<long long>(
+        Tegra::g_nx2_guest_frame_interval_ns.load(std::memory_order_relaxed));
     const double frame_refreshes = static_cast<double>(guest_ns) / refresh_ns;
     const s64 k =
         guest_ns > 0 ? (std::max<s64>)(1, static_cast<s64>(std::floor(frame_refreshes + 0.02)))

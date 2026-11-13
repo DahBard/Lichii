@@ -4,8 +4,6 @@
 // SPDX-FileCopyrightText: 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <thread>
-
 #include "common/logging.h"
 #include "video_core/host1x/syncpoint_manager.h"
 
@@ -64,30 +62,13 @@ void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
         LOG_ERROR(HW_GPU, "Ignoring increment of invalid syncpoint {:#x}", syncpoint_id);
         return;
     }
-    Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id]);
-    if (guest_increment_hook.load(std::memory_order_relaxed) != nullptr) {
-        // Counted before the hook is loaded again: a removal either sees the call or the call
-        // sees the removal.
-        guest_increment_calls.fetch_add(1, std::memory_order_seq_cst);
-        if (const auto hook = guest_increment_hook.load(std::memory_order_seq_cst)) {
-            hook(guest_increment_context.load(std::memory_order_relaxed));
-        }
-        guest_increment_calls.fetch_sub(1, std::memory_order_release);
-    }
+    Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id],
+              syncpoint_id);
 }
 
-void SyncpointManager::SetGuestIncrementHook(GuestIncrementHook hook, void* context) {
-    guest_increment_context.store(context, std::memory_order_relaxed);
-    guest_increment_hook.store(hook, std::memory_order_seq_cst);
-}
-
-void SyncpointManager::RemoveGuestIncrementHook(void* context) {
-    if (guest_increment_context.load(std::memory_order_relaxed) == context) {
-        guest_increment_hook.store(nullptr, std::memory_order_seq_cst);
-    }
-    while (guest_increment_calls.load(std::memory_order_seq_cst) != 0) {
-        std::this_thread::yield();
-    }
+void SyncpointManager::SetGuestMirror(GuestMirror mirror) {
+    std::scoped_lock lk(guard);
+    guest_mirror = std::move(mirror);
 }
 
 void SyncpointManager::IncrementHost(u32 syncpoint_id) {
@@ -106,10 +87,15 @@ void SyncpointManager::WaitHost(u32 syncpoint_id, u32 expected_value) {
 }
 
 void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
-                                 std::list<RegisteredAction>& action_storage) {
-    auto new_value{syncpoint.fetch_add(1, std::memory_order_acq_rel) + 1};
-
+                                 std::list<RegisteredAction>& action_storage,
+                                 std::optional<u32> mirrored_id) {
     std::scoped_lock lk(guard);
+    if (mirrored_id && guest_mirror) {
+        // Before the value is published: the lock-free ready checks in RegisterAction and Wait
+        // must not see it ahead of the page.
+        guest_mirror(*mirrored_id, syncpoint.load(std::memory_order_relaxed) + 1);
+    }
+    const u32 new_value{syncpoint.fetch_add(1, std::memory_order_acq_rel) + 1};
     auto it = action_storage.begin();
     while (it != action_storage.end()) {
         if (it->expected_value > new_value) {

@@ -22,7 +22,6 @@
 #include <fstream>
 #include <mutex>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include <fmt/format.h>
@@ -33,7 +32,6 @@
 #include "common/dkb_frame_trace.h"
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
-#include "common/nx2_experiment.h"
 #include "common/nx2_sampler.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -85,7 +83,6 @@
 #include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_stats.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/churn_counters.h"
 #include "video_core/nx2_profile.h"
 
@@ -520,6 +517,17 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
     return *it;
 }
 
+void RasterizerVulkan::ReleaseMeshEmulationBuffers() {
+    for (StagingBufferRef& ref : mesh_draw_buffers) {
+        staging_pool.FreeDeferred(ref);
+    }
+    mesh_draw_buffers.clear();
+    if (mesh_arena_used) {
+        mesh_arena_used = false;
+        mesh_arenas[mesh_arena_current].tick = scheduler.CurrentTick();
+    }
+}
+
 RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra::GPU& gpu_,
                                    Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                    const Device& device_, MemoryAllocator& memory_allocator_,
@@ -557,21 +565,14 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
         const bool dynamic_input =
             features.has_extended_dynamic_state && features.has_dynamic_vertex_input;
         const bool dynamic_strides = test && dynamic_input;
-        const bool test_1161 = VideoCommon::Nx2Test::Draws1161();
         VideoCommon::Nx2FastDraw::g_test_1216.store(test, std::memory_order_relaxed);
         VideoCommon::Nx2FastDraw::g_dynamic_strides.store(dynamic_strides,
                                                           std::memory_order_relaxed);
-        VideoCommon::Nx2FastDraw::g_test_1161_draws.store(test_1161, std::memory_order_relaxed);
-        VideoCommon::Nx2FastDraw::g_vertex_streams_dynamic.store(test_1161 && dynamic_input,
-                                                                 std::memory_order_relaxed);
         LOG_INFO(Render_Vulkan,
                  "Fast draws: extended dynamic state {}, dynamic vertex input {}, dynamic strides "
-                 "{} (EDEN_NX2_TEST_1216 {}), attribute formats as draw parameters {} "
-                 "(EDEN_NX2_TEST_1161_DRAWS {}), delta draws with computed handles {}",
+                 "{} (EDEN_NX2_TEST_1216 {})",
                  features.has_extended_dynamic_state, features.has_dynamic_vertex_input,
-                 dynamic_strides, test ? "on" : "off", test_1161 && dynamic_input,
-                 test_1161 ? "on" : "off",
-                 VideoCommon::Nx2Test::Handles1161() ? "on" : "off (EDEN_NX2_TEST_1161_HANDLES=0)");
+                 dynamic_strides, test ? "on" : "off");
         InitFastDrawBreakClasses();
     }
     buffer_cache.SetPendingCpuWrites(
@@ -585,6 +586,8 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
 
 RasterizerVulkan::~RasterizerVulkan() {
     VideoCommon::GpuSplit::Get().SetIdleHook(nullptr, nullptr);
+    // The channels are gone by now, and submitting invalidates the state tracker's flags.
+    state_tracker.ClearChannel();
     scheduler.WaitWorker();
     scheduler.Finish();
 }
@@ -635,6 +638,8 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
     const FastDraw::Delta delta = std::exchange(FastDraw::g_delta, FastDraw::Delta{});
+    // A draw that stopped before binding its uniforms never handed its writes to the keeps.
+    uniform_writes_lost |= std::exchange(taken_delta_unconsumed, true);
     taken_delta = delta;
     const auto full = [&](FullDraw reason) -> GraphicsPipeline* {
         ++fast_draw_stats.full[static_cast<size_t>(reason)];
@@ -689,19 +694,12 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
     }
     // Vertex attribute formats are draw parameters with dynamic vertex input (UpdateVertexInput
     // records them for every draw); only the type class of each attribute is in the pipeline key.
-    if (FastDraw::g_vertex_streams_dynamic.load(std::memory_order_relaxed) &&
-        maxwell3d->dirty.flags[Dirty::VertexInput]) {
-        if (!draw.pipeline->HasDynamicVertexInput() ||
-            !pipeline_cache.KeepsAttributeTypes(
-                *draw.pipeline, FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs))) {
-            return full(FullDraw::VertexInput);
-        }
-        ++fast_draw_stats.formats_kept;
+    if (maxwell3d->dirty.flags[Dirty::VertexInput] &&
+        (!draw.pipeline->HasDynamicVertexInput() ||
+         !pipeline_cache.KeepsAttributeTypes(
+             *draw.pipeline, FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs)))) {
+        return full(FullDraw::VertexInput);
     }
-    if (delta.no_uniform_keeps) {
-        ++fast_draw_stats.widened;
-    }
-    const bool handle_words = FastDraw::g_test_1161_draws.load(std::memory_order_relaxed);
     const auto& handles = draw.pipeline->HandleConstantBuffers();
     for (size_t stage = 0; stage < handles.size() && !delta.Empty(); ++stage) {
         if ((delta.binds[stage] & handles[stage]) != 0) {
@@ -714,17 +712,9 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
         for (u32 mask = handles[stage]; mask != 0; mask &= mask - 1) {
             const u32 slot = std::countr_zero(mask);
             const auto& cbuf = cbufs[slot];
-            FastDraw::DeviceSpans& spans = handle_spans[stage][slot];
-            if (!handle_words) {
-                // TEST: EDEN_NX2_TEST_1161_DRAWS=0 checks the whole buffer.
-                spans.Update(*gpu_memory, cbuf.address, cbuf.size);
-                if (delta.Reaches(cbuf.address, cbuf.size, spans)) {
-                    return full(FullDraw::HandleData);
-                }
-                continue;
-            }
             // Only the words the handles are read from: draws write their own data next to them.
             const auto [begin, end] = draw.pipeline->HandleRange(stage, slot);
+            FastDraw::DeviceSpans& spans = handle_spans[stage][slot];
             spans.Update(*gpu_memory, cbuf.address + begin, end - begin);
             if (delta.Reaches(cbuf.address + begin, end - begin, spans)) {
                 if (delta.ReachesWords(cbuf.address, draw.pipeline->HandleWords(stage, slot),
@@ -732,7 +722,6 @@ GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_in
                     return full(FullDraw::HandleData);
                 }
                 taken_delta.no_uniform_keeps = true;
-                ++fast_draw_stats.between_handles;
             }
         }
     }
@@ -858,7 +847,7 @@ void RasterizerVulkan::ReportFastDraws() {
     const u64 all_ns = stats.prepare_ns[0] + stats.prepare_ns[1];
     static constexpr std::array<const char*,
                                 static_cast<size_t>(GraphicsPipeline::DeltaBlocker::Count)>
-        blocker_names{"none", "writes images", "mesh", "computed handles", "not configured"};
+        blocker_names{"none", "writes images", "mesh", "not configured"};
     std::string blockers;
     for (size_t blocker = 0; blocker < stats.delta_blockers.size(); ++blocker) {
         if (stats.delta_blockers[blocker] != 0) {
@@ -873,25 +862,18 @@ void RasterizerVulkan::ReportFastDraws() {
              ineligible, micros(DrawPath::Full), micros(DrawPath::Delta),
              all_draws == 0 ? 0.0 : static_cast<double>(all_ns) / 1e3 / static_cast<double>(all_draws),
              static_cast<double>(all_draws) / seconds);
-    LOG_INFO(Render_Vulkan,
-             "Fast draw #1161 per second: {:.0f} widened delta lists (delta overflows before), "
-             "{:.0f} handle buffers written between their handles, {:.0f} vertex attribute format "
-             "changes kept (EDEN_NX2_TEST_1161_DRAWS {})",
-             static_cast<double>(stats.widened) / seconds,
-             static_cast<double>(stats.between_handles) / seconds,
-             static_cast<double>(stats.formats_kept) / seconds,
-             VideoCommon::Nx2FastDraw::g_test_1161_draws.load(std::memory_order_relaxed) ? "on"
-                                                                                    : "off");
     if (fast_draw_verify) {
         LOG_INFO(Render_Vulkan,
                  "Fast draw verify per second: {:.0f} checked, {:.0f} pipeline mismatches, {:.0f} "
-                 "view or sampler mismatches, {:.0f} kept buffer binding mismatches (totals {} {} "
-                 "{} {})",
+                 "view or sampler mismatches, {:.0f} kept buffer binding mismatches, {:.0f} "
+                 "vertex input mismatches (totals {} {} {} {} {})",
                  static_cast<double>(stats.verified) / seconds,
                  static_cast<double>(stats.pipeline_mismatches) / seconds,
                  static_cast<double>(stats.view_mismatches) / seconds,
-                 static_cast<double>(stats.binding_mismatches) / seconds, stats.verified,
-                 stats.pipeline_mismatches, stats.view_mismatches, stats.binding_mismatches);
+                 static_cast<double>(stats.binding_mismatches) / seconds,
+                 static_cast<double>(stats.vertex_input_mismatches) / seconds, stats.verified,
+                 stats.pipeline_mismatches, stats.view_mismatches, stats.binding_mismatches,
+                 stats.vertex_input_mismatches);
     }
     std::string breaks;
     for (size_t reason = 0; reason < stats.breaks.size(); ++reason) {
@@ -972,6 +954,95 @@ void RasterizerVulkan::ReportFastDraws() {
         LOG_INFO(Render_Vulkan, "Fast draw deferred call breaks per second by thunk:{}", text);
     }
     stats = FastDrawStats{.window_start = now};
+}
+
+RasterizerVulkan::DrawReuse RasterizerVulkan::NoteDrawReuse(const GraphicsPipeline& pipeline,
+                                                            bool is_indexed) {
+    u64 key = buffer_cache.KeptGraphicsBindingsHash(true, true, false);
+    const auto mix = [&key](u64 value) { key = (key ^ value) * 0x100000001b3ULL; };
+    mix(reinterpret_cast<u64>(&pipeline));
+    if (const Framebuffer* const framebuffer = texture_cache.GetFramebuffer()) {
+        mix(reinterpret_cast<u64>(framebuffer->Handle()));
+        mix(reinterpret_cast<u64>(framebuffer->RenderPass()));
+    }
+    for (const auto& image : pipeline.SampledImages()) {
+        mix((u64{image.id.index} << 32) | image.sampler.index);
+    }
+    const auto& streams = maxwell3d->regs.vertex_streams;
+    for (u32 index = 0; index < streams.size(); ++index) {
+        if (streams[index].IsEnabled()) {
+            mix((u64{index} << 32) | streams[index].stride);
+        }
+    }
+    mix(is_indexed ? 1 : 0);
+    if (is_indexed) {
+        const auto& index_buffer = maxwell3d->draw_manager.draw_state.index_buffer;
+        mix(index_buffer.StartAddress());
+        mix(static_cast<u64>(index_buffer.format));
+    }
+    if (draw_reuse.previous_frame.contains(key)) {
+        draw_reuse.frame.insert(key);
+        return DrawReuse::Hit;
+    }
+    return draw_reuse.frame.insert(key).second ? DrawReuse::Miss : DrawReuse::Repeat;
+}
+
+void RasterizerVulkan::TickDrawReuse() {
+    auto& probe = draw_reuse;
+    std::swap(probe.previous_frame, probe.frame);
+    probe.frame.clear();
+    ++probe.frames;
+    const u64 now = VideoCommon::Nx2Profile::Now();
+    if (probe.window_start == 0) {
+        probe.window_start = now;
+    }
+    if (now - probe.window_start < 10'000'000'000ULL) {
+        return;
+    }
+    const auto churn = [&] {
+        std::scoped_lock lock{texture_cache.mutex};
+        return texture_cache.TakeChurn();
+    }();
+    const auto [memo_hits, memo_misses] = GraphicsPipeline::TakeTextureMemoCounts();
+    const double frames = static_cast<double>(probe.frames);
+    const auto per_frame = [frames](u64 count) { return static_cast<double>(count) / frames; };
+    static constexpr std::array<const char*, static_cast<size_t>(DrawReuse::Count)> names{
+        "hit", "same-frame repeat", "miss"};
+    std::string classes;
+    u64 classed = 0;
+    for (size_t index = 0; index < names.size(); ++index) {
+        const auto& draws = probe.draws[index];
+        classed += draws[0] + draws[1];
+        const auto& ns = probe.prepare_ns[index];
+        const auto micros = [&](DrawPath path) {
+            const size_t i = static_cast<size_t>(path);
+            return draws[i] == 0 ? 0.0
+                                 : static_cast<double>(ns[i]) / 1e3 / static_cast<double>(draws[i]);
+        };
+        classes += fmt::format("{} {} full {:.0f} ({:.2f} us) delta {:.0f} ({:.2f} us)",
+                               index == 0 ? "" : ",", names[index],
+                               per_frame(draws[static_cast<size_t>(DrawPath::Full)]),
+                               micros(DrawPath::Full),
+                               per_frame(draws[static_cast<size_t>(DrawPath::Delta)]),
+                               micros(DrawPath::Delta));
+    }
+    LOG_INFO(Render_Vulkan,
+             "Draw reuse per frame over {} frames:{}; gate {:.3f} ms/frame (full-path hits over "
+             "1.1 us); probe {:.2f} us/draw (left out of the times); {:.1f} images created, "
+             "{:.1f} deleted, {:.1f} joins, {:.1f} TIC table invalidations, {:.1f} TIC/TSC table "
+             "moves; texture memo {:.1f} hits, {:.1f} misses",
+             probe.frames, classes, per_frame(probe.gate_ns) / 1e6,
+             classed == 0 ? 0.0
+                          : static_cast<double>(probe.probe_ns) / 1e3 / static_cast<double>(classed),
+             per_frame(churn.created), per_frame(churn.deleted), per_frame(churn.joins),
+             per_frame(churn.invalidations), per_frame(churn.refreshes), per_frame(memo_hits),
+             per_frame(memo_misses));
+    probe.draws = {};
+    probe.prepare_ns = {};
+    probe.gate_ns = 0;
+    probe.probe_ns = 0;
+    probe.frames = 0;
+    probe.window_start = now;
 }
 
 // Experimental adaptation of PokeDinner commit 76df4591a747: execute the reset shader's
@@ -1063,6 +1134,23 @@ bool RasterizerVulkan::TryNx2IndirectReset(bool is_indexed, u32 instance_count) 
 
 template <typename Func>
 void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_indirect) {
+    DrawReuse reuse = DrawReuse::Count;
+    DrawPath reuse_path = DrawPath::Full;
+    u64 reuse_probe_ns = 0;
+    const u64 reuse_start = DrawReuseProbeEnabled() ? VideoCommon::Nx2Profile::Now() : 0;
+    SCOPE_EXIT {
+        if (reuse == DrawReuse::Count) {
+            return;
+        }
+        const u64 ns = VideoCommon::Nx2Profile::Now() - reuse_start - reuse_probe_ns;
+        draw_reuse.probe_ns += reuse_probe_ns;
+        const size_t index = static_cast<size_t>(reuse);
+        ++draw_reuse.draws[index][static_cast<size_t>(reuse_path)];
+        draw_reuse.prepare_ns[index][static_cast<size_t>(reuse_path)] += ns;
+        if (reuse == DrawReuse::Hit && reuse_path == DrawPath::Full && ns > 1100) {
+            draw_reuse.gate_ns += ns - 1100;
+        }
+    };
 
     if (Common::DkbFrameTrace::Enabled()) {
         ++trace_draws;
@@ -1087,6 +1175,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                       render_trace_frame, vs, ps);
         }
     };
+    SCOPE_EXIT {
+        ReleaseMeshEmulationBuffers();
+    };
     namespace Profile = VideoCommon::Nx2Profile;
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     // Latched here, on the thread that draws: turning fast draws on starts with a full resolve,
@@ -1095,6 +1186,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         fast_draw_on = on;
         reusable_draw = {};
         FastDraw::g_delta = {};
+        uniform_writes_lost = true;
         fast_draw_stats = {};
     }
     fast_draw_verify = fast_draw_on && FastDraw::VerifyEnabled();
@@ -1244,12 +1336,14 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         u64 bytes{};
         if (has_task) {
             const MeshArena& arena{AcquireMeshArena()};
+            mesh_arena_used = true;
             bytes = arena.size;
             pipeline->SetMeshEmulationOutput(*arena.buffer, 0, bytes, groups);
         } else {
             bytes = (std::max)(u64{groups} * block_bytes, u64{4});
-            output = staging_pool.Request(bytes, probe_draw ? MemoryUsage::Download
-                                                            : MemoryUsage::DeviceLocal);
+            output = staging_pool.Request(
+                bytes, probe_draw ? MemoryUsage::Download : MemoryUsage::DeviceLocal, true);
+            mesh_draw_buffers.push_back(output);
             pipeline->SetMeshEmulationOutput(output.buffer, output.offset, bytes, groups);
         }
         mesh_emulation_indirect = {};
@@ -1270,7 +1364,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                                   render_trace_frame % 60 == 0};
             const auto request = [&](u64 size, MemoryUsage usage = MemoryUsage::DeviceLocal) {
                 size = (std::max)(size, u64{16});
-                const StagingBufferRef ref{staging_pool.Request(size, usage)};
+                const StagingBufferRef ref{staging_pool.Request(size, usage, true)};
+                mesh_draw_buffers.push_back(ref);
                 return std::make_pair(GraphicsPipeline::MeshEmulationBuffer{ref.buffer, ref.offset,
                                                                             size},
                                       ref.mapped_span.subspan(
@@ -1348,7 +1443,13 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     const bool delta_holds =
         delta_pipeline != nullptr && DeltaStillHolds(draw_serial, draw_map_serial);
     const DrawPath path = delta_holds && !verify_pipeline ? DrawPath::Delta : DrawPath::Full;
-    buffer_cache.BeginGraphicsUniforms(path == DrawPath::Delta ? &taken_delta : nullptr);
+    // EDEN_NX2_FAST_DRAW_VERIFY compares only draws that would have taken the delta path.
+    const bool verify_kept = verify_views && delta_holds;
+    verify_vertex_input = verify_kept;
+    // Every draw keeps the uniform buffers no write reached since they were streamed.
+    buffer_cache.BeginGraphicsUniforms(fast_draw_on && !uniform_writes_lost ? &taken_delta
+                                                                            : nullptr);
+    uniform_writes_lost = taken_delta_unconsumed = false;
     if (path == DrawPath::Delta) {
         if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->ConfigureDelta(is_indexed)) {
             report_failure("configure failed");
@@ -1357,12 +1458,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
         ++fast_draw_stats.delta;
     } else {
-        // What the delta draw would have kept: the texture buffer bindings. Only draws that
-        // passed DeltaStillHolds are compared; the others would have been resolved in full.
-        // TEST: EDEN_NX2_TEST_1161_DRAWS=0 compares every verified draw, as r51 did.
-        const bool verify_kept =
-            verify_views &&
-            (delta_holds || !FastDraw::g_test_1161_draws.load(std::memory_order_relaxed));
+        // What the delta draw would have kept: the texture buffer bindings.
         const u64 kept_bindings =
             verify_kept ? buffer_cache.KeptGraphicsBindingsHash(false, false, true) : 0;
         if (fast_draw_on) {
@@ -1380,6 +1476,12 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             kept_bindings != buffer_cache.KeptGraphicsBindingsHash(false, false, true)) {
             ++fast_draw_stats.binding_mismatches;
         }
+    }
+    if (reuse_start != 0) {
+        const u64 probe_start = VideoCommon::Nx2Profile::Now();
+        reuse = NoteDrawReuse(*pipeline, is_indexed);
+        reuse_path = path;
+        reuse_probe_ns = VideoCommon::Nx2Profile::Now() - probe_start;
     }
 
     TrackOcarinaCamera();
@@ -1425,6 +1527,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     {
         Profile::Scope scope{Profile::Zone::DynamicState};
         UpdateDynamicStates(pipeline);
+        verify_vertex_input = false;
     }
 
     {
@@ -2847,6 +2950,8 @@ void RasterizerVulkan::Query(GPUVAddr gpu_addr, VideoCommon::QueryType type,
             VideoCommon::Nx2DrainCheck::NoteRelease(*released);
         }
     }
+    // Reports and semaphore releases reach guest memory the CPU may wait on.
+    VideoCommon::Nx2FastDraw::NoteSync();
     query_cache.CounterReport(gpu_addr, type, flags, payload, subreport);
     // The split's front reads reports with MME DMA: it flushes the pages left pending here.
     if (VideoCommon::GpuSplit::Get().Active()) {
@@ -2899,10 +3004,10 @@ bool RasterizerVulkan::IsGpuTickDone(u64 tick) {
     if (scheduler.IsFree(tick)) {
         return true;
     }
-    // The GPU thread polls a channel suspended on a list copy back to back (it spins for 500 us
-    // before it sleeps): ~190,000 polls a second on Windows. Each asked the back to submit (a
-    // futex wake, a kernel call on Windows) and the driver for the semaphore's value (also a
-    // kernel call there). Both are needed far less often than that.
+    // The GPU thread polls a channel suspended on a list copy every 20 us for 500 us after
+    // progress, then every 500 us. Each poll would ask the back to submit (a futex wake, a kernel
+    // call on Windows) and the driver for the semaphore's value (also a kernel call there). Both
+    // are needed far less often than that.
     const auto now = std::chrono::steady_clock::now();
     // A deferred submission (Scheduler::DeferFlush) is only made by the split's back: ask it to
     // submit, or the tick never completes while the front polls. Once per tick is enough (the
@@ -3032,12 +3137,10 @@ void RasterizerVulkan::FinishRead(DAddr addr, u64 size) {
 
 bool RasterizerVulkan::NoteReportPending(DAddr addr, u64 size) {
     // A report per draw (Ocarina of Time's occlusion counts), rarely on a page the guest reads
-    // back: most skip the buffer cache's lock (upstream #1161; TEST: EDEN_NX2_TEST_1161_REPORTS).
-    if (VideoCommon::Nx2Test::Reports1161() && !buffer_cache.MayBeReadBackPage(addr)) {
-        VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::ReportLockSkips, 1);
+    // back: most skip the buffer cache's lock.
+    if (!buffer_cache.MayBeReadBackPage(addr)) {
         return false;
     }
-    VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::ReportLocks, 1);
     std::scoped_lock lock{buffer_cache.mutex};
     return buffer_cache.NoteReportPending(addr, size);
 }
@@ -3077,67 +3180,14 @@ bool RasterizerVulkan::HoldsQueries(DAddr addr, u64 size) {
 }
 
 VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64 size) {
-    // A guest read of cached memory asks under both caches' locks, which the split's back holds
-    // through its draws (Fritchii, Castle Town: 12% of the guest cores' busy time went to waiting
-    // for them). Pages no image was ever registered on (page_filter) and no GPU write ever marked
-    // (bits that never clear, set before the buffer cache arms a read trap) need no look: neither
-    // cache finds anything there, and the locked path answers this same preemptive area.
-    // EDEN_NX2_EXP36=1 always takes the locked path (Fritchii 99567589b).
-    static const bool lock_free = Common::ReadNx2Experiment(36, 0) == 0;
-    const DAddr page_begin = Common::AlignDown(addr, Core::DEVICE_PAGESIZE);
-    const DAddr page_end = Common::AlignUp(addr + size, Core::DEVICE_PAGESIZE);
-    if (lock_free && Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
-        !texture_cache.page_filter.Any(addr, size) &&
-        !Tegra::Nx2MayBeGpuWritten(page_begin, page_end - page_begin)) {
-        return VideoCore::RasterizerDownloadArea{
-            .start_address = page_begin,
-            .end_address = page_end,
-            .preemtive = true,
-            .source = VideoCore::DownloadAreaSource::LockFree,
-        };
-    }
-    // EDEN_NX2_EXP60=1 (Fritchii e423d1bd1, off): the back takes both locks again right after it
-    // releases them, so a read waiting for them slept for milliseconds. Spin a little; if they
-    // stay taken, hand the look to the GPU thread with the flush request (GPU::OnCPURead), where
-    // nothing holds them: it runs this locked path there, with its read trap and preflush marks.
-    static const bool hand_over = Common::ReadNx2Experiment(60, 0) != 0;
-    if (hand_over) {
-        constexpr int Tries = 256;
-        bool texture_locked = false;
-        bool buffer_locked = false;
-        for (int attempt = 0; attempt < Tries && !(texture_locked && buffer_locked); ++attempt) {
-            texture_locked = texture_locked || texture_cache.mutex.try_lock();
-            buffer_locked = buffer_locked || buffer_cache.mutex.try_lock();
-            if (!(texture_locked && buffer_locked)) {
-                std::this_thread::yield();
-            }
-        }
-        if (!(texture_locked && buffer_locked)) {
-            if (texture_locked) {
-                texture_cache.mutex.unlock();
-            }
-            if (buffer_locked) {
-                buffer_cache.mutex.unlock();
-            }
-            return VideoCore::RasterizerDownloadArea{
-                .start_address = page_begin,
-                .end_address = page_end,
-                .preemtive = false,
-                .source = VideoCore::DownloadAreaSource::Handed,
-            };
-        }
-        // Both held: the locked path takes them again (they are recursive).
-        const auto area = GetFlushAreaLocked(addr, size);
-        buffer_cache.mutex.unlock();
-        texture_cache.mutex.unlock();
-        return area;
-    }
-    return GetFlushAreaLocked(addr, size);
-}
-
-VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushAreaLocked(DAddr addr, u64 size) {
+    // Guest cores ask this on reads of cached pages, and the back holds both caches' locks through
+    // each draw. Pages no image was ever registered on, and Switch 2 pages the GPU never wrote,
+    // get the clean area the caches would return without a look under their locks (after
+    // Stephen Jayakar's EDEN_NX2_READ_FASTPATH, eb3553bcb8).
     std::optional<VideoCore::RasterizerDownloadArea> texture_area;
-    {
+    bool took_lock = false; // Else the clean area counts as a lock-free read (GpuWaitStats)
+    if (texture_cache.page_filter.Any(addr, size)) {
+        took_lock = true;
         std::scoped_lock lock{texture_cache.mutex};
         texture_area = texture_cache.GetFlushArea(addr, size);
     }
@@ -3151,7 +3201,10 @@ VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushAreaLocked(DAddr add
         texture_area->source = VideoCore::DownloadAreaSource::TextureCache;
         return *texture_area;
     }
-    if (buffer_cache.FlushesOnCpuRead()) {
+    if (buffer_cache.FlushesOnCpuRead() &&
+        (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) ||
+         Tegra::Nx2MayBeGpuWritten(addr, size))) {
+        took_lock = true;
         std::scoped_lock lock{buffer_cache.mutex};
         auto area = buffer_cache.GetFlushArea(addr, size);
         if (area) {
@@ -3163,6 +3216,8 @@ VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushAreaLocked(DAddr add
         .start_address = Common::AlignDown(addr, Core::DEVICE_PAGESIZE),
         .end_address = Common::AlignUp(addr + size, Core::DEVICE_PAGESIZE),
         .preemtive = true,
+        .source = took_lock ? VideoCore::DownloadAreaSource::None
+                            : VideoCore::DownloadAreaSource::LockFree,
     };
     return new_area;
 }
@@ -3198,6 +3253,16 @@ void RasterizerVulkan::InvalidateRegion(DAddr addr, u64 size, VideoCommon::Cache
 }
 
 void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) {
+    InvalidateCachedWrites(sequences, false);
+}
+
+void RasterizerVulkan::InvalidateConstantBufferData(
+    std::span<const std::pair<DAddr, std::size_t>> sequences) {
+    InvalidateCachedWrites(sequences, true);
+}
+
+void RasterizerVulkan::InvalidateCachedWrites(
+    std::span<const std::pair<DAddr, std::size_t>> sequences, bool constant_buffer_data) {
     // The GPU's own cached writes (constant buffer data, every draw): most land where no image,
     // query or shader was ever registered, which page_filter tells without the caches' locks.
     const auto any = [&](const VideoCommon::PageFilter& filter) {
@@ -3219,10 +3284,25 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
     if (Settings::values.skip_cpu_inner_invalidation.GetValue()) {
         return;
     }
-    {
+    // Constant buffer data only streamed uniform buffers read needs no buffer cache work: those
+    // pages stay CPU-modified, and uniform keeps learn of the write from the draw's fast draw
+    // delta (BufferCache::ConstantDataReachesBuffers).
+    const auto reaches_buffers = [&](const std::pair<DAddr, std::size_t>& range) {
+        return !constant_buffer_data ||
+               buffer_cache.ConstantDataReachesBuffers(range.first, range.second);
+    };
+    if (std::ranges::any_of(sequences, reaches_buffers)) {
         std::scoped_lock lock{buffer_cache.mutex};
-        for (const auto& [addr, size] : sequences) {
-            buffer_cache.WriteMemory(addr, size);
+        boost::container::small_vector<std::pair<DAddr, std::size_t>, 16> applied;
+        for (const auto& range : sequences) {
+            if (reaches_buffers(range)) {
+                applied.push_back(range);
+            }
+        }
+        // As OnCacheInvalidations: out of the GPU-written ranges first.
+        buffer_cache.ClaimCpuWrites(applied);
+        for (const auto& [addr, size] : applied) {
+            buffer_cache.WriteMemory(addr, size, true, true);
         }
     }
     if (any(query_cache.page_filter)) {
@@ -3238,8 +3318,35 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
 bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
     DEBUG_ASSERT(addr != 0 || size != 0);
     {
-        std::scoped_lock lock{buffer_cache.mutex};
-        if (buffer_cache.OnCPUWrite(addr, size)) {
+        // The pages the write untracks change their host protection after the lock is dropped:
+        // drawing waited for those system calls (~1 µs each, thousands a second at Ocarina of
+        // Time's water). A write trapping on a page still protected until then finds the page
+        // already untracked and changes nothing. Off the scheduler's owner the write only
+        // untracks pages (BufferCache::WriteMemory uploads only on the owner), which is all that
+        // may wait. Device unmaps wait for these changes, as one applied to an unmapped page is
+        // lost (BeginDeferredCachedUpdates).
+        static thread_local VideoCommon::DeferredPageCaching deferred;
+        const bool defer = VideoCommon::t_deferred_page_caching == nullptr &&
+                           !VideoCommon::GpuSplit::OwnsScheduler();
+        bool gpu_modified;
+        {
+            std::scoped_lock lock{buffer_cache.mutex};
+            if (defer) {
+                VideoCommon::t_deferred_page_caching = &deferred;
+            }
+            gpu_modified = buffer_cache.OnCPUWrite(addr, size);
+            if (defer) {
+                VideoCommon::t_deferred_page_caching = nullptr;
+                if (!deferred.Empty()) {
+                    device_memory.BeginDeferredCachedUpdates();
+                }
+            }
+        }
+        if (defer && !deferred.Empty()) {
+            deferred.ApplyAll();
+            device_memory.EndDeferredCachedUpdates();
+        }
+        if (gpu_modified) {
             return true;
         }
     }
@@ -3335,18 +3442,22 @@ void RasterizerVulkan::ModifyGPUMemory(size_t as_id, GPUVAddr addr, u64 size) {
 }
 
 void RasterizerVulkan::SignalFence(std::function<void()>&& func) {
+    VideoCommon::Nx2FastDraw::NoteSync();
     fence_manager.SignalFence(std::move(func));
 }
 
 void RasterizerVulkan::SyncOperation(std::function<void()>&& func) {
+    VideoCommon::Nx2FastDraw::NoteSync();
     fence_manager.SyncOperation(std::move(func));
 }
 
 void RasterizerVulkan::SignalSyncPoint(u32 value) {
+    VideoCommon::Nx2FastDraw::NoteSync();
     fence_manager.SignalSyncPoint(value);
 }
 
 void RasterizerVulkan::SignalReference() {
+    VideoCommon::Nx2FastDraw::NoteSync();
     fence_manager.SignalReference();
 }
 
@@ -4418,6 +4529,9 @@ void RasterizerVulkan::TickFrame() {
     if (fast_draw_on) {
         ReportFastDraws();
         VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Frame);
+    }
+    if (DrawReuseProbeEnabled()) {
+        TickDrawReuse();
     }
     frame_dump.TickFrame();
     ++render_trace_frame;
@@ -5723,12 +5837,10 @@ void RasterizerVulkan::UpdateStencilTestEnable(Tegra::Engines::Maxwell3D::Regs& 
 
 void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) {
     auto& dirty{maxwell3d->dirty.flags};
-    const bool vertex_input_dirty = dirty[Dirty::VertexInput];
-    const bool vertex_buffers_dirty = dirty[VideoCommon::Dirty::VertexBuffers];
-    if (!vertex_input_dirty && !vertex_buffers_dirty) {
+    const bool record = dirty[Dirty::VertexInput] || dirty[VideoCommon::Dirty::VertexBuffers];
+    if (!record && !verify_vertex_input) {
         return;
     }
-    dirty[Dirty::VertexInput] = false;
 
     boost::container::static_vector<VkVertexInputBindingDescription2EXT, 32> bindings;
     boost::container::static_vector<VkVertexInputAttributeDescription2EXT, 32> attributes;
@@ -5771,11 +5883,35 @@ void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) 
         });
     }
 
+    if (!record) {
+        // EDEN_NX2_FAST_DRAW_VERIFY: no dirty flag asked for it, so the vertex input recorded
+        // last must be what the registers give.
+        const bool same_bindings = std::ranges::equal(
+            bindings, recorded_bindings, [](const auto& lhs, const auto& rhs) {
+                return lhs.binding == rhs.binding && lhs.stride == rhs.stride &&
+                       lhs.inputRate == rhs.inputRate && lhs.divisor == rhs.divisor;
+            });
+        const bool same_attributes = std::ranges::equal(
+            attributes, recorded_attributes, [](const auto& lhs, const auto& rhs) {
+                return lhs.location == rhs.location && lhs.binding == rhs.binding &&
+                       lhs.format == rhs.format && lhs.offset == rhs.offset;
+            });
+        if (vertex_input_recorded && !(same_bindings && same_attributes)) {
+            ++fast_draw_stats.vertex_input_mismatches;
+        }
+        return;
+    }
+    dirty[Dirty::VertexInput] = false;
     for (size_t index = 0; index < Maxwell::NumVertexAttributes; ++index) {
         dirty[Dirty::VertexAttribute0 + index] = false;
     }
     for (size_t index = 0; index < Maxwell::NumVertexArrays; ++index) {
         dirty[Dirty::VertexBinding0 + index] = false;
+    }
+    if (fast_draw_verify) {
+        recorded_bindings = bindings;
+        recorded_attributes = attributes;
+        vertex_input_recorded = true;
     }
 
     scheduler.Record([bindings, attributes](vk::CommandBuffer cmdbuf) {
@@ -5807,9 +5943,13 @@ void RasterizerVulkan::BindChannel(Tegra::Control::ChannelState& channel) {
     query_cache.BindToChannel(channel_id);
     state_tracker.ChangeChannel(channel);
     state_tracker.InvalidateState();
+    bound_channel_id = channel_id;
 }
 
 void RasterizerVulkan::ReleaseChannel(s32 channel_id) {
+    if (channel_id == bound_channel_id) {
+        state_tracker.ClearChannel();
+    }
     EraseChannel(channel_id);
     {
         std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};

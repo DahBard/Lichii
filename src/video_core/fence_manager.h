@@ -31,7 +31,6 @@
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_frame_fence.h"
 #include "video_core/nx2_profile.h"
-#include "video_core/nx2_test_switches.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace VideoCommon {
@@ -129,11 +128,9 @@ public:
             if (!spare_operations.empty()) {
                 uncommitted_operations = std::move(spare_operations.back());
                 spare_operations.pop_back();
-                Nx2Profile::Add(Nx2Profile::Counter::FenceListsRecycled, 1);
             } else {
                 uncommitted_operations = OperationList{}; // moved-from: make it empty explicitly
                 uncommitted_operations.reserve(64);
-                Nx2Profile::Add(Nx2Profile::Counter::FenceListsNew, 1);
             }
         }
         pending_flushes.push_back(committed_flushes);
@@ -147,8 +144,13 @@ public:
         }
         fences.push(std::move(new_fence));
         if constexpr (can_async_check) {
+            // The fencing thread waits for the host GPU while it has fences: it needs waking (a
+            // system call) only when it waits for fences to be made.
+            const bool wake = fence_thread_waiting;
             guard.unlock();
-            cv.notify_all();
+            if (wake) {
+                cv.notify_all();
+            }
         }
         if (delay_fence) {
             const Nx2Profile::Scope submit_scope{Nx2Profile::Zone::FenceSubmit,
@@ -301,7 +303,11 @@ private:
         while (!stop_token.stop_requested()) {
             {
                 std::unique_lock lock(guard);
-                cv.wait(lock, [&] { return stop_token.stop_requested() || !fences.empty(); });
+                cv.wait(lock, [&] {
+                    fence_thread_waiting = !stop_token.stop_requested() && fences.empty();
+                    return !fence_thread_waiting;
+                });
+                fence_thread_waiting = false;
                 if (stop_token.stop_requested()) [[unlikely]] {
                     return;
                 }
@@ -365,8 +371,7 @@ private:
             if (!batch.empty()) {
                 VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Fence);
             }
-            // Upstream #1161; TEST: EDEN_NX2_TEST_1161_REPORTS=0 frees them.
-            if (VideoCommon::Nx2Test::Reports1161()) {
+            {
                 std::scoped_lock lock{uncommitted_guard};
                 for (Released& released : batch) {
                     if (spare_operations.size() < MaxSpareOperationLists &&
@@ -518,6 +523,7 @@ private:
     std::mutex ring_guard;
     std::mutex uncommitted_guard; ///< Guards uncommitted_operations
     std::condition_variable cv;
+    bool fence_thread_waiting{}; ///< The fencing thread waits on cv for fences (guarded by guard)
 
     std::jthread fence_thread;
 

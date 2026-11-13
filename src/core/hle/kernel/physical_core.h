@@ -7,10 +7,12 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include "core/arm/arm_interface.h"
 #include "core/hle/kernel/guest_core_profile.h"
@@ -27,11 +29,11 @@ class System;
 
 namespace Kernel {
 
-/// EDEN_NX2_IDLE_SPIN_US (read once): microseconds an idle core polls before it blocks, or -1
-/// when unset.
+/// EDEN_NX2_IDLE_SPIN_US (read once): the longest an idle core polls before it blocks, in
+/// microseconds, or -1 when unset.
 s64 IdleSpinSetting();
-/// What PhysicalCore::Idle polls for: the setting, or by default 100 us for Switch 2 titles (0 on
-/// Android and for other titles).
+/// The longest PhysicalCore::Idle polls: the setting, or by default 100 us for Switch 2 titles (0
+/// on Android and for other titles).
 s64 IdleSpinMicroseconds(const KernelCore& kernel);
 
 class PhysicalCore {
@@ -87,6 +89,15 @@ private:
     KThread* m_current_thread{};
     std::atomic<u32> m_is_interrupted{};
     bool m_is_single_core{};
+
+    std::chrono::nanoseconds m_idle_poll{};
+    // EDEN_NX2_IDLE_STATS: when Interrupt last ran, and this core's idle periods since m_stats_start.
+    std::atomic<std::chrono::steady_clock::rep> m_interrupt_time{};
+    std::chrono::steady_clock::time_point m_stats_start{};
+    u64 m_stats_idles{};
+    u64 m_stats_polled{};
+    std::chrono::nanoseconds m_stats_poll_sum{};
+    std::vector<std::chrono::nanoseconds> m_stats_blocked_wakes;
 };
 
 } // namespace Kernel

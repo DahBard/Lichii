@@ -10,11 +10,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "common/thread_worker.h"
@@ -78,6 +80,16 @@ class RescalingPushConstant;
 class RenderAreaPushConstant;
 class Scheduler;
 
+/// EDEN_NX2_DRAW_REUSE_PROBE=1: how many draws repeat the previous frame's slowly changing state,
+/// and what preparing them costs (RasterizerVulkan::NoteDrawReuse).
+inline bool DrawReuseProbeEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_DRAW_REUSE_PROBE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 /// Mesh emulation on a device without VK_EXT_mesh_shader: the mesh program (stage 0) is built as
 /// a compute shader that writes its output to a storage buffer, and this vertex shader draws it
 /// (see Shader::Backend::SPIRV::EmitMeshEmulationVertex).
@@ -135,6 +147,8 @@ public:
     /// Draws held for unbuilt pipelines this session (never reset; the worst frame line takes
     /// differences of it).
     static std::chrono::nanoseconds HoldTimeTotal() noexcept;
+    /// Draws resolved from the texture memo and in full since the last call.
+    static std::pair<u64, u64> TakeTextureMemoCounts() noexcept;
 
     bool HasDynamicVertexInput() const noexcept { return key.state.dynamic_vertex_input; }
     u64 DynamicAttributeTypes() const noexcept { return key.state.attribute_types; }
@@ -149,7 +163,8 @@ public:
         VideoCommon::SamplerId sampler;
     };
 
-    /// The sampled textures of the last configured draw, kept while a sampled frame dump runs.
+    /// The sampled textures of the last configured draw, kept while a sampled frame dump or the
+    /// draw reuse probe runs.
     std::span<const SampledImage> SampledImages() const noexcept {
         return sampled_images;
     }
@@ -333,7 +348,6 @@ public:
         None,
         WritesImages,
         Mesh,
-        ComputedHandles,
         NotConfigured,
         Count,
     };
@@ -459,17 +473,19 @@ private:
         handle_word_index{};
     std::vector<VideoCommon::ImageViewInOut> delta_views;
     std::vector<VideoCommon::SamplerId> delta_samplers;
-    /// A handle the captured Configure computed at draw time: the descriptor it was read for
-    /// (stage, kind as ComputedHandleKind, index in its list), the array element and its value.
+    /// A descriptor whose handles the captured Configure computed at draw time: the descriptor
+    /// (stage, kind as ComputedHandleKind, index in its list) and its elements' values, count of
+    /// them from delta_computed_values[first_value].
     struct ComputedHandle {
         u8 stage;
         u8 kind;
         u16 descriptor;
-        u32 element;
-        u32 value;
+        u32 count;
+        u32 first_value;
     };
     enum ComputedHandleKind : u8 { TextureBuffer, ImageBuffer, Texture, Image };
     std::vector<ComputedHandle> delta_computed_handles;
+    std::vector<u32> delta_computed_values;
     /// Delta draws: the image descriptor entries (first entry and count per
     /// stage) and rescaling words pushed for delta_views, which delta draws push again while no
     /// image changed its scale (TextureCache::ScaleEpoch).

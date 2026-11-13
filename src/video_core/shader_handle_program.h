@@ -22,9 +22,9 @@
 namespace VideoCommon {
 
 /// The address of storage buffer `binding` of a shader as its descriptor in a constant buffer gives
-/// it, aligned down to storage_alignment; 0 when it has none. storage_alignment is the host storage
-/// buffer offset alignment: storage offsets in the program are relative to the buffer address
-/// aligned down to it (StorageOffset), which is also where the buffer cache binds the buffer.
+/// it; 0 when it has none. storage_alignment is the host storage buffer offset alignment: storage
+/// offsets in a handle program are relative to the buffer address aligned down to it
+/// (StorageOffset), which is also where the buffer cache binds the buffer.
 template <typename Memory, typename CbufAddress>
 GPUVAddr StorageBufferBase(const Shader::Info& info, u32 binding, Memory& gpu_memory,
                            CbufAddress& cbuf_address, u64 storage_alignment) {
@@ -47,9 +47,9 @@ GPUVAddr StorageBufferBase(const Shader::Info& info, u32 binding, Memory& gpu_me
 
 /// The texture handle a shader reads from a storage buffer, computed from the current constant
 /// buffer and storage buffer words (Shader::Info::handle_programs). cbuf_address(index) is the
-/// bound constant buffer's address, 0 when none is bound. storage_alignment is the host storage
-/// buffer offset alignment (see StorageBufferBase). element is the descriptor array element, for a
-/// program computing one handle per element.
+/// bound constant buffer's address, 0 when none is bound. storage_alignment is as for
+/// StorageBufferBase. element is the descriptor array element, for a program computing one handle
+/// per element.
 template <typename Memory, typename CbufAddress>
 u32 EvaluateTextureHandle(const Shader::Info& info, u32 program, Memory& gpu_memory,
                           CbufAddress&& cbuf_address, u64 storage_alignment, u32 element = 0) {
@@ -83,7 +83,10 @@ void EvaluateTextureHandles(const Shader::Info& info, u32 program, Memory& gpu_m
     std::array<CbufWord, 16> words;
     size_t num_words{};
     std::array<GPUVAddr, Shader::Info::MAX_SSBOS> bases;
-    u32 known_bases{};
+    // One bit per binding read so far: native programs bind up to MAX_SSBOS storage buffers
+    // (Ocarina of Time binds 37), so the mask needs all 64 bits.
+    static_assert(Shader::Info::MAX_SSBOS <= 64);
+    u64 known_bases{};
     const auto read_cbuf = [&](u32 index, u32 offset) -> u32 {
         for (size_t word = 0; word < num_words; ++word) {
             if (words[word].index == index && words[word].offset == offset) {
@@ -101,10 +104,10 @@ void EvaluateTextureHandles(const Shader::Info& info, u32 program, Memory& gpu_m
         if (binding >= bases.size()) {
             return 0U;
         }
-        if ((known_bases & (1U << binding)) == 0) {
+        if ((known_bases & (u64{1} << binding)) == 0) {
             bases[binding] =
                 StorageBufferBase(info, binding, gpu_memory, cbuf_address, storage_alignment);
-            known_bases |= 1U << binding;
+            known_bases |= u64{1} << binding;
         }
         return bases[binding] != 0 ? gpu_memory.template Read<u32>(bases[binding] + offset) : 0U;
     };
@@ -117,11 +120,12 @@ void EvaluateTextureHandles(const Shader::Info& info, u32 program, Memory& gpu_m
 
 /// Logs what the elements of a descriptor array of handle program results (a table of per-light
 /// shadow maps, say) hold, whenever that changes, for the first lines: how many distinct textures
-/// and which, by TIC index with the first element holding each.
+/// and which, by TIC index with the first element holding each. Off unless
+/// EDEN_NX2_HANDLE_TABLE_NOTES is set, so draws and dispatches don't gather the tables for it.
 class HandleTableNotes {
 public:
     [[nodiscard]] static bool Wanted() noexcept {
-        return lines.load(std::memory_order_relaxed) < MAX_LINES;
+        return enabled && lines.load(std::memory_order_relaxed) < MAX_LINES;
     }
 
     static void Note(u64 shader, u32 texture, std::span<const u32> tics) {
@@ -157,6 +161,7 @@ public:
 
 private:
     static constexpr int MAX_LINES = 64;
+    inline static const bool enabled{std::getenv("EDEN_NX2_HANDLE_TABLE_NOTES") != nullptr};
     inline static std::atomic<int> lines{};
     inline static std::mutex mutex;
     inline static std::unordered_map<u64, std::vector<u32>> seen;
@@ -171,7 +176,17 @@ private:
 template <typename Descriptor>
 [[nodiscard]] bool HandleIsStoragePointer(const Shader::Info& info, const Descriptor& desc,
                                           u32 index) {
-    if (desc.handle_program != ~0U || desc.has_secondary) {
+    if (desc.handle_program != ~0U) {
+        return false;
+    }
+    if constexpr (requires { desc.handle_is_pointer_word; }) {
+        // The translation saw the word dereferenced, also when no storage buffer binds it (a
+        // capture that saw the pointer null)
+        if (desc.handle_is_pointer_word) {
+            return true;
+        }
+    }
+    if (desc.has_secondary) {
         return false;
     }
     const u32 offset = desc.cbuf_offset + (index << desc.size_shift);

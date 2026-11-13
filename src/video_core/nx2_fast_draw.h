@@ -50,7 +50,6 @@ enum class Reason : u8 {
     IndirectReset,
     Frame,
     TextureHeaders,
-    DeltaOverflow,
     Map,
     Count,
 };
@@ -59,10 +58,15 @@ inline constexpr std::array<const char*, static_cast<size_t>(Reason::Count)> rea
     "register",      "method",    "constant buffer data", "inline data",
     "other engine",  "deferred call", "tick work",        "invalidation",
     "fence release", "indirect reset", "frame",           "texture header data",
-    "delta overflow", "memory map",
+    "memory map",
 };
 
 inline std::atomic<bool> g_enabled{true};
+
+/// Whether pipelines take their vertex input as dynamic state (VK_EXT_vertex_input_dynamic_state):
+/// then the vertex attribute formats are draw parameters, as only each attribute's type class is
+/// in the pipeline key. Set by the pipeline cache before the GPU threads run, read on the back.
+inline std::atomic<bool> g_dynamic_vertex_input{};
 
 /// Any thread: whether fast draws run (always, unless a test turned them off). The rasterizer
 /// latches it per draw (on the thread that draws) and starts with a full resolve when it turns on.
@@ -77,15 +81,6 @@ inline std::atomic<bool> g_dynamic_strides{false};
 /// TEST: EDEN_NX2_TEST_1216=0 (read by the renderer) keeps the breaks from before upstream
 /// #1216's stride, render enable and back macro call changes.
 inline std::atomic<bool> g_test_1216{true};
-
-/// Whether vertex attribute formats are draw parameters (set by the renderer, with extended
-/// dynamic state and dynamic vertex input): only each attribute's type class is in the pipeline
-/// key then, which TakeReusableDraw compares.
-inline std::atomic<bool> g_vertex_streams_dynamic{false};
-
-/// TEST: EDEN_NX2_TEST_1161_DRAWS=0 (read by the renderer) keeps tuned4's delta overflow break,
-/// handle checks over whole constant buffers and attribute format breaks (upstream #1161).
-inline std::atomic<bool> g_test_1161_draws{true};
 
 /// Tests only.
 inline void SetEnabledForTest(bool on) {
@@ -114,7 +109,6 @@ enum class BreakClass : u8 {
     Method,
     BackMacroCall, ///< A back macro's call (GpuSplit::DeferWords)
     OtherCall,
-    DeltaOverflow,
     Fence,
     OtherEngine,
     MemoryWrite, ///< Constant buffer or inline data reaching handles, texture header data
@@ -123,9 +117,9 @@ enum class BreakClass : u8 {
 };
 
 inline constexpr std::array<const char*, static_cast<size_t>(BreakClass::Count)> break_class_names{
-    "stride",       "attribute format", "blend",          "program",    "viewport/scissor",
-    "render target", "other register",  "method",         "back macro call", "other call",
-    "delta overflow", "fence",          "other engine",   "memory write", "cache/map",
+    "stride",        "attribute format", "blend",        "program",         "viewport/scissor",
+    "render target", "other register",   "method",       "back macro call", "other call",
+    "fence",         "other engine",     "memory write", "cache/map",
 };
 
 /// Profile only (set by the renderer): Break also collects g_break_mask and g_last_call.
@@ -146,8 +140,6 @@ inline std::array<BreakClass, 0x1000> g_register_class{};
         return BreakClass::Method;
     case Reason::Call:
         return method != 0 ? BreakClass::BackMacroCall : BreakClass::OtherCall;
-    case Reason::DeltaOverflow:
-        return BreakClass::DeltaOverflow;
     case Reason::Fence:
         return BreakClass::Fence;
     case Reason::OtherEngine:
@@ -166,7 +158,27 @@ inline std::atomic<u64> g_serial{1};
 /// 1 marks a back macro's call.
 inline std::atomic<u32> g_last_break{};
 
+/// Bumped where the guest CPU may have synchronised with the GPU: fences, semaphores, syncpoints,
+/// reports, frames, other engines and requests from other threads. After one the guest may have
+/// written memory the caches were not told about (pages that aren't write-protected), so uniform
+/// keeps read their buffers again.
+inline std::atomic<u64> g_sync_serial{1};
+
+inline void NoteSync() {
+    g_sync_serial.fetch_add(1, std::memory_order_relaxed);
+}
+
+[[nodiscard]] inline u64 SyncSerial() {
+    return g_sync_serial.load(std::memory_order_acquire);
+}
+
 inline void Break(Reason reason, u32 method = 0) {
+    // 3D methods that let the CPU synchronise (reports, syncpoints) note it where they reach the
+    // rasterizer. Invalidations end image and shader lifetimes, not guest memory writes.
+    if (reason != Reason::Register && reason != Reason::Method && reason != Reason::ConstantData &&
+        reason != Reason::TextureHeaders && reason != Reason::Invalidation) {
+        NoteSync();
+    }
     if (Enabled()) {
         g_serial.fetch_add(1, std::memory_order_relaxed);
         g_last_break.store(static_cast<u32>(reason) | (method << 8), std::memory_order_relaxed);
@@ -323,34 +335,6 @@ inline bool AppendRange(std::array<u64, Delta::MaxWrites>& begins,
     return true;
 }
 
-/// TEST (EDEN_NX2_TEST_1161_DRAWS=0): tuned4's list, which only extends its last range. False
-/// when the list is full.
-inline bool AppendRangeOrOverflow(std::array<u64, Delta::MaxWrites>& begins,
-                                  std::array<u64, Delta::MaxWrites>& ends, u32& count, u64 begin,
-                                  u64 end) {
-    if (count != 0 && ends[count - 1] == begin) {
-        ends[count - 1] = end;
-        return true;
-    }
-    if (count == Delta::MaxWrites) {
-        return false;
-    }
-    begins[count] = begin;
-    ends[count] = end;
-    ++count;
-    return true;
-}
-
-/// Adds [begin, end) to one of the delta's lists (Reason::DeltaOverflow with the TEST switch off).
-inline void NoteRange(Delta& delta, std::array<u64, Delta::MaxWrites>& begins,
-                      std::array<u64, Delta::MaxWrites>& ends, u32& count, u64 begin, u64 end) {
-    if (g_test_1161_draws.load(std::memory_order_relaxed)) [[likely]] {
-        delta.no_uniform_keeps |= AppendRange(begins, ends, count, begin, end);
-    } else if (!AppendRangeOrOverflow(begins, ends, count, begin, end)) {
-        Break(Reason::DeltaOverflow);
-    }
-}
-
 inline void NoteBind(size_t stage, u32 slot) {
     if (Enabled()) {
         g_delta.binds[stage] |= 1U << slot;
@@ -359,20 +343,20 @@ inline void NoteBind(size_t stage, u32 slot) {
 
 /// Inline constant buffer data written to GPU addresses [begin, end).
 inline void NoteConstantData(GPUVAddr begin, GPUVAddr end) {
-    if (!Enabled()) {
-        return;
+    if (Enabled()) {
+        Delta& delta = g_delta;
+        delta.no_uniform_keeps |=
+            AppendRange(delta.write_begin, delta.write_end, delta.num_writes, begin, end);
     }
-    Delta& delta = g_delta;
-    NoteRange(delta, delta.write_begin, delta.write_end, delta.num_writes, begin, end);
 }
 
 /// The device addresses [begin, end) that inline constant buffer data landed on.
 inline void NoteDeviceData(DAddr begin, DAddr end) {
-    if (!Enabled()) {
-        return;
+    if (Enabled()) {
+        Delta& delta = g_delta;
+        delta.no_uniform_keeps |= AppendRange(delta.device_begin, delta.device_end,
+                                              delta.num_device_writes, begin, end);
     }
-    Delta& delta = g_delta;
-    NoteRange(delta, delta.device_begin, delta.device_end, delta.num_device_writes, begin, end);
 }
 
 } // namespace VideoCommon::Nx2FastDraw

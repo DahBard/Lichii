@@ -87,7 +87,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(WriteSite::Count)> 
     "DMA copy",
 };
 
-inline constexpr std::array<const char*, 4> source_names{"other", "texture", "buffer", "handed"};
+inline constexpr std::array<const char*, 4> source_names{"other", "texture", "buffer", "lock-free"};
 
 /// Sync operations other than reactive flushes that a guest thread waits for.
 enum class Site : u8 {

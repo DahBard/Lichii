@@ -38,9 +38,9 @@
 #include "video_core/nx2_profile.h"
 #include "video_core/render_trace.h"
 #include "video_core/texture_cache/conversion.h"
+#include "video_core/texture_cache/eviction_age.h"
 #include "video_core/texture_cache/host_memory_limit.h"
 #include "video_core/texture_cache/host_mip_limits.h"
-#include "video_core/texture_cache/eviction_age.h"
 #include "video_core/texture_cache/image_view_base.h"
 #include "video_core/texture_cache/samples_helper.h"
 #include "video_core/texture_cache/texture_cache_base.h"
@@ -234,9 +234,8 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         pending_bytes = 0;
         pending_freed = 0;
     };
-    // EDEN_NX2_TC_MIN_AGE=<frames> delays routine eviction for thrash diagnostics.
-    // Never apply it in the emergency pass: stale overrides can otherwise disable
-    // reclamation under critical VRAM pressure (Ocarina of Time, #1290).
+    // EDEN_NX2_TC_MIN_AGE=<frames>: keep images used more recently while there is room
+    // (thrash tests).
     static const u64 min_age = [] {
         const char* value = std::getenv("EDEN_NX2_TC_MIN_AGE");
         return value != nullptr ? std::strtoull(value, nullptr, 10) : 0ULL;
@@ -244,8 +243,9 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     const auto Configure = [&](bool allow_aggressive) {
         high_priority_mode = out_of_memory || used_memory() >= expected_memory;
         aggressive_mode = allow_aggressive && (out_of_memory || used_memory() >= critical_memory);
-        ticks_to_destroy = aggressive_mode ? 10ULL : high_priority_mode ? 25ULL : 50ULL;
-        ticks_to_destroy = TextureGcEffectiveMinAge(ticks_to_destroy, min_age, aggressive_mode);
+        const u64 mode_age = aggressive_mode ? 10ULL : high_priority_mode ? 25ULL : 50ULL;
+        ticks_to_destroy =
+            EvictionAge(mode_age, min_age, used_memory(), retention_limit, out_of_memory);
         num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
         // Past the critical memory, 40 images a frame is not enough where the game makes more:
         // breaking pots in Ocarina of Time's Hyrule Castle makes ~55 a frame (25 384x384 shadow
@@ -257,7 +257,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             const u64 over = total_used_memory - critical_memory;
             num_iterations += static_cast<size_t>((std::min)(over / 2_MiB, u64{1024}));
             if (over >= 1_GiB) {
-                ticks_to_destroy = TextureGcEffectiveMinAge(3ULL, min_age, aggressive_mode);
+                ticks_to_destroy = 3;
             }
         }
     };
@@ -319,10 +319,14 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     // emptiest blocks go first, so blocks drain and go back to the driver; placement already
     // prefers the fullest blocks (best fit). Images with memory of their own sit in the middle.
     const auto Collect = [&] {
+        if (frame_tick < ticks_to_destroy) {
+            return;
+        }
+        const u64 last_tick = frame_tick - ticks_to_destroy;
         if constexpr (requires(const Image& image) { image.MemoryBlock(); }) {
             std::vector<ImageId> candidates;
             const size_t limit = num_iterations * 8;
-            lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, [&](ImageId image_id) {
+            lru_cache.ForEachItemBelow(last_tick, [&](ImageId image_id) {
                 if (std::ranges::any_of(pending, [image_id](const CollectorDownload& entry) {
                         return entry.image_id == image_id;
                     })) {
@@ -365,7 +369,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
                 }
             }
         } else {
-            lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, Cleanup);
+            lru_cache.ForEachItemBelow(last_tick, Cleanup);
         }
     };
     // A bad overlap that a newer GPU-written image covers holds nothing a later read can want:
@@ -562,6 +566,7 @@ void TextureCache<P>::TickFrame() {
             }
             if (native_thresholds_applied && budget_check_frames++ % 30 == 0) {
                 const u64 budget = runtime.GetDeviceMemoryBudget();
+                retention_limit = 0;
                 if (budget > 2_GiB) {
                     const u64 margin = (std::min)(budget / 8, 1_GiB);
                     if constexpr (requires { runtime.GetDeviceMemorySlack(); }) {
@@ -586,6 +591,8 @@ void TextureCache<P>::TickFrame() {
                             ? HostCriticalMemory(runtime.GetDeviceMemoryUsage(), *commit_room)
                             : (std::numeric_limits<u64>::max)();
                     critical_memory = (std::min)(critical_memory, host_critical);
+                    const u64 room_margin = (std::min)(pressure_margin + slack_margin, budget / 2);
+                    retention_limit = (std::min)(budget - room_margin, host_critical);
                     expected_memory = critical_memory - (std::min)(margin, critical_memory / 2);
                     ApplyThresholdOverrides(false);
                     // Log the first values and real changes (the budget moves by a few MiB all
@@ -775,6 +782,7 @@ void TextureCache<P>::TickFrame() {
     if (out_of_memory) {
         // Textures left out for lack of memory are made again on their next read, once a frame
         // while images keep failing.
+        ++churn.invalidations;
         for (size_t c : active_channel_ids) {
             channel_storage[c].graphics_image_table.Invalidate();
             channel_storage[c].compute_image_table.Invalidate();
@@ -828,20 +836,21 @@ void TextureCache<P>::TickFrame() {
         return value != nullptr && value[0] == '1';
     }();
     if (churn_log && frame_tick % 600 == 0) {
-        const auto churn = Churn::Take();
+        namespace Counts = VideoCommon::Churn;
+        const auto counts = Counts::Take();
         LOG_INFO(HW_GPU,
                  "Churn (600 frames): images created {}, deleted {}, relocated {}, pooled {}; "
                  "image views created {}, destroyed {}; buffers created {}, deleted {}, joined {} "
                  "({} KiB copied); staging buffers allocated {} ({} MiB); device memory "
                  "allocations {}, frees {}; descriptor pools created {}; {} images now",
-                 churn[Churn::ImagesCreated], churn[Churn::ImagesDeleted],
-                 churn[Churn::ImagesRelocated], churn[Churn::ImagesPooled],
-                 churn[Churn::ImageViewsCreated], churn[Churn::ImageViewsDestroyed],
-                 churn[Churn::BuffersCreated], churn[Churn::BuffersDeleted],
-                 churn[Churn::BuffersJoined], churn[Churn::BufferJoinBytes] >> 10,
-                 churn[Churn::StagingBuffers], churn[Churn::StagingBytes] >> 20,
-                 churn[Churn::DeviceAllocations], churn[Churn::DeviceFrees],
-                 churn[Churn::DescriptorPools], slot_images.size());
+                 counts[Counts::ImagesCreated], counts[Counts::ImagesDeleted],
+                 counts[Counts::ImagesRelocated], counts[Counts::ImagesPooled],
+                 counts[Counts::ImageViewsCreated], counts[Counts::ImageViewsDestroyed],
+                 counts[Counts::BuffersCreated], counts[Counts::BuffersDeleted],
+                 counts[Counts::BuffersJoined], counts[Counts::BufferJoinBytes] >> 10,
+                 counts[Counts::StagingBuffers], counts[Counts::StagingBytes] >> 20,
+                 counts[Counts::DeviceAllocations], counts[Counts::DeviceFrees],
+                 counts[Counts::DescriptorPools], slot_images.size());
     }
 
     if constexpr (IMPLEMENTS_ASYNC_DOWNLOADS) {
@@ -1428,6 +1437,7 @@ void TextureCache<P>::SynchronizeDescriptors(bool compute) {
             bindings_changed = true;
         if (bindings_changed) {
             ++texture_bindings_serial;
+            ++churn.refreshes;
         }
     } else {
         const bool linked_tsc = maxwell3d->regs.sampler_binding == Tegra::Engines::Maxwell3D::Regs::SamplerBinding::ViaHeaderBinding;
@@ -1440,6 +1450,7 @@ void TextureCache<P>::SynchronizeDescriptors(bool compute) {
             bindings_changed = true;
         if (bindings_changed) {
             ++texture_bindings_serial;
+            ++churn.refreshes;
         }
     }
 }
@@ -3067,7 +3078,7 @@ ImageViewId TextureCache<P>::CreateImageView(const TICEntry& raw_config) {
     const ImageInfo info(config);
     if (info.type == ImageType::Buffer) {
         const ImageViewInfo view_info(config, 0);
-        Churn::Add(Churn::ImageViewsCreated);
+        VideoCommon::Churn::Add(VideoCommon::Churn::ImageViewsCreated);
         return slot_image_views.insert(runtime, info, view_info, config.Address());
     }
     const u32 layer_offset = config.BaseLayer() * info.layer_stride;
@@ -3210,7 +3221,7 @@ void TextureCache<P>::InvalidateScale(Image& image) {
     for (const ImageViewId image_view_id : image_view_ids) {
         sentenced_image_view.Push(std::move(slot_image_views[image_view_id]));
         slot_image_views.erase(image_view_id);
-        Churn::Add(Churn::ImageViewsDestroyed);
+        VideoCommon::Churn::Add(VideoCommon::Churn::ImageViewsDestroyed);
     }
     image.image_view_ids.clear();
     image.image_view_infos.clear();
@@ -3226,6 +3237,7 @@ void TextureCache<P>::InvalidateScale(Image& image) {
         channel_info.graphics_image_table.Invalidate();
         channel_info.compute_image_table.Invalidate();
     }
+    ++churn.invalidations;
     has_deleted_images = true;
 }
 
@@ -3737,7 +3749,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
                 if (relocate) {
                     ++relocation_relocated;
                     ++rt_stats.relocated_images;
-                    Churn::Add(Churn::ImagesRelocated);
+                    VideoCommon::Churn::Add(VideoCommon::Churn::ImagesRelocated);
                     if (mode == 4) {
                         AddRelocationTombstone(slot_images[old_id], gpu_addr, cpu_addr);
                     }
@@ -3788,7 +3800,8 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     rt_stats.create_ns += NsSince(create_start);
     if constexpr (requires(const Image& image) { image.FromPool(); }) {
         rt_stats.pooled_images += slot_images[new_image_id].FromPool() ? 1 : 0;
-        Churn::Add(Churn::ImagesPooled, slot_images[new_image_id].FromPool() ? 1 : 0);
+        VideoCommon::Churn::Add(VideoCommon::Churn::ImagesPooled,
+                                slot_images[new_image_id].FromPool() ? 1 : 0);
     }
     if constexpr (requires(const Image& image) { image.OutOfMemory(); }) {
         if (slot_images[new_image_id].OutOfMemory()) {
@@ -3820,7 +3833,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             shape.second = gpu_addr;
         }
         ++images_created;
-        Churn::Add(Churn::ImagesCreated);
+        VideoCommon::Churn::Add(VideoCommon::Churn::ImagesCreated);
+        ++churn.created;
+        churn.joins += join_overlap_ids.empty() ? 0 : 1;
     }
 
     if (!gpu_memory->IsContinuousRange(new_image.gpu_addr, new_image.guest_size_bytes) &&
@@ -4518,7 +4533,7 @@ ImageViewId TextureCache<P>::FindOrEmplaceImageView(ImageId image_id, const Imag
                  info.range.extent.layers);
     }
     const ImageViewId image_view_id = slot_image_views.insert(runtime, info, image_id, image, slot_images);
-    Churn::Add(Churn::ImageViewsCreated);
+    VideoCommon::Churn::Add(VideoCommon::Churn::ImageViewsCreated);
     image.InsertView(info, image_view_id);
     return image_view_id;
 }
@@ -4733,7 +4748,8 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
     const StutterTrace::SiteScope site{StutterTrace::Site::ImageDelete};
     ImageBase& image = slot_images[image_id];
     ++images_deleted;
-    Churn::Add(Churn::ImagesDeleted);
+    VideoCommon::Churn::Add(VideoCommon::Churn::ImagesDeleted);
+    ++churn.deleted;
     MarkStale(image);
     VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Invalidation);
     // Drop every decode still queued for it, whatever IsDecoding says: an image re-decoded while
@@ -4802,7 +4818,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
             sentenced_image_view.Push(std::move(slot_image_views[image_view_id]));
         }
         slot_image_views.erase(image_view_id);
-        Churn::Add(Churn::ImageViewsDestroyed);
+        VideoCommon::Churn::Add(VideoCommon::Churn::ImageViewsDestroyed);
     }
     const bool retained = RetainPendingImageDownloads(image_id, slot_images[image_id],
                                                        uncommitted_downloads, committed_downloads);
@@ -4836,6 +4852,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
         channel_info.graphics_image_table.Invalidate();
         channel_info.compute_image_table.Invalidate();
     }
+    ++churn.invalidations;
     has_deleted_images = true;
 }
 
@@ -4923,6 +4940,7 @@ void TextureCache<P>::RelocateImage(ImageId image_id, GPUVAddr gpu_addr, DAddr c
         channel_info.graphics_image_table.Invalidate();
         channel_info.compute_image_table.Invalidate();
     }
+    ++churn.invalidations;
     has_deleted_images = true;
 }
 

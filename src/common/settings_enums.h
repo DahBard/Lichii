@@ -171,7 +171,8 @@ ENUM(ExtendedDynamicState, Disabled, EDS1, EDS2, EDS3);
 ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
-ENUM(FrameGenType, Lsfg, Fsr3, AmdFsr);
+// lichii-tuned: AMD FSR keeps value 2, which configs store; DLSS-G (MSVC builds only) follows.
+ENUM(FrameGenType, Lsfg, Fsr3, AmdFsr, NvidiaDlssG);
 
 ENUM(AmdFrameGenVersion, Auto, Fsr31);
 

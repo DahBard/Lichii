@@ -62,11 +62,16 @@ u32 ReadSemaphoreWord(DmaPusher& dma_pusher, GPUVAddr address) {
     return AcquireWord(dma_pusher, address);
 }
 
-// Registers `owner` to be latched by a release that meets `acquire`. With every slot taken the
-// acquire relies on reading the word, as for an unmapped address.
+// Registers `owner` to be latched by a release that meets `acquire`, with the word in memory for
+// the GPU thread to watch (Nx2SemaphoreWaiters::WordStored). With every slot taken the acquire
+// relies on reading the word, as for an unmapped address.
 void AddWaiter(DmaPusher& dma_pusher, const void* owner, u64 device,
                const Puller::PendingAcquire& acquire) {
-    if (!Nx2SemaphoreWaiters::Get().Add(owner, device, acquire.value, acquire.operation)) {
+    u32* word = reinterpret_cast<u32*>(dma_pusher.memory_manager.GetPointer(acquire.address));
+    if (reinterpret_cast<uintptr_t>(word) % alignof(u32) != 0) {
+        word = nullptr;
+    }
+    if (!Nx2SemaphoreWaiters::Get().Add(owner, device, acquire.value, acquire.operation, word)) {
         if (static std::atomic<u32> full{}; full.fetch_add(1) < 8) {
             LOG_ERROR(HW_GPU, "Channel {} waits on semaphore {:#x} unlatched: {} channels wait",
                       dma_pusher.channel_state.bind_id, acquire.address,
@@ -646,6 +651,7 @@ void Puller::ProcessFenceActionMethod(DmaPusher& dma_pusher) {
         // WaitFence(regs.fence_action.syncpoint_id, regs.fence_value);
         OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->ReleaseFences(); }, FenceWrites);
         VideoCommon::GpuSplit::Get().NoteSync();
+        VideoCommon::Nx2FastDraw::NoteSync();
         break;
     case Puller::FenceOperation::Increment:
         OnBack([rasterizer = dma_pusher.rasterizer,
@@ -759,6 +765,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         // Switch 2 waits on semaphores the CPU (or another channel) releases, e.g. once it has
         // written the commands this channel runs next: suspend the channel until the value is
         // met instead of reading ahead (approach from changes.patch).
+        VideoCommon::Nx2FastDraw::NoteSync();
         PendingAcquire acquire{
             .address = regs.semaphore_address.SemaphoreAddress(),
             .value = regs.semaphore_sequence,
@@ -888,7 +895,8 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         // Registered before the fences run, so a release among them that meets the value counts
-        // even if a later one overwrites it.
+        // even if a later one overwrites it. The word in memory is watched for the guest CPU's
+        // stores (Nx2SemaphoreWaiters::WordStored).
         auto& waiters = Nx2SemaphoreWaiters::Get();
         if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
             AddWaiter(dma_pusher, this, *device, acquire);

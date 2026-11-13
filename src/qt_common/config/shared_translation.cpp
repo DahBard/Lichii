@@ -150,8 +150,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "On: HDR whenever the display driver offers an HDR format.\n"
               "The game is told the display is HDR only while Lichii really presents HDR. SDR "
               "games and menus are shown at the reference white.\n"
-              "While HDR is active, anti-aliasing, post-processing, FSR/SGSR upscaling and frame "
-              "generation are off and the window is scaled bilinearly.\n"
+              "While HDR is active, anti-aliasing, post-processing and FSR/SGSR upscaling are off "
+              "and the window is scaled bilinearly. Frame generation keeps working.\n"
               "Screenshots are tone mapped to SDR."));
     INSERT(Settings, hdr_swapchain, tr("HDR format:"),
            tr("HDR10: 10-bit PQ, what HDR displays take.\n"
@@ -325,7 +325,15 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, frame_gen_type, tr("Frame Generation Type"),
            tr("AMD FSR Frame Generation: AMD's frame generation for Ocarina of Time (Windows, "
               "Resolution 1X; restart Lichii after picking it).\nOptical Flow Interpolation and "
-              "Lossless Scaling are Lichii's other frame generators, for any game."));
+              "Lossless Scaling are Lichii's other frame generators, for any game.\n"
+              "Optical Flow Interpolation is built in and runs on any GPU.\nNVIDIA DLSS Frame "
+              "Generation (Windows only) needs a GeForce RTX 40 series or newer GPU (3x and 4x need "
+              "an RTX 50 series), Hardware-accelerated GPU scheduling on in Windows' graphics "
+              "settings, \"Use NVIDIA DLSS\" on and NVIDIA's files from the NVIDIA DLSS panel. "
+              "It takes the game's depth and motion vectors from the DLSS evaluation, so it runs "
+              "in The Legend of Zelda: Ocarina of Time only, docked, with DLSS as its upscaler. "
+              "Other games, and scRGB HDR output, use Optical Flow Interpolation instead.\nVSync "
+              "is off while it runs. Choosing it takes effect when a game starts."));
     INSERT(Settings, amd_frame_gen_version, tr("AMD Frame Generation Version"),
            tr("Which AMD FSR frame generation runs (with the AMD FSR frame generation type).\n"
               "Auto: FSR 4 frame generation on Radeon RX 9000 (it needs their FP8 support), "
@@ -447,6 +455,14 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Lets the game adjust between 30 and 60 FPS using whole-frame timing to maintain "
               "normal game speed. Takes effect after restarting the game and takes precedence over "
               "the 30 FPS mode."));
+    INSERT(Settings, hyrule_dynamic_fps,
+           tr("Hyrule Warriors: Age of Imprisonment: dynamic FPS (experimental)"),
+           tr("Drops to 30 FPS with the game's split-screen time step while the game runs below "
+              "about 50 FPS, so heavy slowdowns don't slow down the game, and tries 60 FPS again "
+              "every few seconds."));
+    INSERT(Settings, hyrule_30fps, tr("Hyrule Warriors: Age of Imprisonment: 30 FPS mode"),
+           tr("Always runs at 30 FPS with the game's split-screen time step, at normal game speed. "
+              "Takes precedence over dynamic FPS."));
     INSERT(Settings, barrier_feedback_loops, tr("Barrier feedback loops"),
            tr("Improves rendering of transparency effects in specific games."));
     INSERT(Settings, enable_buffer_history, tr("Enable buffer history"),
@@ -683,6 +699,7 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(FrameGenType, Lsfg, tr("Lossless Scaling (LSFG)")),
                               PAIR(FrameGenType, Fsr3, tr("Optical Flow Interpolation (built-in)")),
                               PAIR(FrameGenType, AmdFsr, tr("AMD FSR Frame Generation (Ocarina, restart)")),
+                              PAIR(FrameGenType, NvidiaDlssG, tr("NVIDIA DLSS Frame Generation")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::AmdFrameGenVersion>::Index(),
                           {

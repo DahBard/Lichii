@@ -20,7 +20,6 @@ enum class DownloadAreaSource : u8 {
     None,
     TextureCache,
     BufferCache,
-    Handed,   ///< The cache locks stayed taken: the GPU thread looks (EDEN_NX2_EXP60)
     LockFree, ///< No image and no GPU write ever on the pages: answered without the locks
 };
 

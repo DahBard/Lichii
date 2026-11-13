@@ -179,8 +179,6 @@ add_executable(yuzu
     loading_screen.ui
 
     main.cpp
-    nx2_crash_dump.cpp
-    nx2_crash_dump.h
     nx2_switches.h
 
     multiplayer/chat_room.cpp

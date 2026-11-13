@@ -266,7 +266,11 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         };
         // Only warp-level ops observe the subgroup size. Forcing 32 on other shaders makes Intel
         // compile SIMD32, which can spill a register-heavy kernel for minutes (Mario Kart World).
-        const bool uses_warp_ops = info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
+        // A shader that lost a conditional barrier relies on a whole warp running in step: at a
+        // smaller subgroup size it reads stale shared memory, which shows as banding over the image
+        // in Mario Kart World on Intel's Windows driver.
+        const bool uses_warp_ops = info.removed_conditional_barrier ||
+                                   info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
                                    info.uses_subgroup_shuffles || info.uses_subgroup_mask ||
                                    info.uses_quad_shuffles || info.uses_fswzadd ||
                                    info.uses_cooperative_matrix;
@@ -549,7 +553,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                     }
                     samplers.push_back(sampler);
                 });
-            if (VideoCommon::HandleTableNotes::Wanted()) [[unlikely]] {
+            if (VideoCommon::HandleTableNotes::Wanted()) {
                 std::vector<u32> tics(desc.count);
                 for (u32 index = 0; index < desc.count; ++index) {
                     tics[index] = views[first + index].index;

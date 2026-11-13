@@ -175,6 +175,8 @@ add_library(
     cpu_features.h
     httplib.h
     net/net.h net/net.cpp
+    nextendo.cpp
+    nextendo.h
     container/unordered_map.h container/unordered_set.h)
 
 # The ZBIC decoder runs once per module at load, so a profile buys it nothing, and the aarch64
@@ -188,7 +190,9 @@ set_source_files_properties(zbic_compression.cpp PROPERTIES
 # uninstrumented ZBIC are fine), so a training build cannot load the main NSO.
 
 if(WIN32)
-    target_sources(common PRIVATE windows/timer_resolution.cpp
+    target_sources(common PRIVATE windows/crash_handler.cpp
+        windows/crash_handler.h
+        windows/timer_resolution.cpp
         windows/timer_resolution.h
         windows/hybrid_cpu.cpp
         windows/hybrid_cpu.h)
@@ -274,7 +278,7 @@ if (BOOST_NO_HEADERS)
 else()
     target_link_libraries(common PUBLIC Boost::headers)
 endif()
-target_link_libraries(common PRIVATE OpenSSL::SSL)
+target_link_libraries(common PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 target_link_libraries(common PUBLIC Boost::filesystem Boost::context httplib::httplib nlohmann_json::nlohmann_json)
 
 if (lz4_ADDED)

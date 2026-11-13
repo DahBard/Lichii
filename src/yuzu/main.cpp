@@ -8,7 +8,6 @@
 
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
-#include "nx2_crash_dump.h"
 #include "nx2_switches.h"
 #include "startup_checks.h"
 
@@ -87,7 +86,6 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 
 int main(int argc, char* argv[]) {
     LoadNx2Switches(argv[0]);
-    InstallNx2CrashDump();
 #if YUZU_ROOM
     bool launch_room = false;
     for (int i = 1; i < argc; i++) {

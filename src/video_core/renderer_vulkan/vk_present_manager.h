@@ -19,6 +19,9 @@
 #include "video_core/renderer_vulkan/vk_host_pacer.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#ifdef EGLANTINE_STREAMLINE
+#include "video_core/vulkan_common/streamline_frame_gen.h"
+#endif
 
 namespace Core::Frontend {
 class EmuWindow;
@@ -48,12 +51,17 @@ struct Frame {
     bool storage_capable{};
     u64 render_tick{};                               ///< Scheduler tick that renders the frame
     std::chrono::steady_clock::time_point queued_at; ///< When it reached the present queue
-    /// Frame generation: frames generated for this frame's game frame (0: none), and which of
-    /// them this is (1..generated_count; 0 for the game frame, presented after them).
-    u32 generated_count{};
-    u32 generated_index{};
     u64 frame_gen_id{};        ///< AMD frame generation: the prepared game frame shown, or 0.
     VkRect2D frame_gen_rect{}; ///< Where the game picture sits in the frame.
+    /// Time the present thread leaves before presenting the next frame. Frame generation sets it
+    /// on generated frames, so they share the screen time evenly with the real ones.
+    std::chrono::nanoseconds present_spacing{};
+#ifdef EGLANTINE_STREAMLINE
+    // DLSS Frame Generation: the guest frame presented and where the guest image is in the frame.
+    bool frame_gen{};
+    Streamline::FrameGenFrame frame_gen_frame{};
+    VkRect2D guest_rect{};
+#endif
 };
 
 class PresentManager {
@@ -69,6 +77,13 @@ public:
 
     /// Returns the last used presentation frame
     Frame* GetRenderFrame();
+
+    /// The time GetRenderFrame calls waited for a frame since the last call of this (the
+    /// present thread holding the renderer back).
+    [[nodiscard]] std::chrono::steady_clock::duration TakeBlockedTime() {
+        return std::chrono::steady_clock::duration{
+            blocked_time.exchange(0, std::memory_order_relaxed)};
+    }
 
     /// Pushes a frame for presentation
     void Present(Frame* frame);
@@ -94,14 +109,13 @@ public:
 private:
     enum class TransferMode { Unsupported, Copy, Blit };
 
+    void StartPresentThread();
+
     void PresentThread(std::stop_token token);
 
     /// Host frame pacer (vk_host_pacer.h): collects when earlier frames were shown and holds
     /// `frame` until its target. Returns whether it was held.
     bool PaceFrame(Frame* frame, std::stop_token token);
-    /// Spaces a game frame's generated frames and the game frame itself evenly over the game
-    /// frame interval, instead of presenting them back to back (present thread only).
-    void PaceGeneratedFrame(const Frame* frame, std::stop_token token);
 
     /// Waits for each present id until it is shown (VK_KHR_present_wait).
     void PresentWaitThread(std::stop_token token);
@@ -126,6 +140,10 @@ private:
     void UpdateHdrMetadata();
 
     void SetImageCount();
+
+    /// With EDEN_DKB_FRAME_TRACE=1 and frame generation on, logs the presents of every 10 s.
+    void LogPacing(const Frame* frame, std::chrono::steady_clock::duration took,
+                   std::chrono::steady_clock::time_point now);
 
 private:
     const vk::Instance& instance;
@@ -153,6 +171,18 @@ private:
     std::atomic<std::size_t> image_count{};
     std::atomic<std::size_t> swapchain_image_count{};
     std::atomic<VkFormat> swapchain_image_format{};
+    /// The present thread presents no frame before this (Frame::present_spacing).
+    std::chrono::steady_clock::time_point next_present{};
+    struct {
+        std::chrono::steady_clock::time_point since{};
+        u64 real{};
+        u64 generated{};
+        std::chrono::nanoseconds spacing{};
+        std::chrono::steady_clock::duration present_time{};
+    } pacing_log;
+    /// See TakeBlockedTime. Atomic: a composite can also run from a syncpoint action on
+    /// another thread (GPU::RequestComposite).
+    std::atomic<std::chrono::steady_clock::rep> blocked_time{};
 
     // Host frame pacer (LICHII_HOST_PACE, with VK_KHR_present_wait; present thread only).
     struct PendingWait {
@@ -168,18 +198,6 @@ private:
     bool present_wait_enabled{};
     HostPacer pacer;
     u64 last_present_id{};
-    std::chrono::steady_clock::time_point last_game_frame_queued{};
-    std::chrono::nanoseconds game_frame_interval{};
-    std::chrono::steady_clock::time_point next_generated_present{};
-    /// Where frame generation's frames went out, logged every 10 s.
-    struct GeneratedPacingStats {
-        std::chrono::steady_clock::time_point window_start{};
-        std::chrono::steady_clock::time_point last_present{};
-        double to_generated_ms{}; ///< From a game frame to the next sequence's first frame
-        double to_game_ms{};      ///< From a generated frame to its game frame
-        u32 to_generated_count{};
-        u32 to_game_count{};
-    } generated_pacing;
     std::mutex present_wait_mutex; ///< Held while waiting on a swapchain; recreation takes it
     std::mutex wait_queue_mutex;
     std::condition_variable_any wait_queue_cv;

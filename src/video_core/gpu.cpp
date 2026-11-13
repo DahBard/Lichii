@@ -337,51 +337,37 @@ struct GPU::Impl {
             return raster_area;
         }
         raster_area.preemtive = true;
-        // EDEN_NX2_EXP60: the cache locks stayed taken, so the GPU thread looks for this read.
-        const bool handed = raster_area.source == VideoCore::DownloadAreaSource::Handed;
         // A guest CPU read of GPU-written memory (reactive flushing): count them, they decide
         // whether buffer data must be copied back at every fence (EDEN_NX2_BUFFER_DOWNLOADS).
-        if (static std::atomic<u64> reads{};
-            !handed && (reads.fetch_add(1, std::memory_order_relaxed) & 63) == 0) {
+        if (static std::atomic<u64> reads{}; (reads.fetch_add(1, std::memory_order_relaxed) & 63) == 0) {
             LOG_INFO(HW_GPU, "CPU read of GPU-written memory [{:#x}, {:#x}) ({} so far)",
                      raster_area.start_address, raster_area.end_address,
                      reads.load(std::memory_order_relaxed));
         }
         namespace AsyncReadback = VideoCore::AsyncReadback;
         const u64 read_request = AsyncReadback::Now();
-        // The area the GPU thread flushed: a handed read's is looked up there.
-        auto read_area = raster_area;
+        const u64 area_size = raster_area.end_address - raster_area.start_address;
         // In flight: an earlier read's downloads cover the area, only FinishRead is left.
         if (!raster_area.in_flight) {
             // Filled on the GPU thread while this thread waits for it.
             Stats::FlushTiming timing{};
-            const u64 fence = RequestSyncOperation(
-                [this, raster_area, addr, size, handed, &timing, &read_area]() {
-                    const u64 flush_start = AsyncReadback::Now();
-                    timing.start = Stats::Now();
-                    const Stats::HostWaits host_before = Stats::t_host_waits;
-                    const u64 bytes_before = Stats::t_download_bytes;
-                    // Apply collected guest writes before downloading GPU data over guest memory.
-                    InvalidateGPUCache();
-                    timing.applied = Stats::Now();
-                    // A handed read gets the locked look here, with its read trap and preflush
-                    // marks.
-                    const auto flush_area =
-                        handed ? renderer->ReadRasterizer()->GetFlushAreaLocked(addr, size)
-                               : raster_area;
-                    if (!handed || !flush_area.preemtive) {
-                        renderer->ReadRasterizer()->FlushRegionForRead(
-                            flush_area.start_address,
-                            flush_area.end_address - flush_area.start_address);
-                    }
-                    read_area = flush_area;
-                    timing.host_ns = Stats::t_host_waits.ns - host_before.ns;
-                    timing.finishes = Stats::t_host_waits.count - host_before.count;
-                    timing.bytes = Stats::t_download_bytes - bytes_before;
-                    timing.end = Stats::Now();
-                    AsyncReadback::Add(AsyncReadback::g_counters.flush_ns,
-                                       AsyncReadback::Now() - flush_start);
-                });
+            const u64 fence = RequestSyncOperation([this, raster_area, area_size, &timing]() {
+                const u64 flush_start = AsyncReadback::Now();
+                timing.start = Stats::Now();
+                const Stats::HostWaits host_before = Stats::t_host_waits;
+                const u64 bytes_before = Stats::t_download_bytes;
+                // Apply collected guest writes before downloading GPU data over guest memory.
+                InvalidateGPUCache();
+                timing.applied = Stats::Now();
+                renderer->ReadRasterizer()->FlushRegionForRead(raster_area.start_address,
+                                                               area_size);
+                timing.host_ns = Stats::t_host_waits.ns - host_before.ns;
+                timing.finishes = Stats::t_host_waits.count - host_before.count;
+                timing.bytes = Stats::t_download_bytes - bytes_before;
+                timing.end = Stats::Now();
+                AsyncReadback::Add(AsyncReadback::g_counters.flush_ns,
+                                   AsyncReadback::Now() - flush_start);
+            });
             // The split's back runs it after the entry it is on. The tick sent through the GPU
             // thread's queue still runs it without the split.
             VideoCommon::GpuSplit::Get().RequestTick();
@@ -392,8 +378,7 @@ struct GPU::Impl {
         // The GPU thread submitted the downloads without waiting for the host GPU: this thread
         // waits for them and writes them to guest memory, while the GPU thread goes on.
         AsyncReadback::t_reading = true;
-        renderer->ReadRasterizer()->FinishRead(read_area.start_address,
-                                               read_area.end_address - read_area.start_address);
+        renderer->ReadRasterizer()->FinishRead(raster_area.start_address, area_size);
         AsyncReadback::t_reading = false;
         AsyncReadback::CountRead(raster_area.in_flight ? AsyncReadback::Read::InFlight
                                                        : AsyncReadback::Read::Async,

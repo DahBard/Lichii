@@ -114,6 +114,10 @@ void BufferCache<P>::RunGarbageCollector(bool aggressive_gc) {
         }
     }
     for (const BufferId buffer_id : evicted) {
+        if (create_trace.enabled) {
+            ++create_trace.collected;
+            create_trace.collected_bytes += slot_buffers[buffer_id].SizeBytes();
+        }
         DeleteBuffer(buffer_id);
     }
 }
@@ -130,6 +134,19 @@ void BufferCache<P>::TickFrame() {
         if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds{2}) {
             last = now;
             LOG_INFO(HW_GPU, "Memory trace: buffer cache {} MiB", buffer_bytes >> 20);
+        }
+    }
+    if (CreateTrace& trace = create_trace; trace.enabled) {
+        if (const auto now = std::chrono::steady_clock::now(); now - trace.last >= std::chrono::seconds{10}) {
+            trace.last = now;
+            LOG_INFO(HW_GPU,
+                     "Buffer trace: {} MiB in buffers; in 10 s {} created ({} MiB), {} joined into "
+                     "them ({} MiB copied), {} stream leaps, {} collected ({} MiB)",
+                     buffer_bytes >> 20, trace.creates, trace.created_bytes >> 20, trace.joins,
+                     trace.joined_bytes >> 20, trace.leaps, trace.collected,
+                     trace.collected_bytes >> 20);
+            trace.creates = trace.created_bytes = trace.joins = trace.joined_bytes = trace.leaps =
+                trace.collected = trace.collected_bytes = 0;
         }
     }
     if (const GeometryStats& stats = geometry_stats; frame_tick % 600 == 0 && stats.syncs != 0) {
@@ -287,7 +304,8 @@ void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size
 }
 
 template <class P>
-void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu_data) {
+void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu_data,
+                                 bool engine_write) {
     Core::g_buffer_write_pages.Mark(device_addr, size);
     Nx2NoteListHostWrite(device_addr, size);
     NoteUniformWrite(device_addr, size);
@@ -306,7 +324,14 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
         const DAddr page_end = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE);
         if (!gpu_modified_ranges.Intersects(page_begin, page_end - page_begin)) {
             if (!Nx2Perf::Verify()) {
-                memory_tracker.MarkRegionAsCpuModified(device_addr, size);
+                if (engine_write) {
+                    // Untracking the pages and tracking them again at the upload changed their
+                    // host protection twice (two VirtualProtect calls each, ~4% of the GPU
+                    // thread at Ocarina of Time's water) for writes no guest CPU access saw.
+                    memory_tracker.MarkRegionAsWrittenTracked(device_addr, size);
+                } else {
+                    memory_tracker.MarkRegionAsCpuModified(device_addr, size);
+                }
                 MarkVertexBuffersStale(device_addr, size);
                 return;
             }
@@ -400,13 +425,20 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     DAddr device_addr_end_aligned = Common::AlignUp(device_addr + size, Core::DEVICE_PAGESIZE);
     area->start_address = device_addr_start_aligned;
     area->end_address = device_addr_end_aligned;
-    if (memory_tracker.IsRegionPreflushable(device_addr, size)) {
+    // Preflushable data is downloaded at fences, but only where it is marked (QueueFenceDownload):
+    // the rest of the range still needs this flush.
+    if (memory_tracker.IsRegionPreflushable(device_addr, size) &&
+        !HasGpuWritesNotDownloadedAtFence(device_addr_start_aligned,
+                                          device_addr_end_aligned - device_addr_start_aligned)) {
         // Fence downloads keep it, once the first read's download is in guest memory.
         area->in_flight = std::ranges::any_of(read_downloads, [&](const ReadDownload& download) {
             return download.write_ranges.Intersects(
                 device_addr_start_aligned, device_addr_end_aligned - device_addr_start_aligned);
         });
         area->preemtive = !area->in_flight;
+        // The core keeps this area: a later GPU write to its unmarked pages must arm them again.
+        read_trapped_ranges.Subtract(device_addr_start_aligned,
+                                     device_addr_end_aligned - device_addr_start_aligned);
         return area;
     };
     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
@@ -1549,8 +1581,6 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
         const DAddr diff = base_address - *cpu_src_address;
         const DAddr new_base_address = *cpu_dest_address + diff;
         tmp_intervals.push_back({new_base_address, size});
-        // Marked before QueueFenceDownload arms a read trap: a trapped read answered without the
-        // caches' locks (RasterizerVulkan::GetFlushArea) must find the mark.
         if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
             Tegra::Nx2MarkGpuWritten(new_base_address, size);
         }
@@ -1830,43 +1860,73 @@ void BufferCache<P>::SetUniformBuffersState(const std::array<u32, NUM_STAGES>& m
 template <class P>
 void BufferCache<P>::BeginGraphicsUniforms(const Nx2FastDraw::Delta* delta) {
     UniformKeep& keep = uniform_keep;
-    const bool unwritten = !keep.memory_writes_lost && keep.draw_deletions == buffer_deletions;
+    const u64 sync_serial = Nx2FastDraw::SyncSerial();
+    const u64 host_serial = gpu_memory != nullptr ? gpu_memory->HostPointerSerial() : 0;
+    const bool known = delta != nullptr && !delta->no_uniform_keeps && !keep.memory_writes_lost &&
+                       keep.draw_deletions == buffer_deletions &&
+                       keep.sync_serial == sync_serial && keep.host_serial == host_serial;
     keep.draw_deletions = buffer_deletions;
-    keep.candidates = {};
-    keep.writes.clear();
-    const std::array<u32, NUM_STAGES> streamed = std::exchange(keep.streamed, {});
-    const bool usable = delta != nullptr && unwritten && !delta->no_uniform_keeps;
-    if (usable) {
-        keep.writes.insert(keep.writes.end(), keep.memory_writes.begin(),
-                           keep.memory_writes.end());
+    keep.sync_serial = sync_serial;
+    keep.host_serial = host_serial;
+    if (!known) {
+        keep.clean = {};
+    }
+    for (size_t stage = 0; stage < NUM_STAGES && known; ++stage) {
+        u32 clean = keep.clean[stage] & ~delta->binds[stage];
+        for (u32 mask = clean; mask != 0; mask &= mask - 1) {
+            const u32 index = static_cast<u32>(std::countr_zero(mask));
+            const auto [begin, size] = keep.ranges[stage][index];
+            const auto overlaps = [begin, end = begin + size](DAddr write_begin, DAddr write_end) {
+                return write_begin < end && begin < write_end;
+            };
+            bool written = std::ranges::any_of(keep.memory_writes, [&](const auto& write) {
+                return overlaps(write.first, write.second);
+            });
+            // The device memory inline constant data landed on (writes to unmapped addresses
+            // land nowhere).
+            for (u32 write = 0; write < delta->num_device_writes && !written; ++write) {
+                written = overlaps(delta->device_begin[write], delta->device_end[write]);
+            }
+            if (written) {
+                clean &= ~(1u << index);
+            }
+        }
+        keep.clean[stage] = clean;
     }
     keep.memory_writes.clear();
     keep.memory_writes_lost = false;
-    if (!usable) {
-        return;
-    }
-    // The device memory inline constant data landed on (writes to unmapped addresses land
-    // nowhere).
-    for (u32 write = 0; write < delta->num_device_writes; ++write) {
-        keep.writes.emplace_back(delta->device_begin[write], delta->device_end[write]);
-    }
-    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
-        keep.candidates[stage] = streamed[stage] & ~delta->binds[stage];
-    }
 }
 
 template <class P>
 bool BufferCache<P>::UniformRangeKept(size_t stage, u32 index, DAddr device_addr,
                                       u32 size) const noexcept {
     const UniformKeep& keep = uniform_keep;
-    if (((keep.candidates[stage] >> index) & 1) == 0) {
-        return false;
+    return ((keep.clean[stage] >> index) & 1) != 0 &&
+           keep.ranges[stage][index] == std::pair<DAddr, u32>{device_addr, size};
+}
+
+template <class P>
+bool BufferCache<P>::ConstantDataReachesBuffers(DAddr device_addr, u64 size) const {
+    if (memory_tracker.IsRegionEverSynchronized(device_addr, size) ||
+        Tegra::Nx2MayBeGpuWritten(device_addr, size)) {
+        return true;
     }
-    const auto overlaps = [&](const std::pair<DAddr, DAddr>& write) {
-        return write.first < device_addr + size && device_addr < write.second;
-    };
-    return !keep.memory_writes_lost && std::ranges::none_of(keep.writes, overlaps) &&
-           std::ranges::none_of(keep.memory_writes, overlaps);
+    // Guest memory newer than a command list copy of the page (Nx2NoteListHostWrite).
+    if (Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
+        for (DAddr page = Common::AlignDown(device_addr, DEVICE_PAGESIZE);
+             page < device_addr + size; page += DEVICE_PAGESIZE) {
+            if (Tegra::Nx2IsCommandListPage(page)) {
+                return true;
+            }
+        }
+    }
+    // Repacked vertex buffers read guest memory again only when marked stale.
+    if constexpr (requires { runtime.AnyVertexRepacked(); }) {
+        if (runtime.AnyVertexRepacked()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 template <class P>
@@ -2240,7 +2300,8 @@ void BufferCache<P>::PopAsyncFlushes() {
 }
 
 template <class P>
-void BufferCache<P>::ClaimCpuWrites(std::span<const std::pair<DAddr, u64>> ranges) {
+template <typename Ranges>
+void BufferCache<P>::ClaimCpuWrites(const Ranges& ranges) {
     for (const auto& [device_addr, size] : ranges) {
         if (IsRegionGpuModified(device_addr, size)) {
             ClearReplacedDownload(device_addr, size);
@@ -2663,9 +2724,17 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     const u32 size = (std::min)(binding.size, (*channel_state->uniform_buffer_sizes)[stage][index]);
     Buffer& buffer = slot_buffers[binding.buffer_id];
     TouchBuffer(buffer, binding.buffer_id);
+    const bool has_host_buffer = binding.buffer_id != NULL_BUFFER_ID;
+    // Native programs keep tables next to their code in a 64 KiB bank read with indirect offsets
+    // (Splatoon Raiders: the dialogue box corners in c1). Writes to that memory can go unnoticed by
+    // the memory tracker, leaving stale host contents, so such a bank is checked (below).
+    const bool native_bank = has_host_buffer &&
+                             (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
+                             size != 0 && gpu_memory != nullptr && gpu_memory->UsesNativeTiling();
     bool verify_kept = false;
     if constexpr (!IS_OPENGL && VideoCommon::StreamUniformReusable<Runtime>) {
-        if (UniformRangeKept(stage, index, device_addr, size)) {
+        // Unnoticed writes would reach a kept bank too: those stream as before.
+        if (!native_bank && UniformRangeKept(stage, index, device_addr, size)) {
             if (ubo_keep_verify) {
                 ++uniform_keep.verified;
                 verify_kept = true;
@@ -2700,13 +2769,12 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             } else if (VideoCommon::RebindKeptUniform(runtime, stage, index, device_addr, size)) {
                 channel_state->fast_bound_uniform_buffers[stage] |= 1u << binding_index;
                 channel_state->uniform_buffer_binding_sizes[stage][binding_index] = size;
-                uniform_keep.streamed[stage] |= 1u << index;
                 ++uniform_keep.kept;
                 return;
             }
         }
+        uniform_keep.clean[stage] &= ~(1u << index);
     }
-    const bool has_host_buffer = binding.buffer_id != NULL_BUFFER_ID;
     const u32 offset = has_host_buffer ? buffer.Offset(device_addr) : 0;
     const bool needs_alignment_stream = [&]() {
         if constexpr (IS_OPENGL) {
@@ -2719,11 +2787,9 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             return alignment > 1 && (offset % alignment) != 0;
         }
     }();
-    // Native programs keep tables next to their code in a 64 KiB bank read with indirect offsets
-    // (Splatoon Raiders: the dialogue box corners in c1). Writes to that memory can go unnoticed by
-    // the memory tracker, leaving stale host contents, so check such a bank on every bind: games
-    // rewrite per-draw data between draws, and checking once per frame left it stale for a frame
-    // now and then (white flashes in Ocarina of Time, Eglantine 031e07436c).
+    // Such a bank is checked on every bind: games rewrite per-draw data between draws, and
+    // checking once per frame left it stale for a frame now and then (white flashes in Ocarina of
+    // Time, Eglantine 031e07436c).
     // LICHII_BANK_CHECK (Fritchii's EDEN_NX2_EXP9, which it also reads): 1 compares only the
     // pages that may have changed (CheckNativeBankPagesBits), 3 (default, as Fritchii v5) is
     // 1 without the once-a-frame compare of every page, which never found a change there
@@ -2737,14 +2803,11 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         }
         return value != nullptr && value[0] != '\0' ? std::atoi(value) : 3;
     }();
-    const bool native_bank = has_host_buffer &&
-                             (*channel_state->uniform_buffer_sizes)[stage][index] == 0x10000 &&
-                             size != 0 && gpu_memory != nullptr && gpu_memory->UsesNativeTiling() &&
-                             !memory_tracker.IsRegionGpuModified(device_addr, size);
-    if (native_bank && bank_check_mode != 0) {
+    const bool check_bank = native_bank && !memory_tracker.IsRegionGpuModified(device_addr, size);
+    if (check_bank && bank_check_mode != 0) {
         Nx2Profile::Scope scope{Nx2Profile::Zone::BankCheck};
         CheckNativeBankPagesBits(device_addr, size, bank_check_mode);
-    } else if (native_bank) {
+    } else if (check_bank) {
         // The bank size is only an upper limit: stop at the end of the mapped memory.
         u64 mapped_size = 0;
         while (mapped_size < size &&
@@ -2845,7 +2908,8 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                 Nx2Profile::AddFine(Nx2Profile::FineCounter::UniformStreamed,
                                     streamed ? 1 - rebound : 0);
                 if (streamed) {
-                    uniform_keep.streamed[stage] |= 1u << index;
+                    uniform_keep.clean[stage] |= 1u << index;
+                    uniform_keep.ranges[stage][index] = {device_addr, size};
                     ++uniform_keep.streamed_binds;
                 }
             }
@@ -3779,14 +3843,15 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     NoteUniformWrite(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
     gpu_modified_ranges.Add(device_addr, size);
-    const bool nx2 = Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
-    // Marked before QueueFenceDownload arms a read trap: a trapped read answered without the
-    // caches' locks (RasterizerVulkan::GetFlushArea) must find the mark.
-    if (nx2) {
+    const bool ampere = Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+    if (ampere) {
+        // Before QueueFenceDownload arms read traps: guest reads skip the buffer cache's lock on
+        // pages without the mark (RasterizerVulkan::GetFlushArea), and the arm is what ends a
+        // core's read area.
         Tegra::Nx2MarkGpuWritten(device_addr, size);
     }
     QueueFenceDownload(device_addr, size);
-    if (nx2) {
+    if (ampere) {
         Nx2NoteListWrite(buffer_id, device_addr, size);
     }
 }
@@ -4174,7 +4239,8 @@ void BufferCache<P>::Nx2NoteListHostWrite(DAddr device_addr, u64 size) {
 }
 
 template <class P>
-BufferId BufferCache<P>::FindBuffer(DAddr device_addr, u32 size, bool sparse_compatible) {
+BufferId BufferCache<P>::FindBuffer(DAddr device_addr, u32 size, bool sparse_compatible,
+                                    std::source_location caller) {
     const u64 page = device_addr >> CACHING_PAGEBITS;
     if (device_addr == 0 || page >= page_table.size()) {
         return NULL_BUFFER_ID;
@@ -4198,7 +4264,7 @@ BufferId BufferCache<P>::FindBuffer(DAddr device_addr, u32 size, bool sparse_com
             }
         }
     }
-    return CreateBuffer(device_addr, size, sparse_compatible);
+    return CreateBuffer(device_addr, size, sparse_compatible, caller);
 }
 
 template <class P>
@@ -4316,14 +4382,35 @@ void BufferCache<P>::JoinOverlap(BufferId new_buffer_id, BufferId overlap_id,
 }
 
 template <class P>
-BufferId BufferCache<P>::CreateBuffer(DAddr device_addr, u32 wanted_size,
-                                      bool sparse_compatible) {
+BufferId BufferCache<P>::CreateBuffer(DAddr device_addr, u32 wanted_size, bool sparse_compatible,
+                                      std::source_location caller) {
     const StutterTrace::SiteScope site{StutterTrace::Site::BufferCreate};
+    const DAddr asked_addr = device_addr;
+    const u32 asked_size = wanted_size;
     DAddr device_addr_end = Common::AlignUp(device_addr + wanted_size, CACHING_PAGESIZE);
     device_addr = Common::AlignDown(device_addr, CACHING_PAGESIZE);
     wanted_size = static_cast<u32>(device_addr_end - device_addr);
     const OverlapResult overlap = ResolveOverlaps(device_addr, wanted_size);
     const u32 size = static_cast<u32>(overlap.end - overlap.begin);
+    if (CreateTrace& trace = create_trace; trace.enabled) {
+        u64 joined{};
+        for (const BufferId overlap_id : overlap.ids) {
+            joined += slot_buffers[overlap_id].SizeBytes();
+        }
+        ++trace.creates;
+        trace.created_bytes += size;
+        trace.joins += overlap.ids.size();
+        trace.joined_bytes += joined;
+        trace.leaps += overlap.has_stream_leap ? 1 : 0;
+        if (size >= 64_MiB && trace.large_logged < 256) {
+            ++trace.large_logged;
+            LOG_INFO(HW_GPU,
+                     "Buffer trace: created {:#x}+{:#x} ({} MiB) for {:#x}+{:#x} at line {}, joining "
+                     "{} buffers ({} MiB){}",
+                     overlap.begin, size, size >> 20, asked_addr, asked_size, caller.line(),
+                     overlap.ids.size(), joined >> 20, overlap.has_stream_leap ? ", stream leap" : "");
+        }
+    }
     const BufferId new_buffer_id =
         slot_buffers.insert(runtime, overlap.begin, size, sparse_compatible);
     VideoCommon::Churn::Add(VideoCommon::Churn::BuffersCreated);
@@ -4784,35 +4871,56 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     read_trapped_ranges.Subtract(slot_buffers[buffer_id].CpuAddr(),
                                  slot_buffers[buffer_id].SizeBytes());
     cpu_read_ranges.Subtract(slot_buffers[buffer_id].CpuAddr(), slot_buffers[buffer_id].SizeBytes());
-    bool dirty_index{false};
-    boost::container::small_vector<u64, NUM_VERTEX_BUFFERS> dirty_vertex_buffers;
     const auto scalar_replace = [buffer_id](Binding& binding) {
         if (binding.buffer_id == buffer_id) {
             binding.buffer_id = BufferId{};
         }
     };
-    const auto replace = [scalar_replace](std::span<Binding> bindings) {
+    const auto replace = [scalar_replace](auto& bindings) {
         std::ranges::for_each(bindings, scalar_replace);
     };
-
-    if (channel_state->index_buffer.buffer_id == buffer_id) {
-        channel_state->index_buffer.buffer_id = BufferId{};
-        dirty_index = true;
-    }
-
-    for (u32 index = 0; index < channel_state->vertex_buffers.size(); index++) {
-        auto& binding = channel_state->vertex_buffers[index];
-        if (binding.buffer_id == buffer_id) {
+    // Every channel keeps its own bindings, and a resolved uniform buffer id survives across its
+    // draws. A channel left out would address whatever buffer reuses the slot next at the old
+    // offset (Ocarina of Time draws from several channels: a frame of garbage constants).
+    const auto scrub = [&](BufferCacheChannelInfo& channel) {
+        auto& flags = channel.maxwell3d.dirty.flags;
+        if (channel.index_buffer.buffer_id == buffer_id) {
+            channel.index_buffer.buffer_id = BufferId{};
+            flags[Dirty::IndexBuffer] = true;
+        }
+        for (u32 index = 0; index < channel.vertex_buffers.size(); index++) {
+            auto& binding = channel.vertex_buffers[index];
+            if (binding.buffer_id != buffer_id) {
+                continue;
+            }
             binding.buffer_id = BufferId{};
-            UpdateVertexBufferSlot(index, binding);
-            dirty_vertex_buffers.push_back(index);
+            if (&channel == channel_state) {
+                UpdateVertexBufferSlot(index, binding);
+            }
+            flags[Dirty::VertexBuffers] = true;
+            flags[Dirty::VertexBuffer0 + index] = true;
+        }
+        std::ranges::for_each(channel.uniform_buffers, replace);
+        std::ranges::for_each(channel.storage_buffers, replace);
+        std::ranges::for_each(channel.texture_buffers, replace);
+        replace(channel.transform_feedback_buffers);
+        scalar_replace(channel.count_buffer_binding);
+        scalar_replace(channel.indirect_buffer_binding);
+        replace(channel.compute_uniform_buffers);
+        replace(channel.compute_storage_buffers);
+        replace(channel.compute_texture_buffers);
+        if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
+            channel.dirty_uniform_buffers.fill(~u32{0});
+            channel.uniform_buffer_binding_sizes.fill({});
+        }
+        channel.has_deleted_buffers = true;
+    };
+    scrub(*channel_state);
+    for (const size_t channel_id : active_channel_ids) {
+        if (&channel_storage[channel_id] != channel_state) {
+            scrub(channel_storage[channel_id]);
         }
     }
-    std::ranges::for_each(channel_state->uniform_buffers, replace);
-    std::ranges::for_each(channel_state->storage_buffers, replace);
-    replace(channel_state->transform_feedback_buffers);
-    replace(channel_state->compute_uniform_buffers);
-    replace(channel_state->compute_storage_buffers);
 
     // Adapted from the pre-refresh branch: merged buffers invalidate segment references too.
     InvalidateMultiRangeSegments(std::span{graphics_segments}, buffer_id);
@@ -4832,24 +4940,6 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
         delayed_destruction_ring.Push(std::move(slot_buffers[buffer_id]));
 
     slot_buffers.erase(buffer_id);
-
-    if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
-        channel_state->dirty_uniform_buffers.fill(~u32{0});
-        channel_state->uniform_buffer_binding_sizes.fill({});
-    }
-
-    auto& flags = maxwell3d->dirty.flags;
-    if (dirty_index) {
-        flags[Dirty::IndexBuffer] = true;
-    }
-
-    if (dirty_vertex_buffers.size() > 0) {
-        flags[Dirty::VertexBuffers] = true;
-        for (auto index : dirty_vertex_buffers) {
-            flags[Dirty::VertexBuffer0 + index] = true;
-        }
-    }
-    channel_state->has_deleted_buffers = true;
 }
 
 template <class P>

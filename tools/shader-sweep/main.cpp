@@ -29,6 +29,7 @@
 #include "shader_recompiler/frontend/maxwell/structured_control_flow.h"
 #include "shader_recompiler/frontend/maxwell/translate_program.h"
 #include "shader_recompiler/host_translate_info.h"
+#include "shader_recompiler/ir_opt/passes.h"
 #ifdef SHADER_SWEEP_V2
 #include "common/unique_function.h"
 #include "video_core/pipeline_cache_files.h"
@@ -716,6 +717,16 @@ std::vector<PipelineStage> CompileLegacyPipeline(std::span<OfflineEnvironment> e
         }
         stages.push_back({slot, env.ShaderStage(), {}});
     }
+    // The runtime fits the arrays of every stage the pipeline emits to one descriptor set.
+    std::array<Shader::IR::Program*, 6> emitted_programs{};
+    size_t num_programs{};
+    for (const PipelineStage& stage : stages) {
+        if (stage.slot != 0 || !uses_vertex_b) {
+            emitted_programs[num_programs++] = &programs[stage.slot];
+        }
+    }
+    Shader::Optimization::LimitPipelineSampledTextureArrays(
+        std::span{emitted_programs.data(), num_programs}, host);
     diagnostic["phase"] = "spirv";
     Shader::Backend::Bindings bindings;
     const Shader::IR::Program* previous = nullptr;
