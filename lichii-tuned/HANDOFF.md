@@ -2314,6 +2314,12 @@ Own changes:
      perf-trace-noprofile as ab-26's baseline, frame-times, verify (was verify-r55), ab-6, ab-11,
      ab-16, ab-17, ab-25, ab-26, trace-no-fsr, trace-real-occlusion). The code cleanup (dead
      paths behind settled switches) is a later, separate build.
+     From about 15:02 to 16:05 UTC on 2026-11-13 the clone's `origin` pointed at the old public
+     fork again (a session restart reset it), so 64dcb7d40, r61's 472eadbce, 504e1bc08, tuned4
+     `c73800765` and a backup branch of merge 4's resolution (`r22-merge-nx2d-wip`) went there;
+     its Actions ran them (lichii-tuned #61 and #62, tests #12: all passed; artifacts named
+     r121/r122 by the offset). All of it is on Blitchii now. Push to
+     https://github.com/DahBard/blitchii by URL and check `git remote -v` first.
    - Merge 3, done 2026-11-13 (r60; plan lichii-tuned/merge-plan-nx2c.md, notes in
      scratchpad/merge3/): step 1 merged nx2 `65745c243f` (60 commits; 83 conflicted files, 199
      hunks) in `9161e35d2`, resolved by seven area agents and reviewed by six (no defects found;
