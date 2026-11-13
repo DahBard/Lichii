@@ -63,10 +63,10 @@ index 256f09a736..ae99918678 100644
              set(sha256 b61fecfad224d2f0b6a040c23663e5f6915eb500be9fc36016e3ffcb0aa66e52)
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..d23888a7af
+index 0000000000..df4ff14189
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
-@@ -0,0 +1,589 @@
+@@ -0,0 +1,501 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
@@ -477,6 +477,8 @@ index 0000000000..d23888a7af
 +     redirect (Network; online play stays off), two unchecked Age of Imprisonment options, and
 +     Help > Apply Recommended Settings also resets per-game overrides of the table's settings
 +     (backed up; Restore brings them back).
++ * r61: r60 from the new private repository, with 35 of the test launchers removed (the list
++   below has the 13 left; verify-r55.bat is now verify.bat). The emulator itself is r60's.
 + * Recommended speed settings, applied once on first start (change them freely afterwards):
 +   GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
 +   on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines
@@ -493,54 +495,17 @@ index 0000000000..d23888a7af
 +CPU tuning flags, PAUSE spinning instead of UMWAIT). Use it to tell whether a graphical glitch
 +comes from the compiler (only the pgo builds show it) or from the source.
 +
-+A/B launchers (this build with one change switched off or on; compare the same scene each time):
-+ ab-1-stock-threading.bat     no core placement and no UMWAIT: only the compiler changes remain
-+ ab-2-no-core-placement.bat   Windows places every thread (LICHII_CPU_POLICY=off)
-+ ab-3-soft-placement.bat      only keeps threads off the low-power E-cores (LICHII_CPU_POLICY=soft)
-+ ab-4-strict-placement.bat    emulated CPU cores on P-cores too, pipeline builds on E-cores only
-+                              (LICHII_CPU_POLICY=strict)
-+ ab-5-no-umwait.bat           PAUSE spinning as before (LICHII_WAITPKG_SPIN=0)
++A/B launchers (this build with one change switched off or on; compare the same scene each time).
++r61 removed the A/Bs whose questions are settled or whose switches are gone, the old traces and
++the verify runs before r55; the notes above still name some of them for the builds that had them.
 + ab-6-official-texture-cache.bat  texture cache collects from 5 GiB, as official Lichii did
 +                              before 2026-11-08
-+ ab-8-skip-unbuilt-draws.bat  skips a draw while its new pipeline compiles instead of waiting
-+                              (EDEN_NX2_ASYNC_DISCARD=1): fewer hitches on new content, an object
-+                              can be missing for a few frames; logs like perf-trace.bat
-+ ab-9-amd-fp16.bat            keeps float16 shader math on AMD (EDEN_AMD_FP16=1); official builds
-+                              turn it off for a driver bug in another game, so look for wrong colors
-+ ab-10-run-ahead.bat          the game prepares the next frame while the GPU renders this one
-+                              even when the GPU is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow
-+                              GPU does not idle between frames; logs like perf-trace.bat
 + ab-11-official-shader-cache.bat  boot compiles only what the last sessions used
 +                              (EDEN_NX2_PRELOAD_ALL_PIPELINES=0)
-+ ab-12-round15-paths.bat      round 16's new shortcuts off (bank check, texture uploads,
-+                              mixed macro reads, attribute keys), logged like perf-trace.bat:
-+                              if a glitch or a frame-rate change goes away here, one of them
-+                              caused it
-+ ab-13-round16-texture-reads.bat  textures copied out of guest memory before they are untiled,
-+                              as in round 16 (EDEN_NX2_UNSWIZZLE_COPY=1), logged like
-+                              perf-trace.bat
-+ ab-15-round17-cpu.bat        round 18's CPU work from #717 all off (code generation, memory,
-+                              kernel, Ocarina patches), logged like perf-trace.bat
-+ ab-16-round17-jit.bat        only #717's code generation off, logged like perf-trace.bat
-+ ab-17-no-oot-patches.bat     only the Ocarina patches off (zstd, string compares, poll
-+                              backoff, wider core masks), logged like perf-trace.bat
-+ ab-18-round17-gpu-threads.bat  round 18's GPU thread work from #805 off (round 17's acquires,
-+                              macro reads and list waits), logged like perf-trace.bat
-+ ab-20-no-kernel-spin.bat     the emulated kernel's locks and waits sleep at once instead of
-+                              spinning first (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0): on a
-+                              power-limited laptop, compare the frame rate with the default
-+ ab-22-round19-shaders.bat    round 19's shader handling: translation on the GPU thread, every
-+                              draw waits for its pipeline (EDEN_NX2_ASYNC_TRANSLATE=0,
-+                              EDEN_NX2_ASYNC_DISCARD=0), logged like perf-trace.bat
-+ ab-23-round19-memory.bat     round 19's guest memory paths (EDEN_NX2_EXP35=0,
-+                              EDEN_NX2_EXP36=1, LICHII_BANK_CHECK=1, EDEN_NX2_EXP18=0,
-+                              EDEN_NX2_EXP29=0,
-+                              EDEN_NX2_INVALIDATE_BLOCKS=1, EDEN_NX2_SEC_RESERVE=0), logged like
-+                              perf-trace.bat
-+ ab-24-round19-render-targets.bat  no render target relocation or cold sweep
-+                              (EDEN_NX2_EXP43=0, EDEN_NX2_TC_COLD_FRAMES=0; the render-frame
-+                              clock stays on for the asynchronous shaders), logged like
-+                              perf-trace.bat
++ ab-16-round17-jit.bat        #717's code generation off, logged like perf-trace.bat: the first
++                              test when the emulated CPU crashes or glitches
++ ab-17-no-oot-patches.bat     the Ocarina patches off (zstd, string compares, poll backoff, wider
++                              core masks), logged like perf-trace.bat
 + ab-25-no-zero-trim.bat       no zero-page passes (EDEN_NX2_ZERO_TRIM=0): pages holding only
 +                              zeros stay in RAM (about 7 GB more in Ocarina), logged like
 +                              perf-trace.bat: compare the frames around perf-trace's
@@ -548,68 +513,15 @@ index 0000000000..d23888a7af
 + ab-26-no-1216.bat            repeat draws end at stride words, render enable addresses and
 +                              back macro calls as in r50 (EDEN_NX2_TEST_1216=0); unprofiled:
 +                              compare with perf-trace-noprofile.bat
-+ ab-29-no-1161-draws.bat      repeat draws as in r51: delta overflows, whole-buffer handle checks,
-+                              attribute formats end them (EDEN_NX2_TEST_1161_DRAWS=0)
-+ ab-32-no-1161-reports.bat    r51's fence lists, report locks and query pool resets
-+                              (EDEN_NX2_TEST_1161_REPORTS=0). ab-29 and ab-32 are unprofiled:
-+                              compare with perf-trace-noprofile.bat
-+ ab-36-no-1161-handles.bat    repeat draws as in r54 for shaders that pick their textures from
-+                              memory (EDEN_NX2_TEST_1161_HANDLES=0); unprofiled, compare with
-+                              perf-trace-noprofile.bat
-+ ab-40-low-power.bat          less spinning: the emulated kernel's locks and waits sleep at once
-+                              (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0), waiting cores idle in
-+                              C0.2 instead of C0.1 with an idle core's poll in one wait
-+                              (LICHII_UMWAIT_C02=1), and a 30 microsecond idle poll instead of
-+                              100 (EDEN_NX2_IDLE_SPIN_US=30); compare with
-+                              perf-trace-noprofile.bat
-+ ab-41-idle-poll-30.bat       only the 30 microsecond idle poll (EDEN_NX2_IDLE_SPIN_US=30), if
-+                              ab-40 helps; compare with perf-trace-noprofile.bat. ab-40 and
-+                              ab-41 log the clock trace, as perf-trace-noprofile does: run them
-+                              as option 3 above says
-+ verify-r55.bat               verify-r52 without resolving repeat draws in full, so they run and
-+                              the delta descriptor and uniform keep checks check them (their
-+                              mismatches should stay 0, as verify-r52's); slower
-+ verify-ports-off.bat         verify-r55 with three ports off, #1161's computed-handle delta
-+                              draws, #1216 and #1161's other repeat draw changes
-+                              (EDEN_NX2_TEST_1161_HANDLES=0, EDEN_NX2_TEST_1216=0,
-+                              EDEN_NX2_TEST_1161_DRAWS=0): whether the uniform keep mismatches
-+                              depend on them; slower
-+ verify-r52.bat               checks r52 against the slow ways ("Native bank check" missed and
-+                              bitsets missed, "Read download check" differing bytes, fast draw,
-+                              delta descriptor and uniform keep mismatches should stay 0, no
-+                              "Nx2Perf" errors); slower
-+ verify-r51.bat               resolves repeat draws in full and runs back macros the old way
-+                              ("Fast draw verify" mismatches and the back macros' "with other
-+                              writes" should stay 0, no "Nx2Perf mapping runs" errors); slower
-+ verify-r20.bat               compares round 20's shortcuts with the slow way ("Async translate
-+                              verify ... differ", tombstone hits and the bank check's "without
-+                              the frame check (mode 3)" should stay 0); slower
-+ verify-r18.bat               compares #805's shortcuts with the slow way on every use and logs
-+                              differences ("not met after the drain", "differing" and mismatch
-+                              counts should stay 0); slower
-+ verify-r16.bat               compares round 16's bank check and mixed macro reads with the old
-+                              way on every use and logs differences ("missed" and "differed"
-+                              should stay 0); slower
-+ trace-host-pace.bat          Fritchii's host frame pacer on (LICHII_HOST_PACE=1), logged like
-+                              perf-trace.bat plus "Host pacing on:" lines every 10 s
-+ trace-display.bat            the pacer only measuring (LICHII_HOST_PACE=2): the same lines
-+                              without holding frames, and the display's refresh rate
-+ trace-fp16.bat               ab-9 with the logging of perf-trace.bat
-+ trace-flush4096.bat          submits GPU work every 4096 draws instead of every 512 (AMD)
-+                              (EDEN_NX2_FLUSH_DRAWS=4096), logged like perf-trace.bat
-+ trace-old-jit.bat            the emulated CPU without round 7's inline counter reads
-+                              (LICHII_JIT_INLINE_CNTPCT=0), logged like perf-trace.bat
 + trace-no-fsr.bat             Ocarina's own upscale pass instead of AMD FSR, no 4K output
 +                              (EDEN_NX2_DLSS_REPLACEMENT=native), logged like perf-trace.bat
-+ trace-no-preflush.bat        no preflushed readbacks (EDEN_NX2_PREFLUSH=0), logged like
-+                              perf-trace.bat
-+ trace-downloads.bat          perf-trace.bat plus a list of what the GPU copies back and which
-+                              GPU-written memory the game reads (EDEN_NX2_DOWNLOAD_TRACE=1)
-+ trace-old-drains.bat         the split GPU thread waits for its back thread as in r18
-+                              (LICHII_ACQUIRE_POLL=0, LICHII_REPORT_DRAIN=all), logged like
-+                              perf-trace.bat: for comparison, or if the new waits misbehave
 + trace-real-occlusion.bat     runs the GPU occlusion queries again (LICHII_FAKE_OCCLUSION=0),
 +                              logged like perf-trace.bat: slower, for comparison
++ verify.bat                   checks this build against the slow ways while you play, with
++                              perf-trace's logging ("Native bank check" missed and bitsets
++                              missed, "Read download check" differing bytes, the delta descriptor
++                              and uniform keep mismatches should stay 0, no "Nx2Perf" errors);
++                              slower. It was verify-r55.bat
 + perf-trace.bat               default settings plus GPU thread zones, emulated CPU cores, frame
 +                              times and the heap and clock traces in the log
 +                              (EDEN_NX2_GPU_PROFILE=1, EDEN_DKB_FRAME_TRACE=1,
@@ -624,7 +536,7 @@ index 0000000000..d23888a7af
 +                              (EDEN_DKB_FRAME_TRACE=1, EDEN_NX2_HEAP_TRACE=1,
 +                              EDEN_NX2_CLOCK_TRACE=1; the heap and clock traces since r55):
 +                              gpu_back_cpu_ms_per_frame and frame times without the zones' cost;
-+                              the baseline for ab-26 to ab-41, which log the same
++                              the baseline for ab-26, which logs the same
 + frame-times.bat              default settings with only each frame's time logged
 +                              (LICHII_FRAME_TIMES=1): the 1% lows without the other logging
 +
@@ -656,28 +568,6 @@ index 0000000000..d23888a7af
 +The next builds download every pgo-* release's zip and merge it with Lichii's own profile,
 +weighted 4:1 toward the recorded game. If the compiler can't read an old profile, the build
 +carries on with Lichii's own.
-diff --git a/dist/lichii-tuned/ab-1-stock-threading.bat b/dist/lichii-tuned/ab-1-stock-threading.bat
-new file mode 100644
-index 0000000000..ee3bc60c7f
---- /dev/null
-+++ b/dist/lichii-tuned/ab-1-stock-threading.bat
-@@ -0,0 +1,4 @@
-+@echo off
-+rem Compiler changes only: Windows places threads, PAUSE spinning.
-+set LICHII_CPU_POLICY=off&& set LICHII_WAITPKG_SPIN=0
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-10-run-ahead.bat b/dist/lichii-tuned/ab-10-run-ahead.bat
-new file mode 100644
-index 0000000000..66de3f8751
---- /dev/null
-+++ b/dist/lichii-tuned/ab-10-run-ahead.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem The game prepares the next frame while the GPU still renders this one, also when the GPU
-+rem is behind (EDEN_NX2_FRAMES_AHEAD=2), so a slow GPU never idles between frames. Also logs
-+rem GPU timing like perf-trace.bat, for comparison.
-+set EDEN_NX2_FRAMES_AHEAD=2&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-11-official-shader-cache.bat b/dist/lichii-tuned/ab-11-official-shader-cache.bat
 new file mode 100644
 index 0000000000..b1c503eb31
@@ -689,43 +579,6 @@ index 0000000000..b1c503eb31
 +rem "Build all cached shaders before game start" off (EDEN_NX2_PRELOAD_ALL_PIPELINES=0 over the
 +rem line in nx2_switches.txt). Unused pipelines are kept up to a quarter of the RAM either way.
 +set EDEN_NX2_PRELOAD_ALL_PIPELINES=0
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-12-round15-paths.bat b/dist/lichii-tuned/ab-12-round15-paths.bat
-new file mode 100644
-index 0000000000..cda3097f19
---- /dev/null
-+++ b/dist/lichii-tuned/ab-12-round15-paths.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem Round 16's new shortcuts off, as in round 15, with the perf-trace logging: native bank pages
-+rem compared on every bind, texture uploads as before, macro reads that overlap queued writes
-+rem drained, and pipelines keyed by every vertex attribute type. If a glitch or a frame-rate change goes away here, one of them caused it.
-+set LICHII_BANK_CHECK=0&& set LICHII_TEXTURE_UPLOADS=0&& set LICHII_DMA_MIXED_READS=0&& set LICHII_KEY_ALL_ATTRIBUTES=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-13-round16-texture-reads.bat b/dist/lichii-tuned/ab-13-round16-texture-reads.bat
-new file mode 100644
-index 0000000000..1c40ef2e74
---- /dev/null
-+++ b/dist/lichii-tuned/ab-13-round16-texture-reads.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem Round 17's in-place texture reads off, as in round 16, with the perf-trace logging: each run of
-+rem guest texture memory is copied out before it is untiled. If a texture glitch goes away here,
-+rem the in-place reads caused it.
-+set EDEN_NX2_UNSWIZZLE_COPY=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-15-round17-cpu.bat b/dist/lichii-tuned/ab-15-round17-cpu.bat
-new file mode 100644
-index 0000000000..76efcc9dd1
---- /dev/null
-+++ b/dist/lichii-tuned/ab-15-round17-cpu.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Round 18's CPU work from upstream #717 all off, as in round 17, with the perf-trace logging: the
-+rem emulated CPU's code generation, the memory trap fast paths, the kernel locks and waits, and
-+rem Ocarina's zstd, string and resource-poll patches. If a crash, a glitch or a frame-rate change
-+rem goes away here, one of them caused it; ab-16 and ab-17 narrow it down.
-+set EDEN_NX2_JIT_FLAGS=0&& set EDEN_NX2_JIT_DISPATCH=0&& set EDEN_NX2_JIT_COMPACT_EXITS=0&& set EDEN_NX2_JIT_FAR_CODE=0&& set EDEN_NX2_JIT_FOLD_ADDR=0&& set EDEN_NX2_JIT_ZEXT=0&& set EDEN_NX2_JIT_SPILL_GPR=0&& set EDEN_NX2_JIT_SCRATCH_COPY=0&& set EDEN_NX2_JIT_NO_FRAME=0&& set EDEN_NX2_JIT_BACKEDGE_HALT=0&& set EDEN_NX2_JIT_RSB32=0&& set EDEN_NX2_HINT_PAUSE=0&& set EDEN_NX2_TRAP_FASTPATH=0&& set EDEN_NX2_SYS_SLOT=0&& set EDEN_NX2_KSPIN=0&& set EDEN_NX2_ARB_SPIN=0&& set EDEN_NX2_CORE_LOCK=0&& set EDEN_NX2_IDLE_PAUSE=0&& set EDEN_NX2_CONTEXT_GUARD=0&& set EDEN_NX2_FAST_TLS=0&& set EDEN_NX2_OFFSETOF_CACHE=0&& set EDEN_NX2_CACHE_LOCK_WAIT=0&& set EDEN_NX2_OOT_WIDE_AFFINITY=0&& set EDEN_NX2_OOT_NATIVE_ZSTD=0&& set EDEN_NX2_OOT_FAST_LOOKUP=0&& set EDEN_NX2_OOT_POLL_BACKOFF=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-16-round17-jit.bat b/dist/lichii-tuned/ab-16-round17-jit.bat
 new file mode 100644
@@ -749,82 +602,6 @@ index 0000000000..8170bb8379
 +rem resource-poll backoff, wider thread core masks), with the perf-trace logging. The patches can
 +rem also be unchecked one by one in the game's Add-Ons.
 +set EDEN_NX2_OOT_WIDE_AFFINITY=0&& set EDEN_NX2_OOT_NATIVE_ZSTD=0&& set EDEN_NX2_OOT_FAST_LOOKUP=0&& set EDEN_NX2_OOT_POLL_BACKOFF=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-18-round17-gpu-threads.bat b/dist/lichii-tuned/ab-18-round17-gpu-threads.bat
-new file mode 100644
-index 0000000000..97eae52a41
---- /dev/null
-+++ b/dist/lichii-tuned/ab-18-round17-gpu-threads.bat
-@@ -0,0 +1,8 @@
-+@echo off
-+rem Round 18's GPU thread work from upstream #805 off, as in round 17, with the perf-trace logging:
-+rem semaphore acquires and macro reads decided by the front's old rules (drains, shadow and mixed
-+rem reads), macros run on the front, command lists wait for all queued compute and copy work, compute
-+rem list words read back. Uploads stay batched (upstream's #1245 now). If a glitch, a hang or a
-+rem frame-rate change goes away here, #805 caused it.
-+set LICHII_TUNED4_ACQUIRES=1&& set LICHII_TUNED4_DMA_READS=1&& set EDEN_NX2_BACK_MACROS=0&& set LICHII_LIST_WRITER_WAIT=all&& set EDEN_NX2_LIST_INDIRECT=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-2-no-core-placement.bat b/dist/lichii-tuned/ab-2-no-core-placement.bat
-new file mode 100644
-index 0000000000..09e1ff8464
---- /dev/null
-+++ b/dist/lichii-tuned/ab-2-no-core-placement.bat
-@@ -0,0 +1,4 @@
-+@echo off
-+rem Windows places every thread.
-+set LICHII_CPU_POLICY=off
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-20-no-kernel-spin.bat b/dist/lichii-tuned/ab-20-no-kernel-spin.bat
-new file mode 100644
-index 0000000000..0b1f200fda
---- /dev/null
-+++ b/dist/lichii-tuned/ab-20-no-kernel-spin.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem The emulated kernel's locks and address waits sleep at once instead of spinning first (round 18,
-+rem upstream #717: up to 20 us for locks, 8 us for waits), with the perf-trace logging. On a
-+rem power-limited laptop the spinning may cost more clock speed than it saves: compare the
-+rem frame rate and the guest cores' times with the default.
-+set EDEN_NX2_KSPIN=0&& set EDEN_NX2_ARB_SPIN=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-22-round19-shaders.bat b/dist/lichii-tuned/ab-22-round19-shaders.bat
-new file mode 100644
-index 0000000000..e24db71955
---- /dev/null
-+++ b/dist/lichii-tuned/ab-22-round19-shaders.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Round 19's shader handling, with the perf-trace logging: new pipelines are translated on the
-+rem GPU thread instead of Fritchii's worker threads, every draw waits for its new pipeline instead
-+rem of skipping ones into targets redrawn each frame. Compare hitches when new effects appear and
-+rem missing objects with the default.
-+set EDEN_NX2_ASYNC_TRANSLATE=0&& set EDEN_NX2_ASYNC_DISCARD=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-23-round19-memory.bat b/dist/lichii-tuned/ab-23-round19-memory.bat
-new file mode 100644
-index 0000000000..dba19c0833
---- /dev/null
-+++ b/dist/lichii-tuned/ab-23-round19-memory.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Round 19's guest memory paths, with the perf-trace logging: guest reads and writes take the
-+rem caches' locks (Fritchii EXP35 off, EXP36 on), the uniform bank check compares once a frame again
-+rem (LICHII_BANK_CHECK=1), #717's EXP18/EXP29 trims are off, invalidations cover whole 32-byte
-+rem blocks (#700) and the guest memory section is committed at boot. Compare the guest cores' times.
-+set EDEN_NX2_EXP35=0&& set EDEN_NX2_EXP36=1&& set LICHII_BANK_CHECK=1&& set EDEN_NX2_EXP18=0&& set EDEN_NX2_EXP29=0&& set EDEN_NX2_INVALIDATE_BLOCKS=1&& set EDEN_NX2_SEC_RESERVE=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-24-round19-render-targets.bat b/dist/lichii-tuned/ab-24-round19-render-targets.bat
-new file mode 100644
-index 0000000000..3262bac4f3
---- /dev/null
-+++ b/dist/lichii-tuned/ab-24-round19-render-targets.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Round 19's render targets, with the perf-trace logging: no render target relocation (Fritchii
-+rem EXP43) and no cold sweep of chain images. The render-frame clock stays on: the default
-+rem asynchronous shaders count their clears by it. Compare the frame rate in Castle Town and any
-+rem garbled or flickering image with the default.
-+set EDEN_NX2_EXP43=0&& set EDEN_NX2_TC_COLD_FRAMES=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-25-no-zero-trim.bat b/dist/lichii-tuned/ab-25-no-zero-trim.bat
 new file mode 100644
@@ -854,107 +631,6 @@ index 0000000000..dba9a7cf7d
 +rem and the frame times with perf-trace-noprofile.bat over the same spots.
 +set EDEN_NX2_TEST_1216=0&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-29-no-1161-draws.bat b/dist/lichii-tuned/ab-29-no-1161-draws.bat
-new file mode 100644
-index 0000000000..d654b1311c
---- /dev/null
-+++ b/dist/lichii-tuned/ab-29-no-1161-draws.bat
-@@ -0,0 +1,8 @@
-+@echo off
-+rem Fast draws as in r51 (EDEN_NX2_TEST_1161_DRAWS=0): a full delta list ends the delta draw chain
-+rem again (delta overflow), handle checks cover the whole constant buffer and vertex attribute
-+rem format writes end it (upstream #1161's fast-draw half off). Unprofiled, with the frame, heap
-+rem and clock traces: compare gpu_back_cpu_ms_per_frame and the frame times with
-+rem perf-trace-noprofile.bat over the same spots.
-+set EDEN_NX2_TEST_1161_DRAWS=0&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-3-soft-placement.bat b/dist/lichii-tuned/ab-3-soft-placement.bat
-new file mode 100644
-index 0000000000..1ab5862c59
---- /dev/null
-+++ b/dist/lichii-tuned/ab-3-soft-placement.bat
-@@ -0,0 +1,4 @@
-+@echo off
-+rem Only keep threads off the low-power E-cores; pipeline builds on E-cores.
-+set LICHII_CPU_POLICY=soft
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-32-no-1161-reports.bat b/dist/lichii-tuned/ab-32-no-1161-reports.bat
-new file mode 100644
-index 0000000000..0040446756
---- /dev/null
-+++ b/dist/lichii-tuned/ab-32-no-1161-reports.bat
-@@ -0,0 +1,8 @@
-+@echo off
-+rem Reports and fences as in r51 where they can be switched (EDEN_NX2_TEST_1161_REPORTS=0): a new
-+rem fence operation list per fence, the buffer cache lock for every pending report and the query
-+rem pool reset on the GPU thread. Unprofiled, with the frame, heap and clock traces: compare
-+rem gpu_back_cpu_ms_per_frame and the frame times with perf-trace-noprofile.bat over the same
-+rem spots.
-+set EDEN_NX2_TEST_1161_REPORTS=0&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-36-no-1161-handles.bat b/dist/lichii-tuned/ab-36-no-1161-handles.bat
-new file mode 100644
-index 0000000000..3a43015bf4
---- /dev/null
-+++ b/dist/lichii-tuned/ab-36-no-1161-handles.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Pipelines whose texture handles a handle program computes at draw time take no delta draws, as
-+rem in r54 (EDEN_NX2_TEST_1161_HANDLES=0, upstream #1161's e05a72847 off). Unprofiled, with the
-+rem frame, heap and clock traces: compare gpu_back_cpu_ms_per_frame and the frame times with
-+rem perf-trace-noprofile.bat over the same spots.
-+set EDEN_NX2_TEST_1161_HANDLES=0&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-4-strict-placement.bat b/dist/lichii-tuned/ab-4-strict-placement.bat
-new file mode 100644
-index 0000000000..2eb5017606
---- /dev/null
-+++ b/dist/lichii-tuned/ab-4-strict-placement.bat
-@@ -0,0 +1,4 @@
-+@echo off
-+rem Emulated CPU cores on P-cores too; pipeline builds on E-cores only.
-+set LICHII_CPU_POLICY=strict
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-40-low-power.bat b/dist/lichii-tuned/ab-40-low-power.bat
-new file mode 100644
-index 0000000000..96bee9b5fe
---- /dev/null
-+++ b/dist/lichii-tuned/ab-40-low-power.bat
-@@ -0,0 +1,11 @@
-+@echo off
-+rem Less spinning all at once: the emulated kernel's locks and address waits sleep at once
-+rem (EDEN_NX2_KSPIN=0, EDEN_NX2_ARB_SPIN=0), waits idle in C0.2 (LICHII_UMWAIT_C02=1), and an idle
-+rem emulated core polls 30 microseconds instead of 100 before it sleeps
-+rem (EDEN_NX2_IDLE_SPIN_US=30; shortened, not removed: in another game frames took 42 ms without
-+rem the poll and 34-35 ms with 50-100). If this arm helps, run ab-41, the shorter poll alone,
-+rem next.
-+rem Unprofiled, with the frame, heap and clock traces: compare with perf-trace-noprofile.bat as
-+rem README-tuned.txt's option 3 says.
-+set EDEN_NX2_KSPIN=0&& set EDEN_NX2_ARB_SPIN=0&& set LICHII_UMWAIT_C02=1&& set EDEN_NX2_IDLE_SPIN_US=30&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-41-idle-poll-30.bat b/dist/lichii-tuned/ab-41-idle-poll-30.bat
-new file mode 100644
-index 0000000000..de7b3b1e52
---- /dev/null
-+++ b/dist/lichii-tuned/ab-41-idle-poll-30.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Only if ab-40 helps: an idle emulated CPU core polls 30 microseconds instead of 100 before it
-+rem sleeps (EDEN_NX2_IDLE_SPIN_US=30), ab-40's shorter poll alone.
-+rem Unprofiled, with the frame, heap and clock traces: compare with perf-trace-noprofile.bat as
-+rem README-tuned.txt's option 3 says.
-+set EDEN_NX2_IDLE_SPIN_US=30&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-5-no-umwait.bat b/dist/lichii-tuned/ab-5-no-umwait.bat
-new file mode 100644
-index 0000000000..9595b829a8
---- /dev/null
-+++ b/dist/lichii-tuned/ab-5-no-umwait.bat
-@@ -0,0 +1,4 @@
-+@echo off
-+rem PAUSE spinning instead of UMWAIT waits.
-+set LICHII_WAITPKG_SPIN=0
-+start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/ab-6-official-texture-cache.bat b/dist/lichii-tuned/ab-6-official-texture-cache.bat
 new file mode 100644
 index 0000000000..e3f9207b7e
@@ -964,29 +640,6 @@ index 0000000000..e3f9207b7e
 +@echo off
 +rem Texture cache collects from 5 GiB as in official Lichii (this build: 5/8 of the VRAM budget).
 +set EDEN_NX2_TC_CRITICAL_MIB=5120&& set EDEN_NX2_TC_EXPECTED_MIB=4352
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
-new file mode 100644
-index 0000000000..450bb12718
---- /dev/null
-+++ b/dist/lichii-tuned/ab-8-skip-unbuilt-draws.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem Skips draws whose new pipeline is still compiling instead of waiting for it
-+rem (fewer hitches on new content; an object or effect can be missing for a few frames).
-+rem Also logs GPU timing like perf-trace.bat, for comparison.
-+set EDEN_NX2_ASYNC_DISCARD=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/ab-9-amd-fp16.bat b/dist/lichii-tuned/ab-9-amd-fp16.bat
-new file mode 100644
-index 0000000000..eb0e7344c4
---- /dev/null
-+++ b/dist/lichii-tuned/ab-9-amd-fp16.bat
-@@ -0,0 +1,5 @@
-+@echo off
-+rem Keeps float16 shader math on the AMD driver (twice the float32 rate on RDNA). Official
-+rem builds turn it off because of a driver bug in another game: look for wrong colors.
-+set EDEN_AMD_FP16=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/frame-times.bat b/dist/lichii-tuned/frame-times.bat
 new file mode 100644
@@ -1043,66 +696,6 @@ index 0000000000..52e1843727
 +rem EDEN_NX2_CLOCK_TRACE=1).
 +set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1&& set EDEN_NX2_HEAP_TRACE=1&& set EDEN_NX2_CLOCK_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-display.bat b/dist/lichii-tuned/trace-display.bat
-new file mode 100644
-index 0000000000..ba1c1bf857
---- /dev/null
-+++ b/dist/lichii-tuned/trace-display.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem The host frame pacer measuring only, with the perf-trace logging: frames are presented as
-+rem usual, and every 10 s a "Host pacing off:" line says how many display refreshes they stayed
-+rem on screen, and the log names the display's refresh rate. The baseline for trace-host-pace.bat
-+rem (LICHII_HOST_PACE=2).
-+set LICHII_HOST_PACE=2&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-downloads.bat b/dist/lichii-tuned/trace-downloads.bat
-new file mode 100644
-index 0000000000..edac716ea7
---- /dev/null
-+++ b/dist/lichii-tuned/trace-downloads.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem perf-trace.bat plus a trace of the GPU readbacks (EDEN_NX2_DOWNLOAD_TRACE=1): every 10 s the
-+rem log lists the GPU writes that are copied back the most and the first CPU reads of
-+rem GPU-written memory, to see what the game reads.
-+set EDEN_NX2_DOWNLOAD_TRACE=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-flush4096.bat b/dist/lichii-tuned/trace-flush4096.bat
-new file mode 100644
-index 0000000000..57a9743447
---- /dev/null
-+++ b/dist/lichii-tuned/trace-flush4096.bat
-@@ -0,0 +1,5 @@
-+@echo off
-+rem Submits GPU work every 4096 draws instead of every 128 (EDEN_NX2_FLUSH_DRAWS=4096),
-+rem with the logging of perf-trace.bat: fewer, larger submissions to the GPU.
-+set EDEN_NX2_FLUSH_DRAWS=4096&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-fp16.bat b/dist/lichii-tuned/trace-fp16.bat
-new file mode 100644
-index 0000000000..a9068a7daa
---- /dev/null
-+++ b/dist/lichii-tuned/trace-fp16.bat
-@@ -0,0 +1,5 @@
-+@echo off
-+rem ab-9-amd-fp16.bat with the logging of perf-trace.bat: float16 shader math stays on the
-+rem AMD driver (EDEN_AMD_FP16=1). Look for wrong colors.
-+set EDEN_AMD_FP16=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-host-pace.bat b/dist/lichii-tuned/trace-host-pace.bat
-new file mode 100644
-index 0000000000..ad56d50c0e
---- /dev/null
-+++ b/dist/lichii-tuned/trace-host-pace.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Fritchii's host frame pacer, with the perf-trace logging: each frame is held until just before
-+rem the display refresh it belongs to and the game's frame clock follows the display (genlock).
-+rem Needs asynchronous presentation (on by default). Every 10 s a "Host pacing on:" line says how
-+rem many refreshes frames stayed on screen; compare with trace-display.bat (LICHII_HOST_PACE=1).
-+set LICHII_HOST_PACE=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-no-fsr.bat b/dist/lichii-tuned/trace-no-fsr.bat
 new file mode 100644
 index 0000000000..15c1cefaa8
@@ -1113,41 +706,6 @@ index 0000000000..15c1cefaa8
 +rem Ocarina's own upscale pass instead of AMD FSR (EDEN_NX2_DLSS_REPLACEMENT=native): no 4K
 +rem output, logged like perf-trace.bat, to see what FSR costs.
 +set EDEN_NX2_DLSS_REPLACEMENT=native&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-no-preflush.bat b/dist/lichii-tuned/trace-no-preflush.bat
-new file mode 100644
-index 0000000000..8db196608b
---- /dev/null
-+++ b/dist/lichii-tuned/trace-no-preflush.bat
-@@ -0,0 +1,5 @@
-+@echo off
-+rem Without preflushing GPU readbacks (EDEN_NX2_PREFLUSH=0; on by default for Ocarina since
-+rem round 15), logged like perf-trace.bat: more readback stalls, for comparison.
-+set EDEN_NX2_PREFLUSH=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-old-drains.bat b/dist/lichii-tuned/trace-old-drains.bat
-new file mode 100644
-index 0000000000..85bccfaf47
---- /dev/null
-+++ b/dist/lichii-tuned/trace-old-drains.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem The split GPU thread waits as in r18, logged like perf-trace.bat: every poll of a waiting
-+rem semaphore drains the back thread (LICHII_ACQUIRE_POLL=0), and every macro read of a page
-+rem with occlusion reports drains it too (LICHII_REPORT_DRAIN=all). Compare with perf-trace.bat.
-+set LICHII_ACQUIRE_POLL=0&& set LICHII_REPORT_DRAIN=all&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/trace-old-jit.bat b/dist/lichii-tuned/trace-old-jit.bat
-new file mode 100644
-index 0000000000..cdd8597c2d
---- /dev/null
-+++ b/dist/lichii-tuned/trace-old-jit.bat
-@@ -0,0 +1,6 @@
-+@echo off
-+rem The emulated CPU's counter read through a host call, as before round 7
-+rem (LICHII_JIT_INLINE_CNTPCT=0), with the logging of perf-trace.bat. Compare with
-+rem perf-trace.bat. Round 7's barriers are upstream's since nx2 #1327 and always on.
-+set LICHII_JIT_INLINE_CNTPCT=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/lichii-tuned/trace-real-occlusion.bat b/dist/lichii-tuned/trace-real-occlusion.bat
 new file mode 100644
@@ -1160,107 +718,20 @@ index 0000000000..68c090729a
 +rem (LICHII_FAKE_OCCLUSION=0), with the logging of perf-trace.bat. Compare with perf-trace.bat.
 +set LICHII_FAKE_OCCLUSION=0&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-ports-off.bat b/dist/lichii-tuned/verify-ports-off.bat
+diff --git a/dist/lichii-tuned/verify.bat b/dist/lichii-tuned/verify.bat
 new file mode 100644
-index 0000000000..4ec37a7796
+index 0000000000..b7a0504eb5
 --- /dev/null
-+++ b/dist/lichii-tuned/verify-ports-off.bat
++++ b/dist/lichii-tuned/verify.bat
 @@ -0,0 +1,10 @@
 +@echo off
-+rem verify-r55 with three ports off: #1161's delta draws for shaders that pick their textures from
-+rem memory (EDEN_NX2_TEST_1161_HANDLES=0), #1216 (EDEN_NX2_TEST_1216=0) and #1161's other repeat
-+rem draw changes (EDEN_NX2_TEST_1161_DRAWS=0), with the same checks and logging. Slower: not for
-+rem frame rates.
-+rem It shows whether the uniform keep mismatches depend on those three ports: compare the
-+rem 'Uniform keeps' lines' mismatches per verified keep, by kind, with verify-r55 over the same
-+rem route (about 2-3 per 100,000 there). At that rate they don't; if they vanish, they do.
-+set EDEN_NX2_TEST_1161_HANDLES=0&& set EDEN_NX2_TEST_1216=0&& set EDEN_NX2_TEST_1161_DRAWS=0&& set LICHII_BANK_CHECK=2&& set EDEN_NX2_READ_CHECK=16&& set EDEN_NX2_DELTA_DESCRIPTORS_VERIFY=1&& set EDEN_NX2_UBO_KEEP_VERIFY=1&& set EDEN_NX2_PERF_VERIFY=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-r16.bat b/dist/lichii-tuned/verify-r16.bat
-new file mode 100644
-index 0000000000..1e3c0a1863
---- /dev/null
-+++ b/dist/lichii-tuned/verify-r16.bat
-@@ -0,0 +1,9 @@
-+@echo off
-+rem Checks round 16's two new shortcuts against the old way while you play, with logging. Native
-+rem bank pages are compared on every bind and the log counts what the cheaper check would have
-+rem missed (LICHII_BANK_CHECK=2, "Native bank check" lines, "missed" should stay 0), and macro
-+rem reads made from the shadow and memory are compared with a drained read
-+rem (LICHII_DMA_MIXED_READS=2, "Mixed MME DMA reads (verify)" lines, "differed" should stay 0).
-+rem Slower than the default.
-+set LICHII_BANK_CHECK=2&& set LICHII_DMA_MIXED_READS=2&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-r18.bat b/dist/lichii-tuned/verify-r18.bat
-new file mode 100644
-index 0000000000..1939837a56
---- /dev/null
-+++ b/dist/lichii-tuned/verify-r18.bat
-@@ -0,0 +1,7 @@
-+@echo off
-+rem Checks round 18's GPU thread shortcuts from upstream #805 against the slow way while you play, with
-+rem the perf-trace logging: acquires and command lists are also decided after a full drain, back-run
-+rem macros and macro reads are compared, and compute list words are read back and compared. In the
-+rem log, the "not met after the drain", "differing" and mismatch counts should stay 0. Slower.
-+set EDEN_NX2_DRAIN_CHECK=1&& set EDEN_NX2_DMA_READ_VERIFY=1&& set EDEN_NX2_BACK_MACRO_VERIFY=64&& set EDEN_NX2_LIST_VERIFY=1&& set EDEN_NX2_LIST_INDIRECT_CHECK=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-r20.bat b/dist/lichii-tuned/verify-r20.bat
-new file mode 100644
-index 0000000000..bf6a970468
---- /dev/null
-+++ b/dist/lichii-tuned/verify-r20.bat
-@@ -0,0 +1,8 @@
-+@echo off
-+rem Checks round 20's Fritchii shortcuts against the slow way while you play, with the perf-trace
-+rem logging: worker translations are compared with the GPU thread's ('Async translate verify: N
-+rem compared, M differ', M should stay 0), relocated render targets leave tombstones whose hit
-+rem count should stay 0, and the bank check compares every frame ('without the frame check (mode 3)'
-+rem should stay 0). Slower.
-+set EDEN_NX2_ASYNC_TRANSLATE=2&& set EDEN_NX2_EXP43=4&& set LICHII_BANK_CHECK=2&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-r51.bat b/dist/lichii-tuned/verify-r51.bat
-new file mode 100644
-index 0000000000..578efeab8f
---- /dev/null
-+++ b/dist/lichii-tuned/verify-r51.bat
-@@ -0,0 +1,8 @@
-+@echo off
-+rem Checks r51's fast draws and mappings against the slow way while you play, with the
-+rem perf-trace logging: delta draws are resolved in full and compared ('Fast draw verify per
-+rem second' mismatches should stay 0), the first 64 calls of each back macro also run the old way
-+rem (in 'Split back macros', those 'with other writes' should stay 0), and the mapping runs and
-+rem caches are checked (no 'Nx2Perf mapping runs' errors). Slower: not for frame rates.
-+set EDEN_NX2_FAST_DRAW_VERIFY=1&& set EDEN_NX2_BACK_MACRO_VERIFY=64&& set EDEN_NX2_PERF_VERIFY=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1&& set EDEN_NX2_MME_DMA_STATS=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-r52.bat b/dist/lichii-tuned/verify-r52.bat
-new file mode 100644
-index 0000000000..f8d78d21a3
---- /dev/null
-+++ b/dist/lichii-tuned/verify-r52.bat
-@@ -0,0 +1,9 @@
-+@echo off
-+rem Checks r52 against the slow ways while you play, with the perf-trace logging. Slower: not
-+rem for frame rates. Every 10 s or second, these must stay 0: 'Native bank check (mode 2)'
-+rem missed and bitsets missed; 'Read download check' bytes that differ (1 in 16 read
-+rem downloads); 'Fast draw verify per second' mismatches; the delta descriptor and uniform
-+rem keep checks' mismatches; and no 'Nx2Perf' errors. The 'Instance fold per 2 s' and 'reports
-+rem and fences' lines show the new paths at work.
-+set LICHII_BANK_CHECK=2&& set EDEN_NX2_READ_CHECK=16&& set EDEN_NX2_FAST_DRAW_VERIFY=1&& set EDEN_NX2_DELTA_DESCRIPTORS_VERIFY=1&& set EDEN_NX2_UBO_KEEP_VERIFY=1&& set EDEN_NX2_PERF_VERIFY=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
-+start "" "%~dp0lichii.exe" %*
-diff --git a/dist/lichii-tuned/verify-r55.bat b/dist/lichii-tuned/verify-r55.bat
-new file mode 100644
-index 0000000000..752b8700f5
---- /dev/null
-+++ b/dist/lichii-tuned/verify-r55.bat
-@@ -0,0 +1,10 @@
-+@echo off
-+rem Checks r55 against the slow ways while you play, with the perf-trace logging. Slower: not
++rem Checks this build against the slow ways while you play, with the perf-trace logging. Slower: not
 +rem for frame rates. Every 10 s or second, these must stay 0: 'Native bank check (mode 2)'
 +rem missed and bitsets missed; 'Read download check' bytes that differ (1 in 16 read
 +rem downloads); the verify mismatches in 'Delta descriptors' and 'Uniform keeps'; and no
-+rem 'Nx2Perf' errors. Unlike verify-r52 it leaves EDEN_NX2_FAST_DRAW_VERIFY out, which resolves
-+rem every delta draw in full: here the delta draws run, r55's new ones too (shaders that pick
-+rem their textures from memory), so the descriptor and uniform keep checks have them to check.
++rem 'Nx2Perf' errors. It leaves EDEN_NX2_FAST_DRAW_VERIFY out, which would resolve every delta
++rem draw in full: here the delta draws run, so the descriptor and uniform keep checks have them
++rem to check.
 +set LICHII_BANK_CHECK=2&& set EDEN_NX2_READ_CHECK=16&& set EDEN_NX2_DELTA_DESCRIPTORS_VERIFY=1&& set EDEN_NX2_UBO_KEEP_VERIFY=1&& set EDEN_NX2_PERF_VERIFY=1&& set EDEN_NX2_GPU_PROFILE=1&& set EDEN_DKB_FRAME_TRACE=1
 +start "" "%~dp0lichii.exe" %*
 diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt

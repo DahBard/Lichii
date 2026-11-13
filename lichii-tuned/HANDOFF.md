@@ -2309,7 +2309,11 @@ Own changes:
      GPU before that test. Merge 3 takes r59 in after step 1. CI run #59 and tests run #10 passed.
    - r60 passed CI (build run #60 and tests run #11, on the old fork). r61 is the first build in
      DahBard/Blitchii: r60 plus the move (no update source, origin-free comments and docs), with
-     the 'PGO profile r49' release recreated there on 2026-11-13.
+     the 'PGO profile r49' release recreated there on 2026-11-13, and the launcher cleanup
+     (tuned4 `c73800765`): 35 test launchers removed, 13 kept (perf-trace, perf-trace-fine,
+     perf-trace-noprofile as ab-26's baseline, frame-times, verify (was verify-r55), ab-6, ab-11,
+     ab-16, ab-17, ab-25, ab-26, trace-no-fsr, trace-real-occlusion). The code cleanup (dead
+     paths behind settled switches) is a later, separate build.
    - Merge 3, done 2026-11-13 (r60; plan lichii-tuned/merge-plan-nx2c.md, notes in
      scratchpad/merge3/): step 1 merged nx2 `65745c243f` (60 commits; 83 conflicted files, 199
      hunks) in `9161e35d2`, resolved by seven area agents and reviewed by six (no defects found;
