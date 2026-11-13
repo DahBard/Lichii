@@ -29,7 +29,8 @@ namespace AmdFrameGen {
 [[nodiscard]] bool Requested();
 
 /// Frames AMD's swapchain was asked to generate so far (one per game frame presented while
-/// generating), for the frame rate shown with the game's.
+/// generating; with HDR10 output, one per generation dispatch that succeeded), for the frame rate
+/// shown with the game's.
 [[nodiscard]] u64 GeneratedFrames();
 
 /// Whether AMD's frame generation swapchain is in use (it is set up when the emulator starts).
@@ -54,7 +55,7 @@ enum class Output : u8 {
 enum class OffReason : u8 {
     None,      ///< No HDR reason
     HdrFormat, ///< HDR output in a format it doesn't present (scRGB)
-    HdrFailed, ///< HDR10 output, and its swapchain or its generation couldn't start with it
+    HdrFailed, ///< HDR10 output, and its swapchain or its generation couldn't start or failed
 };
 [[nodiscard]] OffReason LastOffReason();
 

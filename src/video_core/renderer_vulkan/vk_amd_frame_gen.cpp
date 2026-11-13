@@ -105,7 +105,7 @@ std::atomic<bool> prepare_ready{false};
 /// for the command buffer that holds it.
 std::atomic<u64> last_prepare_tick{0};
 /// The output of the last swapchain made while AMD's was asked for (CanPresent), and whether its
-/// swapchain or its generation last failed to start with HDR10 output: for LastOffReason.
+/// swapchain or its generation last failed with HDR10 output: for LastOffReason.
 std::atomic<Output> last_output{Output::Sdr};
 std::atomic<bool> hdr_failed{false};
 
@@ -164,6 +164,7 @@ struct State {
     /// AMD's frame generation callback reads it.
     std::atomic<f32> hdr_peak{};
     bool hdr_checked{}; ///< The decode its swapchain passes with HDR10 output was logged
+    bool dispatch_failure_logged{}; ///< A failed generation dispatch was logged (per swapchain)
     std::optional<VkHdrMetadataEXT> hdr_metadata; ///< The HDR10 metadata it has
     u32 context_retries{};
     ffxContext swapchain_context{};
@@ -206,7 +207,8 @@ VkResult SubmitToGameQueue(uint32_t count, const VkSubmitInfo* submits, VkFence 
 
 ffxReturnCode_t DispatchFrameGeneration(ffxDispatchDescFrameGeneration* params, void* user) {
     State& state = *static_cast<State*>(user);
-    if (state.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
+    const bool hdr10 = state.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT;
+    if (hdr10) {
         // AMD's swapchain takes the transfer function from the colour space and the luminance
         // range from its vkSetHdrMetadataEXT, 0 until that is called. The description is AMD's
         // copy for this dispatch: what is missing is filled in here.
@@ -227,7 +229,27 @@ ffxReturnCode_t DispatchFrameGeneration(ffxDispatchDescFrameGeneration* params, 
         params->minMaxLuminance[0] = decode.min_luminance;
         params->minMaxLuminance[1] = decode.max_luminance;
     }
-    return state.api->dispatch(&state.frame_gen_context, &params->header);
+    const ffxReturnCode_t result = state.api->dispatch(&state.frame_gen_context, &params->header);
+    if (result != FFX_API_RETURN_OK) {
+        // FSR 3.1 gives no reason, and its swapchain presents an older generated frame instead.
+        if (!std::exchange(state.dispatch_failure_logged, true)) {
+            LOG_ERROR(Render_Vulkan, "AMD frame generation: generation dispatch failed ({}){}",
+                      result,
+                      hdr10 ? fmt::format(", HDR10 decode with transfer function {} (1 is PQ), "
+                                          "{}-{} nits",
+                                          params->backbufferTransferFunction,
+                                          params->minMaxLuminance[0], params->minMaxLuminance[1])
+                            : std::string{});
+        }
+        if (hdr10) {
+            hdr_failed.store(true, std::memory_order_relaxed);
+        }
+    } else if (hdr10) {
+        // With HDR10 output a generated frame counts once its dispatch succeeded (in SDR, Present
+        // counts it when it asks for one), so the status bar shows a failing generation.
+        generated_frames.fetch_add(1, std::memory_order_relaxed);
+    }
+    return result;
 }
 
 void DestroyRetired(State& state, bool all) {
@@ -717,6 +739,7 @@ VkSwapchainKHR CreateSwapchain(const Device& device, std::mutex& submit_mutex,
     state.format = create_info.imageFormat;
     state.color_space = create_info.imageColorSpace;
     state.hdr_checked = false;
+    state.dispatch_failure_logged = false;
     state.hdr_metadata.reset();
     // Until the HDR10 metadata comes (SetHdrMetadata): the peak the game was told, which the
     // metadata carries.
@@ -979,9 +1002,13 @@ VkResult Present(VkQueue queue, const VkPresentInfoKHR& info, const PresentTarge
                                      "off",
                       result);
             RetireFrameGenContext(state);
+            if (state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                hdr_failed.store(true, std::memory_order_relaxed);
+            }
         } else {
             state.configured_frame_id = config.frameID;
-            if (generate) {
+            // With HDR10 output the frame generation callback counts it.
+            if (generate && state.color_space != VK_COLOR_SPACE_HDR10_ST2084_EXT) {
                 generated_frames.fetch_add(1, std::memory_order_relaxed);
             }
             if (generate != state.generating) {
@@ -1070,6 +1097,9 @@ void Prepare(Scheduler& scheduler, const PrepareInputs& in) {
         if (result != FFX_API_RETURN_OK) {
             state.prepare_failed = true;
             PublishPrepareReady(state);
+            if (state.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                hdr_failed.store(true, std::memory_order_relaxed);
+            }
             LOG_ERROR(Render_Vulkan, "AMD frame generation: prepare failed ({}), generation off",
                       result);
             return;
