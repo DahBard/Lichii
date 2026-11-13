@@ -418,13 +418,8 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
               VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0
                  ? "supported"
                  : "unsupported");
-    // AMD's frame generation is set up for SDR only (no HDR flags or metadata). Like the built-in
-    // frame generation, it is off while HDR output is active: HDR gets a normal swapchain.
-    const bool amd_frame_gen = AmdFrameGen::Requested() &&
-                               surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    if (AmdFrameGen::Requested() && !amd_frame_gen) {
-        LOG_INFO(Render_Vulkan, "AMD frame generation: off while HDR output is active");
-    }
+    // AMD's frame generation presents SDR and HDR10; other output gets a normal swapchain.
+    const bool amd_frame_gen = AmdFrameGen::Requested() && AmdFrameGen::CanPresent(surface_format);
 
     u32 requested_image_count{capabilities.minImageCount + 1};
     // Ensure Triple buffering if possible.
@@ -497,10 +492,13 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
     // The window starts as a tiny placeholder; AMD's swapchain waits for the real size. After a
-    // few failures at real sizes the session keeps normal swapchains.
+    // few failures at real sizes the session keeps normal swapchains, for SDR and HDR apart.
     const bool real_size =
         swapchain_ci.imageExtent.width >= 320 && swapchain_ci.imageExtent.height >= 240;
-    if (amd_frame_gen && real_size && frame_gen_failures < 3) {
+    u32& failures = surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+                        ? frame_gen_failures
+                        : frame_gen_hdr_failures;
+    if (amd_frame_gen && real_size && failures < 3) {
         // AMD's swapchain takes a plain create info: no format list, no mutable format.
         VkSwapchainCreateInfoKHR frame_gen_ci = swapchain_ci;
         frame_gen_ci.pNext = nullptr;
@@ -508,7 +506,7 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         frame_gen_swapchain =
             AmdFrameGen::CreateSwapchain(device, scheduler.submit_mutex, frame_gen_ci);
         if (frame_gen_swapchain == VK_NULL_HANDLE) {
-            ++frame_gen_failures;
+            ++failures;
         }
     }
     if (!frame_gen_swapchain) {
@@ -553,9 +551,8 @@ void Swapchain::Destroy(bool shutting_down) {
     }
 }
 
-void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) const {
-    // AMD's frame generation swapchain (no `swapchain`) never presents HDR.
-    if (!swapchain || !device.IsExtHdrMetadataEnabled() ||
+void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) {
+    if (!device.IsExtHdrMetadataEnabled() ||
         surface_format.colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT) {
         return;
     }
@@ -574,7 +571,19 @@ void Swapchain::SetHdrMetadata(u16 peak_luminance, u16 reference_white) const {
         .maxContentLightLevel = static_cast<float>(peak_luminance),
         .maxFrameAverageLightLevel = 0.0f,
     };
-    device.GetLogical().SetHdrMetadataEXT(*swapchain, metadata);
+    if (frame_gen_swapchain) {
+        // AMD's frame generation swapchain is its own object, not the driver's: it takes the
+        // metadata through its own function and hands it on.
+        const auto result = AmdFrameGen::SetHdrMetadata(frame_gen_swapchain, metadata);
+        if (result == AmdFrameGen::HdrMetadataResult::NextSwapchain) {
+            is_suboptimal = true; // recreated before the next present, then given the metadata
+        }
+        if (result != AmdFrameGen::HdrMetadataResult::Sent) {
+            return;
+        }
+    } else {
+        device.GetLogical().SetHdrMetadataEXT(*swapchain, metadata);
+    }
     LOG_INFO(Render_Vulkan, "HDR10 metadata: peak {} nits (reference white {} nits)",
              peak_luminance, reference_white);
 }

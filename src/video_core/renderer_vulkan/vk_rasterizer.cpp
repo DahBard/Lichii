@@ -3631,6 +3631,17 @@ std::pair<const char*, const char*> RasterizerVulkan::AmdFrameGenIdleReason() co
     return {"WINDOWS ONLY", "AMD frame generation runs on Windows only. On Linux and macOS, pick "
                             "another Frame Generation Type."};
 #else
+    switch (AmdFrameGen::LastOffReason()) {
+    case AmdFrameGen::OffReason::HdrFormat:
+        return {"SCRGB", "AMD frame generation needs the HDR10 format while HDR output is active. "
+                         "Set Graphics > HDR format to HDR10, or turn HDR output off."};
+    case AmdFrameGen::OffReason::HdrFailed:
+        return {"HDR", "AMD frame generation couldn't start with HDR output (see the log for "
+                       "\"AMD frame generation\"), so Lichii presents HDR without it. Try AMD "
+                       "Frame Generation Version FSR 3.1, or turn HDR output off."};
+    case AmdFrameGen::OffReason::None:
+        break;
+    }
     if (!AmdFrameGen::SwapchainActive()) {
         return {"RESTART", "AMD frame generation starts with Lichii: close and reopen Lichii after "
                            "changing the Frame Generation Type. If it still shows this, AMD's "

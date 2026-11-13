@@ -129,7 +129,8 @@ public:
     }
 
     /// Hands the display the HDR10 mastering metadata (VK_EXT_hdr_metadata) of an HDR10 swapchain.
-    void SetHdrMetadata(u16 peak_luminance, u16 reference_white) const;
+    /// While AMD's frame generation can't take it, the swapchain is marked for recreation.
+    void SetHdrMetadata(u16 peak_luminance, u16 reference_white);
 
     /// Returns the cached SDR surface format, including while an HDR swapchain is active.
     VkFormat GetSdrImageFormat() const {
@@ -182,6 +183,7 @@ private:
     vk::SwapchainKHR swapchain;
     VkSwapchainKHR frame_gen_swapchain{}; ///< AMD's, in place of `swapchain` when picked.
     u32 frame_gen_failures{};             ///< AMD's swapchain failed to start this many times.
+    u32 frame_gen_hdr_failures{};         ///< The same with HDR output, so SDR keeps its tries.
 
     std::size_t image_count{};
     std::vector<VkImage> images;
