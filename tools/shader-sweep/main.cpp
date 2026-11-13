@@ -661,7 +661,7 @@ Shader::RuntimeInfo PipelineRuntime(std::span<const u8> key, std::span<const u64
     info.input_topology = InputTopology(topology);
     info.force_early_z = (raw2 >> 4) & 1;
     info.y_negate = (raw2 >> 11) & 1;
-    // No noperspective emulation: zortos293/Lichii#820 is reverted here, as in Fritchii.
+    // No noperspective emulation: upstream #820 is reverted here, as in Fritchii.
     return info;
 }
 

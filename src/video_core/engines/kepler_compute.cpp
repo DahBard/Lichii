@@ -531,7 +531,7 @@ void KeplerCompute::CallMethod(Core::System& system, u32 method, u32 method_argu
 
     switch (method) {
     case KEPLER_COMPUTE_REG_INDEX(exec_upload): {
-        // EDEN_NX2_EXP29 & 4 (Fritchii bc83af560, zortos293/Lichii#717's
+        // EDEN_NX2_EXP29 & 4 (Fritchii bc83af560, upstream #717's
         // EDEN_NX2_DROP_NATIVE_UPLOADS; default 6): only the launch case below reads the list, and
         // native mode never gets there (ProcessNativeMethod takes 0xaf), so it grew by one entry
         // per exec all session.

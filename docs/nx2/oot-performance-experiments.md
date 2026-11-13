@@ -39,7 +39,7 @@ Hypothesis: the front's hot ring positions share cache space with `back_engine`,
 which the back writes at engine switches. Separating them reduces cache transfers
 without changing command ordering, synchronization or rendered output.
 
-Sources: [upstream issue 807](https://github.com/Eglantine-Community/Eglantine/issues/807)
+Sources: upstream's base issue 807
 and existing fork commit `b22e54a24b47f4de4fcb332825c76f9a3185cad7` (layout-only port
 of `886ac17e004156c34596d2664f4f9c4824f0ed44`). The issue's Mario Kart measurements
 do not establish an Ocarina gain. `upstream/nx2` was fetched and is fully contained

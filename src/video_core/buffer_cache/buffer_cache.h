@@ -2775,7 +2775,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     }();
     // Such a bank is checked on every bind: games rewrite per-draw data between draws, and
     // checking once per frame left it stale for a frame now and then (white flashes in Ocarina of
-    // Time, Eglantine 031e07436c).
+    // Time, upstream's base commit 031e07436c).
     // LICHII_BANK_CHECK (Fritchii's EDEN_NX2_EXP9, which it also reads): 1 compares only the
     // pages that may have changed (CheckNativeBankPagesBits), 3 (default, as Fritchii v5) is
     // 1 without the once-a-frame compare of every page, which never found a change there
@@ -4454,7 +4454,7 @@ void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
     if (buffer_id == NULL_BUFFER_ID) {
         return;
     }
-    // EDEN_NX2_EXP18 & 4 (Fritchii, from zortos293/Lichii#641 5d5d3bdd3d; default 4): the
+    // EDEN_NX2_EXP18 & 4 (Fritchii, from upstream #641 5d5d3bdd3d; default 4): the
     // buffer's own field instead of its LRU node, a cache miss, for every bind of the frame. A
     // second touch in the same frame changed nothing (LeastRecentlyUsedCache::Touch keeps a tick
     // that is not older). Bits 1 and 2 (binding memos) are not ported.

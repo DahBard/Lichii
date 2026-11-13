@@ -545,7 +545,7 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
         config.fastmem_exclusive_access = false;
     }
 #if defined(ARCHITECTURE_x86_64)
-    // zortos293/Lichii#717's code generation switches, all on unless set to 0.
+    // upstream #717's code generation switches, all on unless set to 0.
     if (Settings::values.cpu_accuracy.GetValue() != Settings::CpuAccuracy::Paranoid) {
         // An evicted value goes to a free callee-saved GPR instead of a stack slot.
         static const bool spill_to_gpr = Nx2EnvOn("EDEN_NX2_JIT_SPILL_GPR");

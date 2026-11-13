@@ -1133,7 +1133,7 @@ void PipelineCache::RefreshGraphicsKey() {
         graphics_key.state.Refresh(*maxwell3d, dynamic_features);
         return;
     }
-    // From Fritchii v4 (Frizti/Lichii 55bba8812, a port of zortos293/Lichii#408): Refresh only
+    // From Fritchii v4 (Frizti/Lichii 55bba8812, a port of upstream #408): Refresh only
     // rewrites the types when the vertex input changes, so the masked copy in the key must not
     // carry over to the next programs. Types of attributes the programs don't read split their
     // pipelines by whatever the game left in those registers (Ocarina of Time: up to 20 keys for
@@ -3110,7 +3110,7 @@ void ReportWorstFrame() {
 } // Anonymous namespace
 
 namespace {
-/// EDEN_NX2_TRANSLATE_PROFILE=1 (zortos293/Lichii#896's profiler, off by default): every 10 s the
+/// EDEN_NX2_TRANSLATE_PROFILE=1 (upstream #896's profiler, off by default): every 10 s the
 /// time each translation step took on all threads, the largest first.
 void ReportTranslateProfile() {
     if (!Shader::TranslateProfile::Enabled()) {

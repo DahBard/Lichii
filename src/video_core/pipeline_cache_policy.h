@@ -13,7 +13,7 @@
 namespace VideoCommon {
 
 /// Attribute mask of a native vertex program, two bits per attribute as in
-/// FixedPipelineState::attribute_types (zortos293/Lichii#408, as Fritchii v4 ports it).
+/// FixedPipelineState::attribute_types (upstream #408, as Fritchii v4 ports it).
 /// @param input_generic Components of each generic attribute in the program header's input map.
 constexpr u64 VertexAttributeMask(std::span<const std::array<bool, 4>> input_generic) {
     u64 mask = 0;

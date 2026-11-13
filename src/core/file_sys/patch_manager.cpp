@@ -442,7 +442,7 @@ constexpr std::array BUILTIN_PATCHES{
         .state_offset = 0x4E9FE00,
         .state_size = 0x98,
     },
-    // From zortos293/Lichii#717: host work in place of guest work in Ocarina's loading paths.
+    // From upstream #717: host work in place of guest work in Ocarina's loading paths.
     BuiltinPatch{
         .name = "Native zstd (built-in)",
         .title_id = 0x0400486024DEC000,

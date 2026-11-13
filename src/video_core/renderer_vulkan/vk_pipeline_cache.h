@@ -378,7 +378,7 @@ private:
                          std::unordered_set<u64> precached, std::stop_token stop_loading,
                          const VideoCore::DiskResourceLoadCallback& callback);
 
-    /// Fritchii's precompiled pipelines (zortos293/Lichii#895, VideoCommon::Nx2Precompile): the
+    /// Fritchii's precompiled pipelines (upstream #895, VideoCommon::Nx2Precompile): the
     /// records of the title's precompiled file, assembled from its recipe and the game's own files,
     /// as precache jobs. Returns the stamp file and the stamp PrecacheShaders writes once every
     /// one of them ran; nothing when there is nothing to prepare.

@@ -192,7 +192,7 @@ void SwizzleImpl(std::span<u8> output, std::span<const u8> input, u32 width, u32
 
     // 16-byte units (UnswizzleTexture and SwizzleTexture widen to them when a row allows it):
     // their offsets in a GOB come from a table instead of being computed one by one
-    // (zortos293/Lichii#784).
+    // (upstream #784).
     std::array<u32, GOB_SIZE_Y * 4> unit_offsets{};
     if constexpr (BYTES_PER_PIXEL == 16) {
         unit_offsets = GobUnitOffsets(native_tiling);
