@@ -75,8 +75,8 @@ below), plus:
      4K image.
    - AMD frame generation: tick "Enable Frame Generation", pick "AMD FSR Frame Generation
      (Ocarina, restart)" as the type, and restart Lichii. It doubles the frames on screen
-     through AMD's own swapchain and pacing. LICHII_FG_PACING only applies to the built-in
-     Optical Flow and LSFG types. "AMD Frame Generation Version" is Auto (FSR 4's on the
+     through AMD's own swapchain and pacing (upstream's frame generation pacing applies only to
+     the built-in Optical Flow and LSFG types). "AMD Frame Generation Version" is Auto (FSR 4's on the
      RX 9070 XT) or FSR 3.1 (lighter). The HUD is masked, so it stays still in generated
      frames. Since r59 it also runs with HDR output in the HDR10 format (Graphics > HDR
      format), through the same AMD swapchain, which hands the display Lichii's HDR10 metadata.
@@ -201,9 +201,9 @@ below), plus:
    something else: on AMD's driver, its compute jobs dropped pipelines whose build was still
    queued, and the queued build then ran on freed memory. Fritchii doesn't queue these builds.
    r36 builds them in the job itself.
- * Crashes: this package writes lichii-crash-<pid>.txt and lichii-crash-<pid>.dmp to
-   %APPDATA%\lichii\crash_dumps when Lichii crashes (EDEN_NX2_CRASH_DUMP=1 in nx2_switches.txt).
-   Send both with the log.
+ * Crashes: since r60 upstream's crash handler writes a "Host crash:" line (where it crashed
+   and the call stack) into %APPDATA%\lichii\log\eden_log.txt and eden_crash.dmp next to it.
+   Send both. It replaces this package's crash_dumps writer.
  * Round 20, more of Fritchii v5.2, each group with an A/B launcher that brings round 19 back:
    - Shaders (ab-22): a new pipeline is translated on two worker threads instead of the GPU
      thread, so a new effect stalls the frame less; with "Switch 2 draws with unbuilt
@@ -376,6 +376,38 @@ below), plus:
      Loading .nx games is not affected.
  * r59: r58 with AMD frame generation under HDR output (HDR10; see the frame generation notes
    above). Nothing changes with HDR off.
+ * r60: upstream Lichii build 171 merged (69 commits since build 160), with r59's HDR frame
+   generation:
+   - Ocarina's image: light-table shadow maps read through storage buffers at binding 32 or
+     above, and dual-vertex programs read their own textures (#1485); light tables of records
+     captured with a null pointer no longer sample a random render target (#1523); no one-frame
+     white flashes from stale material constants (#1459); a later write on a page with GPU data
+     is no longer lost (#1460).
+   - Speed (upstream's measurements): command lists are copied on their own thread (#1520); the
+     GPU thread waits in hardware or sleeps instead of polling waiting channels (#1376); idle
+     guest cores wait in C0.2 with a poll that shrinks when it doesn't pay (#1373); fewer
+     page-protection calls (#1436, #1518), cheaper reports and fences (#1515, #1516), constant
+     data written straight to the bound buffer with its keep gaps closed (#1441, #1521), less
+     work per new shader (#1468) and less JIT compile time (#1517).
+   - Stability: the zero-page trim no longer ends a game when Windows runs out of commit
+     (#1451); long sessions keep their SMMU space (#1458, #1528, #1532); stopping a game no
+     longer logs a Userspace PANIC (#1450).
+   - Shader loading: no new preparation ("prepared for this driver already"). The first boot is
+     slow as with every build and lowers the v2 records again once. After a crash or kill during
+     the loading screen, the next launch builds no cached pipelines and doesn't prepare; the one
+     after resumes (#1505).
+   - VRAM: images used in the last 150 frames stay until the card runs short (#1435); with
+     #1306 that is up to ~1 GiB more in use before the 3-frame age takes over.
+   - The verify launchers' "Uniform keeps" line counts "no longer streamed" and "changed since
+     the previous draw": #1521's verify checks only the ranges a keep binds again.
+   - Launchers whose switches are gone (a cleanup follows): ab-23, ab-29, ab-32 and ab-36 no
+     longer change anything; ab-1, ab-5, ab-15, ab-40 and ab-41 no longer change the idle poll
+     (EDEN_NX2_IDLE_SPIN_US is now its limit).
+   - Upstream renamed its yuzu names, folders and targets to Lichii; lichii.exe, the data folder
+     and the settings are unchanged. New in Configure: a Nextendo sign-in box and an opt-in host
+     redirect (Network; online play stays off), two unchecked Age of Imprisonment options, and
+     Help > Apply Recommended Settings also resets per-game overrides of the table's settings
+     (backed up; Restore brings them back).
  * Recommended speed settings, applied once on first start (change them freely afterwards):
    GPU accuracy Low, asynchronous shaders on, reactive flushing off, asynchronous presentation
    on, GPU video decoding, shader precache Always, Switch 2 draws with unbuilt pipelines

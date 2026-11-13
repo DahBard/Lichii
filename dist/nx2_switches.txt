@@ -24,11 +24,6 @@ EDEN_NX2_FENCE_BATCH=1
 # %APPDATA%\lichii\nx2_switches.txt builds only the recent sessions' pipelines at boot.
 EDEN_NX2_PRELOAD_ALL_PIPELINES=1
 
-# lichii-tuned: on a crash, write lichii-crash-<pid>.txt (where it crashed, its call stack and the
-# loaded and unloaded modules) and lichii-crash-<pid>.dmp to %APPDATA%\lichii\crash_dumps, without
-# Windows' crash dump registry setting. Nothing runs until a crash. =0 turns it off.
-EDEN_NX2_CRASH_DUMP=1
-
 # Leave buffer downloads disabled on Switch 2 (default): forcing downloads (=1) copies back
 # 90-220 MB/s of buffers CPU never touches, causing heavy mutex contention and dropping FPS by ~38-63%.
 #EDEN_NX2_BUFFER_DOWNLOADS=1
