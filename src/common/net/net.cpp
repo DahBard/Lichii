@@ -257,6 +257,10 @@ std::optional<std::string> MakeRequest(const std::string& url, const std::string
 }
 
 ReleaseList GetReleases() {
+    // lichii-tuned: no update source (GenerateSCMRev.cmake), so nothing to ask.
+    if (Common::g_build_auto_update_stable_api[0] == '\0') {
+        return {};
+    }
     const auto url = fmt::format("https://{}", Common::g_build_auto_update_stable_api);
     const auto response = Fetch(url, Common::g_build_auto_update_api_path);
 
@@ -272,6 +276,9 @@ ReleaseList GetReleases() {
 }
 
 std::optional<std::string> GetReleasesBody() {
+    if (Common::g_build_auto_update_stable_api[0] == '\0') {
+        return std::nullopt;
+    }
     const auto releases_path = Common::g_build_auto_update_api_path;
     const auto url = fmt::format("https://{}", Common::g_build_auto_update_stable_api);
 
