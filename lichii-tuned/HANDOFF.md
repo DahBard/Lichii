@@ -34,6 +34,13 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
 
 ## How builds are made
 
+- Since 2026-11-13 the repository is DahBard/Blitchii, private (owner): the full history and
+  every branch moved (the first upstream base, 2026-11-06, is branch `base`), and our own files
+  name no origin repository. Actions minutes and artifact storage are limited in a private
+  repository, so a push builds pgo-lto only (a manual run can build pgo or pgo-train), artifacts
+  are kept 3 days, and builds are numbered run + 60: run #1 here is r61. The pgo builds read the
+  recorded profile from this repository's 'PGO profile r49' release (tag `pgo-r49`, asset
+  lichii-pgo-22360.zip); without it they build with the repo's eglantine.profdata alone.
 - Since 2026-11-13 (r60): branch `tuned` = upstream Lichii build 171, nx2 `c169856090` (merged in
   `8619a1df3`; `2eb5f081c` in `526c0ab1c`, `17baed716` in `2d9ea59c5`) + the workflow + this
   folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
@@ -43,7 +50,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `-DLICHII_*`. Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
-- Branch `tuned` of DahBard/Lichii = upstream nx2 `2eb5f081c` (2026-11-12; `17baed716` = round 22's merge, `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
+- Branch `tuned` of DahBard/Blitchii = upstream nx2 `2eb5f081c` (2026-11-12; `17baed716` = round 22's merge, `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
   round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
@@ -95,7 +102,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   every library `ldd` resolves (~150 packages, FFmpeg's included); from round 17 it lists only
   the owners of the program's direct dependencies (`readelf -d` NEEDED), as the README expects. The cloud
   session can't test this job locally: its proxy blocks the CachyOS and Arch mirrors.
-- Source of the patch: branch `tuned4` of DahBard/Lichii (r36 with build 132 merged in
+- Source of the patch: branch `tuned4` of DahBard/Blitchii (r36 with build 132 merged in
   `0e30416f4`, round 22, CheezyEmu's FSR port up to `aae4566f5`, and nx2 `17baed716` merged in
   `853ff8213` with follow-ups up to `36948bc36`, and r50's changes up to `cd5482ece`, builds A, B and r54 up to
   `cbe51e88a`, r55 up to `3bf40a3c2`, and nx2 `2eb5f081c` merged in `bd1ce62ff` with follow-ups up

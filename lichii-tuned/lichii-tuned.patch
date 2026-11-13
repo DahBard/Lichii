@@ -18,6 +18,28 @@ index 59de3e570e..5b5ef21f15 100644
  | Read stalls (loading hitches, NUP vs other containers) | `EDEN_NX2_FS_READ_TRACE=1` | About once a second while the guest reads, one `Guest storage reads` line (`IStorage`, the RomFS) and one `Guest file reads` line (`IFile`): count, MiB, p50/p99/max latency and reads over 1 ms and 16 ms, plus totals and read time since boot. Times cover the backend read (NUP decompression included), not the Switch 1 SD-card throttle. |
  | Unmapped device reads (`Unmapped Device ReadBlock`) | `EDEN_NX2_READBLOCK_TRACE=1` | Every read of unmapped device memory, one line per read with its first unmapped address, unmapped byte count and caller (`file:line`). Without it only the first 16 are logged. |
  | Device loss (`Device loss occurred!`) | Always on | The `Device fault` lines after it: what VK_EXT_device_fault reports (fault addresses and their type, vendor fault codes). `not supported by the driver` means the driver has no such data. |
+diff --git a/CMakeModules/GenerateSCMRev.cmake b/CMakeModules/GenerateSCMRev.cmake
+index 43097e1b9f..885a4ddd98 100644
+--- a/CMakeModules/GenerateSCMRev.cmake
++++ b/CMakeModules/GenerateSCMRev.cmake
+@@ -36,11 +36,12 @@ set(GIT_DESC ${BUILD_VERSION})
+ 
+ # Generate cpp with Git revision from template
+ 
+-set(BUILD_AUTO_UPDATE_STABLE_REPO "zortos293/Lichii")
+-set(BUILD_AUTO_UPDATE_STABLE_API "api.github.com")
+-set(BUILD_AUTO_UPDATE_API_PATH "/repos/zortos293/Lichii/releases?per_page=100")
+-set(BUILD_AUTO_UPDATE_WEBSITE "https://github.com")
+-set(BUILD_AUTO_UPDATE_REPO "zortos293/Lichii")
++# lichii-tuned: no update source; the tuned build is built with ENABLE_UPDATE_CHECKER=OFF.
++set(BUILD_AUTO_UPDATE_STABLE_REPO "")
++set(BUILD_AUTO_UPDATE_STABLE_API "")
++set(BUILD_AUTO_UPDATE_API_PATH "")
++set(BUILD_AUTO_UPDATE_WEBSITE "")
++set(BUILD_AUTO_UPDATE_REPO "")
+ if (NIGHTLY_BUILD)
+     set(REPO_NAME "Lichii Nightly")
+ else()
 diff --git a/CMakeModules/NxFormat.cmake b/CMakeModules/NxFormat.cmake
 index 256f09a736..ae99918678 100644
 --- a/CMakeModules/NxFormat.cmake
@@ -41,14 +63,14 @@ index 256f09a736..ae99918678 100644
              set(sha256 b61fecfad224d2f0b6a040c23663e5f6915eb500be9fc36016e3ffcb0aa66e52)
 diff --git a/dist/lichii-tuned/README-tuned.txt b/dist/lichii-tuned/README-tuned.txt
 new file mode 100644
-index 0000000000..a70cac5ffa
+index 0000000000..d23888a7af
 --- /dev/null
 +++ b/dist/lichii-tuned/README-tuned.txt
 @@ -0,0 +1,589 @@
 +Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 +==============================================================================
 +
-+Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichii, branch
++Test build of Lichii from github.com/DahBard/Blitchii (a private repository), branch
 +"tuned". Same emulator and the same user data folder as the official Lichii builds,
 +%APPDATA%\lichii (Fritchii and build 132 keep %APPDATA%\eden; see "First launch: import"
 +below), plus:
@@ -1474,7 +1496,7 @@ index 01b8cc9b2e..a4cd337360 100644
  The routine reads `CNTPCT_EL0` and `CNTFRQ_EL0`. After its first call, it caps
 diff --git a/docs/nx2/oot-performance-experiments.md b/docs/nx2/oot-performance-experiments.md
 new file mode 100644
-index 0000000000..818d504ddc
+index 0000000000..c9eb1e888f
 --- /dev/null
 +++ b/docs/nx2/oot-performance-experiments.md
 @@ -0,0 +1,106 @@
@@ -1519,7 +1541,7 @@ index 0000000000..818d504ddc
 +which the back writes at engine switches. Separating them reduces cache transfers
 +without changing command ordering, synchronization or rendered output.
 +
-+Sources: [upstream issue 807](https://github.com/Eglantine-Community/Eglantine/issues/807)
++Sources: upstream's base issue 807
 +and existing fork commit `b22e54a24b47f4de4fcb332825c76f9a3185cad7` (layout-only port
 +of `886ac17e004156c34596d2664f4f9c4824f0ed44`). The issue's Mario Kart measurements
 +do not establish an Ocarina gain. `upstream/nx2` was fetched and is fully contained
@@ -5506,6 +5528,31 @@ index d996956636..9a74a8c2c3 100644
          usage.private_working_set = counters.PrivateWorkingSetSize;
      }
      PERFORMANCE_INFORMATION performance{};
+diff --git a/src/common/net/net.cpp b/src/common/net/net.cpp
+index 969a267e67..1402a24774 100644
+--- a/src/common/net/net.cpp
++++ b/src/common/net/net.cpp
+@@ -257,6 +257,10 @@ std::optional<std::string> MakeRequest(const std::string& url, const std::string
+ }
+ 
+ ReleaseList GetReleases() {
++    // lichii-tuned: no update source (GenerateSCMRev.cmake), so nothing to ask.
++    if (Common::g_build_auto_update_stable_api[0] == '\0') {
++        return {};
++    }
+     const auto url = fmt::format("https://{}", Common::g_build_auto_update_stable_api);
+     const auto response = Fetch(url, Common::g_build_auto_update_api_path);
+ 
+@@ -272,6 +276,9 @@ ReleaseList GetReleases() {
+ }
+ 
+ std::optional<std::string> GetReleasesBody() {
++    if (Common::g_build_auto_update_stable_api[0] == '\0') {
++        return std::nullopt;
++    }
+     const auto releases_path = Common::g_build_auto_update_api_path;
+     const auto url = fmt::format("https://{}", Common::g_build_auto_update_stable_api);
+ 
 diff --git a/src/common/nx2_address_wait.cpp b/src/common/nx2_address_wait.cpp
 new file mode 100644
 index 0000000000..1218c21a70
@@ -7222,7 +7269,7 @@ index b44e433c19..09a2623c41 100644
      hle/kernel/svc_results.h
      hle/kernel/svc_types.h
 diff --git a/src/core/arm/dynarmic/arm_dynarmic_64.cpp b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
-index 06e357863f..4bdc3ff803 100644
+index 06e357863f..91ed99cb07 100644
 --- a/src/core/arm/dynarmic/arm_dynarmic_64.cpp
 +++ b/src/core/arm/dynarmic/arm_dynarmic_64.cpp
 @@ -16,6 +16,7 @@
@@ -7389,7 +7436,7 @@ index 06e357863f..4bdc3ff803 100644
          config.fastmem_exclusive_access = false;
      }
 +#if defined(ARCHITECTURE_x86_64)
-+    // zortos293/Lichii#717's code generation switches, all on unless set to 0.
++    // upstream #717's code generation switches, all on unless set to 0.
 +    if (Settings::values.cpu_accuracy.GetValue() != Settings::CpuAccuracy::Paranoid) {
 +        // An evicted value goes to a free callee-saved GPR instead of a stack slot.
 +        static const bool spill_to_gpr = Nx2EnvOn("EDEN_NX2_JIT_SPILL_GPR");
@@ -8736,7 +8783,7 @@ index 0000000000..aa1d0b366e
 +
 +} // namespace FileSys::Nx2ShaderExtract
 diff --git a/src/core/file_sys/patch_manager.cpp b/src/core/file_sys/patch_manager.cpp
-index bf9aea4efc..00173dc687 100644
+index bf9aea4efc..8d4f74db85 100644
 --- a/src/core/file_sys/patch_manager.cpp
 +++ b/src/core/file_sys/patch_manager.cpp
 @@ -5,9 +5,12 @@
@@ -9077,7 +9124,7 @@ index bf9aea4efc..00173dc687 100644
 -        .state_size = 16,
 +        .state_size = 0x98,
 +    },
-+    // From zortos293/Lichii#717: host work in place of guest work in Ocarina's loading paths.
++    // From upstream #717: host work in place of guest work in Ocarina's loading paths.
 +    BuiltinPatch{
 +        .name = "Native zstd (built-in)",
 +        .title_id = 0x0400486024DEC000,
@@ -19133,7 +19180,7 @@ index e6b54d12d0..0fc3648932 100644
          return size_bytes;
      }
 diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
-index 1aae9a6a52..4e3d6bd84d 100644
+index 1aae9a6a52..a164bc14d7 100644
 --- a/src/video_core/buffer_cache/buffer_cache.h
 +++ b/src/video_core/buffer_cache/buffer_cache.h
 @@ -19,17 +19,22 @@
@@ -19614,7 +19661,7 @@ index 1aae9a6a52..4e3d6bd84d 100644
 -        native_indirect_uniforms_this_frame.insert(device_addr).second) {
 +    // Such a bank is checked on every bind: games rewrite per-draw data between draws, and
 +    // checking once per frame left it stale for a frame now and then (white flashes in Ocarina of
-+    // Time, Eglantine 031e07436c).
++    // Time, upstream's base commit 031e07436c).
 +    // LICHII_BANK_CHECK (Fritchii's EDEN_NX2_EXP9, which it also reads): 1 compares only the
 +    // pages that may have changed (CheckNativeBankPagesBits), 3 (default, as Fritchii v5) is
 +    // 1 without the once-a-frame compare of every page, which never found a change there
@@ -20477,7 +20524,7 @@ index 1aae9a6a52..4e3d6bd84d 100644
 +    if (buffer_id == NULL_BUFFER_ID) {
 +        return;
 +    }
-+    // EDEN_NX2_EXP18 & 4 (Fritchii, from zortos293/Lichii#641 5d5d3bdd3d; default 4): the
++    // EDEN_NX2_EXP18 & 4 (Fritchii, from upstream #641 5d5d3bdd3d; default 4): the
 +    // buffer's own field instead of its LRU node, a cache miss, for every bind of the frame. A
 +    // second touch in the same frame changed nothing (LeastRecentlyUsedCache::Touch keeps a tick
 +    // that is not older). Bits 1 and 2 (binding memos) are not ported.
@@ -22251,7 +22298,7 @@ index 5f86750f7c..9ffee1101d 100644
  public:
      explicit State(MemoryManager& memory_manager_, Registers& regs_);
 diff --git a/src/video_core/engines/kepler_compute.cpp b/src/video_core/engines/kepler_compute.cpp
-index 1e41ffea86..8913b435ae 100644
+index 1e41ffea86..781812f15d 100644
 --- a/src/video_core/engines/kepler_compute.cpp
 +++ b/src/video_core/engines/kepler_compute.cpp
 @@ -17,13 +17,19 @@
@@ -22398,7 +22445,7 @@ index 1e41ffea86..8913b435ae 100644
 -                        .copy_size = upload_state.GetUploadSize(),
 -                        .was_dirty = upload_dirty};
 -        uploads.push_back(info);
-+        // EDEN_NX2_EXP29 & 4 (Fritchii bc83af560, zortos293/Lichii#717's
++        // EDEN_NX2_EXP29 & 4 (Fritchii bc83af560, upstream #717's
 +        // EDEN_NX2_DROP_NATIVE_UPLOADS; default 6): only the launch case below reads the list, and
 +        // native mode never gets there (ProcessNativeMethod takes 0xaf), so it grew by one entry
 +        // per exec all session.
@@ -35401,14 +35448,14 @@ index 0000000000..25ed67d962
 +} // namespace VideoCommon::Nx2Precompile
 diff --git a/src/video_core/nx2_precompile.h b/src/video_core/nx2_precompile.h
 new file mode 100644
-index 0000000000..7c29afd826
+index 0000000000..0346572da6
 --- /dev/null
 +++ b/src/video_core/nx2_precompile.h
 @@ -0,0 +1,100 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
-+// Fritchii's automatic side of zortos293/Lichii#895: finds a title's precompiled pipeline file
++// Fritchii's automatic side of upstream #895: finds a title's precompiled pipeline file
 +// (precompiled.fork-v<N>.nx2prep, as #895 places it) or a precompile recipe for it, and assembles
 +// the recipe with the running game's own files when the file is missing or older than the recipe.
 +// PipelineCache::PreparePrecompiled then builds the file's pipelines in the background.
@@ -37128,7 +37175,7 @@ index 68c5a2da4e..0000000000
 -} // namespace VideoCommon
 diff --git a/src/video_core/pipeline_cache_policy.h b/src/video_core/pipeline_cache_policy.h
 new file mode 100644
-index 0000000000..a26f198f33
+index 0000000000..675658cb1f
 --- /dev/null
 +++ b/src/video_core/pipeline_cache_policy.h
 @@ -0,0 +1,46 @@
@@ -37147,7 +37194,7 @@ index 0000000000..a26f198f33
 +namespace VideoCommon {
 +
 +/// Attribute mask of a native vertex program, two bits per attribute as in
-+/// FixedPipelineState::attribute_types (zortos293/Lichii#408, as Fritchii v4 ports it).
++/// FixedPipelineState::attribute_types (upstream #408, as Fritchii v4 ports it).
 +/// @param input_generic Components of each generic attribute in the program header's input map.
 +constexpr u64 VertexAttributeMask(std::span<const std::array<bool, 4>> input_generic) {
 +    u64 mask = 0;
@@ -44374,7 +44421,7 @@ index 5bc8be1010..fdf52d6aaa 100644
      std::unique_ptr<Impl> impl;
  };
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
-index 9f20afc908..4b4983d556 100644
+index 9f20afc908..4462499793 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
 @@ -8,7 +8,9 @@
@@ -44843,7 +44890,7 @@ index 9f20afc908..4b4983d556 100644
 +        graphics_key.state.Refresh(*maxwell3d, dynamic_features);
 +        return;
 +    }
-+    // From Fritchii v4 (Frizti/Lichii 55bba8812, a port of zortos293/Lichii#408): Refresh only
++    // From Fritchii v4 (Frizti/Lichii 55bba8812, a port of upstream #408): Refresh only
 +    // rewrites the types when the vertex input changes, so the masked copy in the key must not
 +    // carry over to the next programs. Types of attributes the programs don't read split their
 +    // pipelines by whatever the game left in those registers (Ocarina of Time: up to 20 keys for
@@ -46005,7 +46052,7 @@ index 9f20afc908..4b4983d556 100644
 +} // Anonymous namespace
 +
 +namespace {
-+/// EDEN_NX2_TRANSLATE_PROFILE=1 (zortos293/Lichii#896's profiler, off by default): every 10 s the
++/// EDEN_NX2_TRANSLATE_PROFILE=1 (upstream #896's profiler, off by default): every 10 s the
 +/// time each translation step took on all threads, the largest first.
 +void ReportTranslateProfile() {
 +    if (!Shader::TranslateProfile::Enabled()) {
@@ -47112,7 +47159,7 @@ index 9f20afc908..4b4983d556 100644
      } catch (const std::ios_base::failure& e) {
          // The cache stays as it was: only the file being written goes.
 diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.h b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
-index cd2f608845..0363d25cbb 100644
+index cd2f608845..f49f4b2860 100644
 --- a/src/video_core/renderer_vulkan/vk_pipeline_cache.h
 +++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
 @@ -11,13 +11,17 @@
@@ -47360,7 +47407,7 @@ index cd2f608845..0363d25cbb 100644
                           std::unordered_set<u64> precached, std::stop_token stop_loading,
                           const VideoCore::DiskResourceLoadCallback& callback);
  
-+    /// Fritchii's precompiled pipelines (zortos293/Lichii#895, VideoCommon::Nx2Precompile): the
++    /// Fritchii's precompiled pipelines (upstream #895, VideoCommon::Nx2Precompile): the
 +    /// records of the title's precompiled file, assembled from its recipe and the game's own files,
 +    /// as precache jobs. Returns the stamp file and the stamp PrecacheShaders writes once every
 +    /// one of them ran; nothing when there is nothing to prepare.
@@ -55399,7 +55446,7 @@ index 0000000000..0cbb505fe0
 +
 +} // namespace VideoCommon
 diff --git a/src/video_core/textures/decoders.cpp b/src/video_core/textures/decoders.cpp
-index d427c985b8..49816ac5b9 100644
+index d427c985b8..c0cfc89d7b 100644
 --- a/src/video_core/textures/decoders.cpp
 +++ b/src/video_core/textures/decoders.cpp
 @@ -4,20 +4,133 @@
@@ -55571,7 +55618,7 @@ index d427c985b8..49816ac5b9 100644
 -        return;
 +    // 16-byte units (UnswizzleTexture and SwizzleTexture widen to them when a row allows it):
 +    // their offsets in a GOB come from a table instead of being computed one by one
-+    // (zortos293/Lichii#784).
++    // (upstream #784).
 +    std::array<u32, GOB_SIZE_Y * 4> unit_offsets{};
 +    if constexpr (BYTES_PER_PIXEL == 16) {
 +        unit_offsets = GobUnitOffsets(native_tiling);
@@ -57453,7 +57500,7 @@ index 23cfeee03b..5877472377 100644
                             VkDeviceSize count_offset, u32 draw_count, u32 stride) const noexcept {
          dld->vkCmdDrawIndirectCount(handle, src_buffer, src_offset, count_buffer, count_offset,
 diff --git a/tools/shader-sweep/main.cpp b/tools/shader-sweep/main.cpp
-index 8ba27dc7e2..57457347d5 100644
+index 8ba27dc7e2..3ab4b20b7a 100644
 --- a/tools/shader-sweep/main.cpp
 +++ b/tools/shader-sweep/main.cpp
 @@ -661,28 +661,7 @@ Shader::RuntimeInfo PipelineRuntime(std::span<const u8> key, std::span<const u64
@@ -57482,7 +57529,7 @@ index 8ba27dc7e2..57457347d5 100644
 -            }
 -        }
 -    }
-+    // No noperspective emulation: zortos293/Lichii#820 is reverted here, as in Fritchii.
++    // No noperspective emulation: upstream #820 is reverted here, as in Fritchii.
      return info;
  }
  

@@ -4,8 +4,8 @@
 
 ## lichii-tuned
 
-This fork's `tuned` branch builds a tuned Windows Lichii for the owner's laptop (Core Ultra 7 255H +
-RX 9070 XT over OCuLink, testing Ocarina of Time). The base is our own fork, branch `tuned4`, with
+This repository's (DahBard/Blitchii, private since 2026-11-13) `tuned` branch builds a tuned Windows
+Lichii for the owner's laptop (Core Ultra 7 255H + RX 9070 XT over OCuLink, testing Ocarina of Time). The base is our own fork, branch `tuned4`, with
 upstream Lichii merged in. Round 21 (2026-11-09) briefly restarted on Fritchii v5.5 (branch `tuned5`,
 now kept for reference only). On 2026-11-10 the owner chose to stay on the tuned fork after testing
 r35, Fritchii v5.5 and upstream build 132 (see HANDOFF): Fritchii ran ~10% slower in steady play, and
@@ -99,6 +99,11 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the
   owner's time, instead of every 2 hours), and each run re-arms it for the next renewal 5 hours
   later. It doesn't interrupt work that is running.
+
+- 2026-11-13: the repository moved to DahBard/Blitchii, private, with its full history; our own
+  files keep no reference to the origin repository (upstream's own code and the git history stay as
+  they are). Its CI builds pgo-lto on push (Actions minutes and storage are limited), keeps artifacts
+  3 days and numbers builds run + 60. The owner deletes the old public fork once a build here passes.
 
 Usage: the owner's plan has limited usage per 5-hour window. Keep sessions lean: few multi-agent
 workflows, and commit and push at each checkpoint so work survives a cut-off.
