@@ -78,7 +78,12 @@ below), plus:
      through AMD's own swapchain and pacing. LICHII_FG_PACING only applies to the built-in
      Optical Flow and LSFG types. "AMD Frame Generation Version" is Auto (FSR 4's on the
      RX 9070 XT) or FSR 3.1 (lighter). The HUD is masked, so it stays still in generated
-     frames.
+     frames. Since r59 it also runs with HDR output in the HDR10 format (Graphics > HDR
+     format), through the same AMD swapchain, which hands the display Lichii's HDR10 metadata.
+     With scRGB it stays off and the FG button shows "(SCRGB)"; if AMD's swapchain can't start
+     with HDR, Lichii presents HDR without frame generation and the button shows "(HDR)" (the
+     log's "AMD frame generation" lines say why; AMD Frame Generation Version FSR 3.1 is worth
+     a try then).
    The status bar, and the performance overlay in fullscreen, show "FSR 4.x.x" while FSR
    upscales. When it doesn't, they show "FSR (reason)", for example RES 1X, or NO CAMERA in
    menus. Clicking it turns FSR on or off. With AMD frame generation the FG button shows
@@ -86,8 +91,8 @@ below), plus:
    overlay's footer shows "FG +60" with the FSR/FG line under it.
  * Since the upstream merge of 2026-11-12, the first launch switches the theme to Lichii Dark
    and shows a What's new dialog, once each (Configure > General > UI switches the theme back).
-   HDR output (Configure > Graphics) is Off by default; AMD frame generation is off while HDR
-   output is active.
+   HDR output (Configure > Graphics) is Off by default; since r59 AMD frame generation runs
+   with HDR output in the HDR10 format (not scRGB).
  * GPU readbacks are preflushed in Ocarina by default (fewer stalls when the game reads its own
    GPU data back; EDEN_NX2_PREFLUSH=0 turns it off, trace-no-preflush.bat compares).
  * The log can show each frame's time and the 1% lows ("Frame times:" lines every 10 s with

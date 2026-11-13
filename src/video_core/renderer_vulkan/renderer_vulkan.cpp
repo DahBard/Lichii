@@ -388,7 +388,7 @@ HdrPresent RendererVulkan::UpdateHdrPresent() {
         if (output_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             LOG_INFO(Render_Vulkan,
                      "HDR output: {} {}, reference white {} nits, peak {} nits. Anti-aliasing, "
-                     "post-processing, upscaling filters and frame generation are off",
+                     "post-processing and upscaling filters are off",
                      string_VkFormat(output_format.format),
                      string_VkColorSpaceKHR(output_format.colorSpace), output_reference_white,
                      output_peak);
