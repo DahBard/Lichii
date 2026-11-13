@@ -1415,7 +1415,7 @@
     "relevance": "ocarina",
     "we_carry": "no",
     "recommendation": "watch",
-    "why": "Ocarina channel stalls, zortos-authored; touches nvdrv.cpp, nx2.h and query_cache.h, all of which we changed. 3 conflicts. If upstream merges it, take it."
+    "why": "Ocarina channel stalls, authored by upstream's maintainer; touches nvdrv.cpp, nx2.h and query_cache.h, all of which we changed. 3 conflicts. If upstream merges it, take it."
    },
    {
     "number": 1099,
@@ -1423,7 +1423,7 @@
     "relevance": "ocarina",
     "we_carry": "no",
     "recommendation": "watch",
-    "why": "Zortos-authored perf fix for a regression that hits Ocarina; 28 lines in query_cache.h (our file; we have fake occlusion default for Ocarina). Likely to merge upstream soon."
+    "why": "Perf fix by upstream's maintainer for a regression that hits Ocarina; 28 lines in query_cache.h (our file; we have fake occlusion default for Ocarina). Likely to merge upstream soon."
    },
    {
     "number": 1244,
@@ -1619,7 +1619,7 @@
    },
    {
     "number": 1103,
-    "title": "vk_device: let RADV keep its own pipeline cache (port of Eglantine #714)",
+    "title": "vk_device: let RADV keep its own pipeline cache (port of upstream's base #714)",
     "relevance": "shader-cache",
     "we_carry": "no",
     "recommendation": "skip",
@@ -1910,7 +1910,7 @@
    }
   ],
   "procedure": [
-   "0. Gate (no code): wait for the owner's results on run #48 (tuned 758186745, the CheezyEmu port). CLAUDE.md orders the port finished and tested before the merge. Port fixes go on tuned4 first, pushed to origin/tuned4. Then confirm upstream hasn't moved: `git ls-remote https://github.com/zortos293/Lichii refs/heads/nx2` == 17baed716. If it moved, keep merging 17baed716 so these plans stay valid, and take the later commits in a follow-up.",
+   "0. Gate (no code): wait for the owner's results on run #48 (tuned 758186745, the CheezyEmu port). CLAUDE.md orders the port finished and tested before the merge. Port fixes go on tuned4 first, pushed to origin/tuned4. Then confirm upstream hasn't moved: `git ls-remote upstream refs/heads/nx2` == 17baed716. If it moved, keep merging 17baed716 so these plans stay valid, and take the later commits in a follow-up.",
    "1. Backup: `git tag tuned4-pre-nx2 <tuned4 tip>` and refresh lichii-tuned/tuned4.bundle later on `tuned` (step 8). Create the work branch in a scratch worktree: `git -C /home/user/Lichii worktree add -b r22-merge-nx2 <scratchpad>/wt-mnx2 tuned4`, then `git merge --no-ff --no-commit refs/remotes/upstream-url/nx2`. Confirm the same 18 conflicted files and 29 hunks as the trial (`grep -n '^<<<<<<<'`); if the port changed, re-map the hunks first.",
    "2. Mechanical hunks (main thread, one pass, about 20 min). Take theirs: upload_batch.h (must then be byte-identical to upstream: `git diff refs/remotes/upstream-url/nx2 -- src/video_core/renderer_vulkan/upload_batch.h` empty); vk_scheduler.h both hunks, then DELETE our duplicate block at trial 563-567 (no marker); vk_scheduler.cpp three hunks, then DELETE the duplicate `#include upload_batch.h` at line 38; vk_buffer_cache.cpp both hunks, then DELETE g_upload_batching and its comment at lines 31-36; vk_pipeline_cache.cpp (mapped_env); buffer_cache.h (flags formatting). Take ours: decoders.cpp (`git checkout --ours`, then `git diff tuned4 -- src/video_core/textures/decoders.cpp` must be empty). Keep CommandChunk DataAlignment.",
    "3. Memory: vulkan_memory_allocator.cpp. Upstream's #959 block, with the condition widened to `|| result == VK_ERROR_OUT_OF_HOST_MEMORY` and one comment line; delete our usage guard, over_budget and our log line.",

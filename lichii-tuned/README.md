@@ -1,6 +1,6 @@
 # lichii-tuned
 
-Windows builds of [Lichii](https://github.com/zortos293/Lichii), tuned for an Intel Core Ultra 7 255H (Arrow Lake-H:
+Windows builds of Lichii, tuned for an Intel Core Ultra 7 255H (Arrow Lake-H:
 6 P-cores, 8 E-cores, 2 low-power E-cores) driving an AMD Radeon RX 9070 XT over OCuLink, tested
 with The Legend of Zelda: Ocarina of Time.
 

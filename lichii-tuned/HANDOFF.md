@@ -4,7 +4,7 @@ State of the work on 2026-11-10 (round 22), for the next Claude session.
 
 ## Goal
 
-Make [Lichii](https://github.com/zortos293/Lichii) (Switch / Switch 2 emulator; Eden / Eglantine
+Make Lichii (Switch / Switch 2 emulator; Eden
 fork) run as fast and as cleanly as possible on the owner's setup, and iterate with the owner:
 build, the owner tests and sends `eden_log.txt`, analyze, next build.
 
@@ -25,7 +25,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   booted with 6,313 of the ~19,400 cached pipelines).
 - The log is `%APPDATA%\lichii\log\eden_log.txt` since the nx2 merge (#1253's data folder;
   before it `%APPDATA%\eden\log`). The previous launch's log is `eden_log.txt.old.txt`.
-- Sources (the owner, round 20): upstream Lichii (zortos293/Lichii nx2 and its pull requests) and
+- Sources (the owner, round 20): upstream Lichii (nx2 and its pull requests) and
   Fritchii (Frizti/Lichii, branch `oot-gather-fix`, tags `fritchii-v*`) are the main influences;
   take from other forks only for a very good reason or when the owner names one.
 - Windows only since 2026-11-11. The owner: "drop CachyOS, we won't be building towards Linux in
@@ -38,7 +38,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `8619a1df3`; `2eb5f081c` in `526c0ab1c`, `17baed716` in `2d9ea59c5`) + the workflow + this
   folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
   `git diff --binary c169856090 tuned4` (364 files, 2.7 MB), backed up in `tuned4.bundle` (`git
-  fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
+  fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has upstream nx2 up to
   `c169856090`). Since upstream's rename the build target is `lichii` and the options are
   `-DLICHII_*`. Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
@@ -104,7 +104,7 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `65745c243f` in `9161e35d2`, build 171 `c169856090` in `31d387f72`, r59 merged in) up to
   `04e8a8d2a`, branch `r22-merge-nx2c`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
-  lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has zortos293/Lichii nx2 up to
+  lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has upstream nx2 up to
   `c169856090`, as `tuned` does). The patch is `git diff --binary c169856090 tuned4` (364 files,
   2.7 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
@@ -527,7 +527,7 @@ r23 showed. Fritchii's numbered switches are read too (`EDEN_NX2_EXP<n>`).
 - Pipeline cache (`4afd7df1b`, Fritchii 9b8fef282 and its record grouping): records of one key
   are tried newest first, a key whose records all fail is stored again at run time, compute
   translations newest first (round 17: upstream #815's first record per key replaces the
-  graphics part). `fc68cbdd3` (Fritchii 55bba8812 = zortos293/Lichii#408): graphics
+  graphics part). `fc68cbdd3` (Fritchii 55bba8812 = upstream #408): graphics
   keys hold only the vertex attribute types the native vertex program reads (none for task and
   mesh), stored records are masked at load; `LICHII_KEY_ALL_ATTRIBUTES=1` as before.
 - Fritchii's host frame pacer and genlock (`fe9a0f3f4`; v3's 53ba1b2c7 to 72e5ad6c2 with v4's
@@ -545,7 +545,7 @@ r23 showed. Fritchii's numbered switches are read too (`EDEN_NX2_EXP<n>`).
   default in v4.1); EXP4 (superseded by EXP9); EXP5, EXP7, EXP13, EXP16 (diagnostics or
   measured no gain); updater, branding, dist, debug tools; #215's wait (not needed with fake
   occlusion); 86726f688 (we keep every pipeline); e9a04cc5a thread pinning (our own placement);
-  5aefec443 cache merge (we already share zortos's version 54 file); settings revision 3 and
+  5aefec443 cache merge (we already share upstream's version 54 file); settings revision 3 and
   f6d42b871 (the owner's settings already match: 1x, FXAA, CPU Auto, disk and driver caches,
   docked; Mailbox only matters with the pacer; 8 GB layout changes nothing with 32 GB of RAM).
   Fritchii's upstream imports were in already (f319e1076 = 68caa6c75, 2c6c844f4 = 79c151694,
@@ -674,7 +674,7 @@ Own changes:
 - MSVC build fix (round 4): four declarations from #319, #345 and #376 that hid a class member
   or a local are renamed.
 - Round 5's `EDEN_AMD_FRAGMENT_SHUFFLE=1` (native fragment shuffles on AMD; since #273 they run
-  as broadcast loops because a driver crashed on one Ocarina shader, Eglantine #618) was dropped
+  as broadcast loops because a driver crashed on one Ocarina shader, upstream's base #618) was dropped
   in round 6: black screen on this card, and the heavy passes don't shuffle.
 - Dynamic FPS (round 6, default since round 7): `LICHII_DYNFPS_SMOOTHING=<1|2|4|8>` (default 1)
   and `LICHII_DYNFPS_MIN_FPS=<5-60>` rewrite two instructions of the routine after it is applied:
@@ -1477,8 +1477,8 @@ Own changes:
   glitches, older base); port pieces. Other candidates in those trees: NaN-defined min/max, a
   compute-to-draw barrier, an atomics spin fix, AMD safe compile; combined forks justr4mzi/hortensia
   and jordenjacobsen-ai/Lichii-Frizti-v3-plus.
-- Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's Eglantine fork) is
-  not an AMD performance fork and was merged into Eglantine (#149). Lichii issue #403 (RX 9070 XT,
+- Research (2026-11-07; author claims, not reproduced): PokeDinner (Franseven's fork of upstream's base) is
+  not an AMD performance fork and was merged into upstream's base (#149). Lichii issue #403 (RX 9070 XT,
   build 93): ~18 -> ~29 fps after log filter `*:Error`, high process priority and Xbox Game Bar
   capture off; our logs are small (~4,700 lines in 4 minutes), so the filter matters less here.
   Upstream #408 (opened 2026-11-07, after the snapshot) keys pipelines only by the vertex attributes
@@ -1920,8 +1920,8 @@ Own changes:
    - Owner decisions (2026-11-12), in this order:
      - Option 3 first. If it makes medium-intensity areas steady at 50-60 fps, integrate it into
        a stable build. If not, option 1 first, then that stable build.
-     - Then merge with upstream Lichii at once, without waiting for Zortos's multithreaded back
-       thread. Option 2 (the back thread split across two cores) is dropped: his version comes
+     - Then merge with upstream Lichii at once, without waiting for upstream's multithreaded back
+       thread. Option 2 (the back thread split across two cores) is dropped: upstream's version comes
        with a later merge once it is released.
      - After the merge, a critical review of Fritchii's new commits for anything worth adding.
      - Medium intensity is the "steady medium play" row above: ~1700 draws/frame, 55-57 fps
@@ -1936,7 +1936,7 @@ Own changes:
        cleanup (proven switches made permanent, the trims and the translation cache removed),
        which also shrinks the patch before the merge. #16 and #1216 then stay on (they are the
        r55 defaults) if verify-r55 is clean, since build C's A/B is skipped. Option 1 changes
-       the draw path a multithreaded back would restructure, so look at Zortos's branch or pull
+       the draw path a multithreaded back would restructure, so look at upstream's branch or pull
        request first, if it is public.
    - Package power (2026-11-12): the laptop held Lichii at 35 W. In all ten r55 logs the clock
      trace reads 48-71 W in Lichii's first 10 s window (P-cores up to 4.5 GHz), then 34.8-35.0 W
@@ -2065,7 +2065,7 @@ Own changes:
          stay (on) until the cause is found.
        - Merge 2 is under way: do the cleanup on top of it so its conflicts are resolved once,
          and option 1 on the merged tree (#1095 sets the 3D state registers in one call, the
-         path option 1 changes), after a look at Zortos's multithreaded back thread if public.
+         path option 1 changes), after a look at upstream's multithreaded back thread if public.
      - Still open for the owner: which reading applies, and the optional verify with the three
        ports off. Under reading 2, option 1 alone won't reach the target: it also needs a
        stutter hunt (an EDEN_NX2_STUTTER_TRACE=1 run, the mapping cost, an unprofiled
@@ -2252,7 +2252,7 @@ Own changes:
      - HDR frame generation: branch `r22-r59` (worktree scratchpad/wt-r59, from tuned4
        `5fc428bdc`), workflow run `wf_333d0a13-43d` (two readers, design and challenger,
        implementer, two reviews, fix; notes in scratchpad/hdrfg/).
-     - Merge 3: target `65745c243f` (refs/remotes/zortos/merge3-target), upstream's tip when the
+     - Merge 3: target `65745c243f` (refs/remotes/upstream/merge3-target), upstream's tip when the
        owner said build 169 was out, so build 169 is this commit or an older one; 60 commits past
        `2eb5f081c`, 289 files (+18597/-1371). Trial merge in scratchpad/wt-merge3 (branch
        `r22-merge-nx2c`, uncommitted): 83 conflicted files, 199 hunks (texture_pass.cpp 14,
@@ -2263,7 +2263,7 @@ Own changes:
        #1550-#1553, 389 files with ~300 renames; #1544 dropping the yuzu SPDX line from 2512
        files; #1521, #1539) are for a later merge.
      - Owner (2026-11-13): merge up to build 171 (release-binaries run #171 on nx2 =
-       `c169856090`, refs/remotes/zortos/build171), the rename included ("a precaution against
+       `c169856090`, refs/remotes/upstream/build171), the rename included ("a precaution against
        future DMCA takedown requests"). Step 1 merges `65745c243f` as planned; step 2 merges
        build 171 on top: #1521, #1539, #1569 and the rename. A trial of build 171 straight onto
        `5fc428bdc` (scratchpad/wt-trial171, merge.directoryRenames=true) has 85 conflicted files,
@@ -2358,5 +2358,5 @@ Own changes:
    PGO training on Ocarina. If a glitch shows up that the official build doesn't have and the
    A/B launchers don't remove, turn `msvc` back on to tell the compiler from the source.
 5. Each round, port new commits from the included pull requests (#354 was still changing late
-   on 2026-11-06): `git fetch https://github.com/zortos293/Lichii refs/pull/<n>/head` and compare
-   patch ids with tuned4. Per `AGENTS.md`, also check Eglantine (Djihads80/Eglantine).
+   on 2026-11-06): `git fetch upstream refs/pull/<n>/head` and compare
+   patch ids with tuned4. Per `AGENTS.md`, also check upstream's base.

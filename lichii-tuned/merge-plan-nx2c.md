@@ -11,7 +11,7 @@ the trial and re-map the `wt:` lines.
 ## 1. Target and scope
 
 - Base `2eb5f081c` (upstream build 160, merge 2). Target `65745c243f`
-  (`refs/remotes/zortos/merge3-target`), upstream's tip when the owner said build 169 was out, so
+  (`refs/remotes/upstream/merge3-target`), upstream's tip when the owner said build 169 was out, so
   build 169 is it or an older commit: 60 commits, 289 files, +18597/-1371.
 - Ours: tuned4 `5fc428bdc` (r58): 468 commits (15 merges) past the base, 384 files, +40548/-4615.
 - Trial (branch `r22-merge-nx2c` at `5fc428bdc`, `git merge --no-ff --no-commit 65745c243f`,
@@ -37,7 +37,7 @@ the trial and re-map the `wt:` lines.
 - Git state to know:
   - `rerere.enabled=true`. trial.out records 76 preimages and reuses none. Step 2 will reuse
     step 1's resolutions where hunks repeat: review every "Resolved ... using previous resolution".
-  - The trial's MERGE_MSG names `refs/remotes/zortos/nx2-latest`, which now points at
+  - The trial's MERGE_MSG names `refs/remotes/upstream/nx2-latest`, which now points at
     `c169856090`. The commit message must name `65745c243f` and list the 60 commits.
 
 ### Coverage check (main thread, against both lists)

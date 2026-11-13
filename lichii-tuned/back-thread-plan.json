@@ -138,11 +138,11 @@
    "7. Lock contention and per-draw locks: the back waits 17-82 ms/s on spin mutexes in r50 (15-30 ms/s in r49), i.e. 0.5-2 ms/frame inside zones. Fold MemoryManager::FlushCaching's InnerInvalidation (it takes buffer_cache.mutex per draw, vk_rasterizer.cpp:2812) into PrepareDraw's existing lock, add accumulator ranges per run rather than per word, and find the other holders (fence thread, async read-back readers). Estimate 0.3-0.8 ms/frame.",
    "8. Back idle: the front's line shows 'publishes to an idle back late by 50.4 ms/s' (~1.3 ms/frame). Publish sooner when back_waiting/back_idle_at says the back is idle; part of the 2.4-2.9 ms split wait becomes overlap.",
    "9. Hitches (1% lows, not the average): texture-cache collector Finish at texture_cache.h:219, 2-3.4 per second at 4-7 ms each. Look at upstream #1306 and #1311 and Fritchii EXP57.",
-   "Vetted but not first: Eglantine b1e650849e (per-thread GPU page translation cache, Fritchii EXP63 default off, ~3% of the back in kraibse's test) is low risk and worth an A/B after levers 1-4. Eglantine f27522bfb9 'hot pages' (Fritchii EXP48 default off) uploads a hot page at most once a frame, so a CPU write after its upload reaches the GPU a frame late: stale data within a frame, rejected under our correctness rule. Upstream #1088/#1245 (AMD 512-draw budget, batched uploads) and #974 are already in tuned4. Combined realistic total of levers 1-8: ~5-8 ms/frame, enough for the 5-6 ms the back must lose if most of it lands."
+   "Vetted but not first: upstream's base commit b1e650849e (per-thread GPU page translation cache, Fritchii EXP63 default off, ~3% of the back in kraibse's test) is low risk and worth an A/B after levers 1-4. Upstream's base commit f27522bfb9 'hot pages' (Fritchii EXP48 default off) uploads a hot page at most once a frame, so a CPU write after its upload reaches the GPU a frame late: stale data within a frame, rejected under our correctness rule. Upstream #1088/#1245 (AMD 512-draw budget, batched uploads) and #974 are already in tuned4. Combined realistic total of levers 1-8: ~5-8 ms/frame, enough for the 5-6 ms the back must lose if most of it lands."
   ]
  },
  "survey": {
-  "method": "Read-only survey, done 2026-11-11. Our tree: tuned4 cd5482ece (worktree wt-tuned4). Scratch files: /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/bt-survey/.\n\nHow I checked what we already carry: for each fork commit I matched its subject against `git log 17baed716..tuned4` and nx2, then grepped tuned4's source for the commit's identifiers (Fritchii renames commits when porting, so subjects alone miss some). Sources covered:\n- the 84 upstream PR heads already fetched;\n- 33 newer PR heads (#1241-#1311), fetched into refs/remotes/upstream-pr2/<n>;\n- Fritchii oot-gather-fix 6649abc4f (v5.8.2);\n- CheezyEmu 4baa89ec5 and Sharkiix v3.1.0.\nUpstream nx2 is still 17baed716 and Eglantine nx2 is still 78743f30c (checked with ls-remote). kraibse's Eglantine commits b1e650849e, f27522bfb9 and d3612f82b1 are not on Eglantine nx2, so I read them through Fritchii's cherry-picks 85a33019b, d20c32704 and 1c8474ee9. The GitHub API and GraphQL were blocked in this session, so PR text comes from commit messages only.\n\nWhat the r50 log (ReportFastDraws and the GPU_PROFILE lines, gameplay at about 47-50 fps) shows. This corrects one premise of the task:\n- Delta draws are NOT zero: 29-42k delta draws a second against about 48k full draws a second. A full draw costs 5.7-6.3 us to prepare, a delta draw 1.0-1.2 us.\n- What ends the fast-draw chain, per second (\"by last break\"):\n  - register change 27k, by method: 0x700 (vertex_streams[0] stride/enable) 10.3k; 0x4da (blend) 3.8k; 0x460/0x464/0x466 (vertex_attrib_format) 3.7k; 0x853 (pipelines[5] program offset, a real change) 1.9k; 0x372 (polygon_offset_fill) 1.7k; 0x64f (viewport_clip_control) 1.5k;\n  - deferred call (back macros, FrontRunOnBack) 12-14k;\n  - delta overflow 2.8k;\n  - handle data written 5.8-6.4k;\n  - pipelines without delta draws (computed handles) 1.4-4.1k.\n  So most full draws come from a handful of break causes that the open upstream PRs remove.\n- Spin mutex contention on the back: 843/s, 69.8 ms/s (51.6 ms/s in the next window), about 1.0-1.4 ms a frame. The only SpinRecursiveMutex instances are the buffer cache's and the texture cache's mutexes (buffer_cache_base.h:555, texture_cache_base.h:494).\n- Buffer downloads: 228-256 MB/s in 17-21k copies.\n- Fence: 12-14k fences a second (34-38 ms/s) plus 8-9k skipped fences (13-17 ms/s); 2,100-2,200 submits a second, and only 5-30 a second are empty.\n- 3D register writes: 3.7M a second, 1.22-1.28M of them same-value. The method zone runs 5.0-5.3M methods a second at about 32 ns each.\n- Compute: 7.9-9.1k dispatches a second take 120-126 ms/s, about 14 us per dispatch.\n\nEstimates: converting about 35k full draws a second to delta draws saves at most about 160 ms/s, roughly 3 ms a frame. Each break removed can expose the next break, so I expect 1.5-2.5 ms. That makes the fast-draw items below the biggest single lever, and they all come from upstream Lichii.\n\nItems already in tuned4, not repeated in the list:\n- #974 (cf811c16a, 974469aa5, 9389e4f68);\n- #1059 (81ee8c090);\n- #1088 AMD 512-draw submissions (vk_rasterizer.cpp:4335-4340);\n- #1094, #1244, #933, #954, #1095, #1245 (in nx2), #1246 (7fcfb6412);\n- #805's split, back macros and fenced-release commits;\n- Fritchii EXP9/18/29/35/36/42/43.\nGains quoted below are the authors' own unless I say otherwise; I measured nothing.",
+  "method": "Read-only survey, done 2026-11-11. Our tree: tuned4 cd5482ece (worktree wt-tuned4). Scratch files: /tmp/claude-0/-home-user-Lichii/e57b64ae-d8d0-5bc0-9be5-b5fd2191474e/scratchpad/bt-survey/.\n\nHow I checked what we already carry: for each fork commit I matched its subject against `git log 17baed716..tuned4` and nx2, then grepped tuned4's source for the commit's identifiers (Fritchii renames commits when porting, so subjects alone miss some). Sources covered:\n- the 84 upstream PR heads already fetched;\n- 33 newer PR heads (#1241-#1311), fetched into refs/remotes/upstream-pr2/<n>;\n- Fritchii oot-gather-fix 6649abc4f (v5.8.2);\n- CheezyEmu 4baa89ec5 and Sharkiix v3.1.0.\nUpstream nx2 is still 17baed716 and upstream's base nx2 is still 78743f30c (checked with ls-remote). kraibse's commits b1e650849e, f27522bfb9 and d3612f82b1 are not on upstream's base nx2, so I read them through Fritchii's cherry-picks 85a33019b, d20c32704 and 1c8474ee9. The GitHub API and GraphQL were blocked in this session, so PR text comes from commit messages only.\n\nWhat the r50 log (ReportFastDraws and the GPU_PROFILE lines, gameplay at about 47-50 fps) shows. This corrects one premise of the task:\n- Delta draws are NOT zero: 29-42k delta draws a second against about 48k full draws a second. A full draw costs 5.7-6.3 us to prepare, a delta draw 1.0-1.2 us.\n- What ends the fast-draw chain, per second (\"by last break\"):\n  - register change 27k, by method: 0x700 (vertex_streams[0] stride/enable) 10.3k; 0x4da (blend) 3.8k; 0x460/0x464/0x466 (vertex_attrib_format) 3.7k; 0x853 (pipelines[5] program offset, a real change) 1.9k; 0x372 (polygon_offset_fill) 1.7k; 0x64f (viewport_clip_control) 1.5k;\n  - deferred call (back macros, FrontRunOnBack) 12-14k;\n  - delta overflow 2.8k;\n  - handle data written 5.8-6.4k;\n  - pipelines without delta draws (computed handles) 1.4-4.1k.\n  So most full draws come from a handful of break causes that the open upstream PRs remove.\n- Spin mutex contention on the back: 843/s, 69.8 ms/s (51.6 ms/s in the next window), about 1.0-1.4 ms a frame. The only SpinRecursiveMutex instances are the buffer cache's and the texture cache's mutexes (buffer_cache_base.h:555, texture_cache_base.h:494).\n- Buffer downloads: 228-256 MB/s in 17-21k copies.\n- Fence: 12-14k fences a second (34-38 ms/s) plus 8-9k skipped fences (13-17 ms/s); 2,100-2,200 submits a second, and only 5-30 a second are empty.\n- 3D register writes: 3.7M a second, 1.22-1.28M of them same-value. The method zone runs 5.0-5.3M methods a second at about 32 ns each.\n- Compute: 7.9-9.1k dispatches a second take 120-126 ms/s, about 14 us per dispatch.\n\nEstimates: converting about 35k full draws a second to delta draws saves at most about 160 ms/s, roughly 3 ms a frame. Each break removed can expose the next break, so I expect 1.5-2.5 ms. That makes the fast-draw items below the biggest single lever, and they all come from upstream Lichii.\n\nItems already in tuned4, not repeated in the list:\n- #974 (cf811c16a, 974469aa5, 9389e4f68);\n- #1059 (81ee8c090);\n- #1088 AMD 512-draw submissions (vk_rasterizer.cpp:4335-4340);\n- #1094, #1244, #933, #954, #1095, #1245 (in nx2), #1246 (7fcfb6412);\n- #805's split, back macros and fenced-release commits;\n- Fritchii EXP9/18/29/35/36/42/43.\nGains quoted below are the authors' own unless I say otherwise; I measured nothing.",
   "items": [
    {
     "source": "upstream PR #1216, commit 9ad7c7cee (DjouWish, 2026-11-10); same idea as #1161 commit 7824123e5",
@@ -205,7 +205,7 @@
     "risk": "Low. The commit argues iterator stability for the flat map (no rehash on erase)."
    },
    {
-    "source": "upstream PR #1099, commit c9f775dd0 (zortos293)",
+    "source": "upstream PR #1099, commit c9f775dd0 (upstream's maintainer)",
     "title": "Don't note synchronized payload releases as pending results",
     "target_zone": "spin mutex contention on the back (843/s, 52-70 ms/s) and fence/report work",
     "status": "open-upstream-pr",
@@ -265,7 +265,7 @@
     "risk": "Medium: the wrong pipeline gets bound if the key compare misses a field. Fritchii keeps all of them off."
    },
    {
-    "source": "Fritchii EXP48, commit d20c32704 (port of Eglantine f27522bfb9 by kraibse)",
+    "source": "Fritchii EXP48, commit d20c32704 (port of upstream's base commit f27522bfb9 by kraibse)",
     "title": "Stop write-protecting guest pages the CPU rewrites every frame (hot pages)",
     "target_zone": "update buffers (0.9-1.1 ms), bank check, VirtualProtect calls on the back",
     "status": "fork-only",
@@ -275,7 +275,7 @@
     "risk": "Medium. Fritchii: 'a hot page written again after its upload reaches the GPU one frame later'. That is a one-frame staleness and possible flicker. Off by default in Fritchii."
    },
    {
-    "source": "Fritchii EXP63, commit 85a33019b (port of Eglantine b1e650849e by kraibse)",
+    "source": "Fritchii EXP63, commit 85a33019b (port of upstream's base commit b1e650849e by kraibse)",
     "title": "Per-thread cache of GPU page translations",
     "target_zone": "read handles / update buffers / storage buffers (GpuToCpuAddress)",
     "status": "fork-only",
@@ -305,7 +305,7 @@
     "risk": "Medium: a missed upload means stale compute input. Use the & 8 verify."
    },
    {
-    "source": "Fritchii EXP53 (1c8474ee9, from Eglantine d3612f82b1) and EXP61 (c338269b9)",
+    "source": "Fritchii EXP53 (1c8474ee9, from upstream's base commit d3612f82b1) and EXP61 (c338269b9)",
     "title": "Conditional render macro evaluated on the back; skip empty FlushCommands submits",
     "target_zone": "front waits (macro DMA reads) and submits",
     "status": "fork-only",
@@ -427,8 +427,8 @@
      "zone": "method (cb upload fine zone)",
      "mechanism": "Each of about 415k CB uploads per second pays two costs.\n- NoteFastDrawConstantData (maxwell_3d.cpp:1099-1134): the TIC/TSC range maths, two out-of-line DeviceSpans::Update calls (nx2_fast_draw.cpp:11-34), GpuToCpuAddress per 4 KiB page, two upper_bound Intersects and NoteDeviceData.\n- WriteBlockImpl (memory_manager.cpp:587-650): Nx2BackSparseWrite's range check, the generic MemoryOperation page walk, finish_reads, then GetPointer and memcpy.\n\nOcarina writes its per-draw constants to consecutive offsets of a few buffers: address_low changes 415k/s, but mostly within the same page. Keep a one-entry cache on Maxwell3D: GPU page → device address, host pointer, big-page-continuous flag, and the 'page hits no header or sampler span' result. Key it on MemoryManager::MapSerial(), the tex_header/tex_sampler address and limit registers, and the DeviceSpans' own serial. On a hit: memcpy, accumulator.Add, NoteConstantData and NoteDeviceData. Still run the g_read_downloads/ReadDownloadsMayCover check (finish_reads) and the sparse range check on every write.",
      "expected_saving_ms": "0.25-0.35 ms/frame. A hit saves about 25-35 ns of the about 60-80 ns per upload (≈ 15 ns of span/translation work in NoteFastDrawConstantData and ≈ 15-20 ns of MemoryOperation/GetPointer). 415k × 25-35 ns = 10-15 ms/s, or 0.25-0.36 ms/frame at 40.5 fps. The ceiling is the measured 'cb upload' fine zone.",
-     "evidence": "Counts from r50 L4267 (0x8e2 address_low 414,859/s ≈ 0x8e4 data[0] 404,602/s, so one run per upload). Per-call costs are reasoned from the code. Kraibse measured a similar translation-only cache at the back thread going 13.64 to 13.25 ms/frame (Eglantine b1e650849e, via Fritchii EXP63 85a33019b). Ours is narrower and lands where most of the translation calls happen.",
-     "sources": "Original. It is related to Eglantine b1e650849e / Fritchii EXP63 85a33019b (per-thread GPU page translation cache; don't copy its per-lookup getenv).",
+     "evidence": "Counts from r50 L4267 (0x8e2 address_low 414,859/s ≈ 0x8e4 data[0] 404,602/s, so one run per upload). Per-call costs are reasoned from the code. Kraibse measured a similar translation-only cache at the back thread going 13.64 to 13.25 ms/frame (upstream's base commit b1e650849e, via Fritchii EXP63 85a33019b). Ours is narrower and lands where most of the translation calls happen.",
+     "sources": "Original. It is related to upstream's base commit b1e650849e / Fritchii EXP63 85a33019b (per-thread GPU page translation cache; don't copy its per-lookup getenv).",
      "effort": "S",
      "risk": "low",
      "correctness_risks": "A stale cached pointer after an unmap, remap or sparse mapping would write the wrong host memory or skip a texture-header break. The cache must be keyed on MapSerial (memory_manager.cpp:172, 236 bump it) and on the TIC/TSC registers, with the sparse and read-download checks kept per write. Check with EDEN_NX2_PERF_VERIFY=1 (CallConstBufferWords compares memory after the write, maxwell_3d.cpp:727-744) and EDEN_NX2_FAST_DRAW_VERIFY=1.",
@@ -649,12 +649,12 @@
      "how_to_measure": "A boot log line for the EDS3 feature bits. Then a run with dyna_state EDS3: 0x4da, 0x783 and 0x64f leave 'by last break', the pipeline count drops, and screenshots of water, HUD and transparency match through the debug server."
     },
     {
-     "title": "GPU page translation cache per thread (Eglantine b1e650849e by kraibse, via Fritchii EXP63 85a33019b)",
+     "title": "GPU page translation cache per thread (upstream's base commit b1e650849e by kraibse, via Fritchii EXP63 85a33019b)",
      "zone": "update buffers (0.5 us per draw), read handles, storage buffers, bank check (GpuToCpuAddress)",
      "mechanism": "Every draw re-resolves index and vertex buffer, UBO, SSBO and handle addresses through MemoryManager::GpuToCpuAddress (memory_manager.cpp:318-338). A small per-thread cache of 4 KiB page translations, tagged with the manager and map_serial (already bumped on remaps, memory_manager.cpp:172, 236), answers the repeats. Read the kill switch into a static once: Fritchii's port calls std::getenv on every lookup (85a33019b, line 48 of the diff).",
      "expected_saving_ms": "0.1-0.4 ms/frame. kraibse measured the back thread 13.64 -> 13.25 ms/frame (-0.39) in OoT Kokiri. Our lookup is already two table reads, so expect less.",
      "evidence": "kraibse's measurement, quoted in the Fritchii commit message.",
-     "sources": "Eglantine b1e650849e (kraibse); Fritchii EXP63 85a33019b (default off there).",
+     "sources": "Upstream's base commit b1e650849e (kraibse); Fritchii EXP63 85a33019b (default off there).",
      "effort": "S",
      "risk": "low",
      "correctness_risks": "Every remap path must bump map_serial (PageTableOp/BigPageTableOp), or a stale translation reads the wrong memory. Cache only translations that pass our device-space check, as Fritchii does.",
@@ -872,7 +872,7 @@
     "reason": "Own code. Confirmed: FlushCaching runs in the FlushWork scope (vk_rasterizer.cpp:815-818) before the scoped_lock on both caches, so the buffer mutex is taken twice per draw. The recursive spin lock makes nesting safe. The trackers feed FSR 4 and frame-generation motion, so their behaviour stays unchanged."
    },
    {
-    "title": "Eglantine b1e650849e / Fritchii EXP63: per-thread GPU page translation cache (switch read once, not getenv per lookup)",
+    "title": "Upstream's base commit b1e650849e / Fritchii EXP63: per-thread GPU page translation cache (switch read once, not getenv per lookup)",
     "verdict": "do-later",
     "saving_ms": "0.1-0.3 (kraibse: 0.39; ours is already two table reads, and more delta draws shrink it further)",
     "risk": "Low-medium: every remap must bump map_serial",
@@ -1012,7 +1012,7 @@
     "reason": "This conflicts with the 'prepare once and persist' work the owner prioritized. Revisit only on an explicit owner decision."
    },
    {
-    "title": "Eglantine f27522bfb9 / Fritchii EXP48 hot pages",
+    "title": "Upstream's base commit f27522bfb9 / Fritchii EXP48 hot pages",
     "verdict": "drop",
     "saving_ms": "0.3-0.7",
     "risk": "One-frame-stale CPU writes, by design",

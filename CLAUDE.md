@@ -12,7 +12,7 @@ r35, Fritchii v5.5 and upstream build 132 (see HANDOFF): Fritchii ran ~10% slowe
 build 132 has no graphics shader preparation.
 
 Priorities (owner, 2026-11-10):
-- Upstream Lichii (zortos293/Lichii: nx2 and its pull requests) comes first. Where our code and
+- Upstream Lichii (nx2 and its pull requests) comes first. Where our code and
   upstream's do the same thing, upstream's wins.
 - Upstream's shader translator changes are merged by default (owner, 2026-11-12). They don't raise
   PreparationVersion: new builds have started with a cold AMD driver cache anyway, and the owner
@@ -43,8 +43,8 @@ Then (owner, 2026-11-12; the options are in HANDOFF's next steps), in this order
 1. Option 3. If it improves performance enough that medium-intensity areas (steady play at
    ~1700 draws a frame) hold a steady 50 fps or more, integrate it into a stable build. If not,
    do option 1 first.
-2. Merge with upstream Lichii right after that stable build. Don't wait for Zortos's
-   multithreaded GPU back thread; option 2 (the same thing) is dropped, and his version comes
+2. Merge with upstream Lichii right after that stable build. Don't wait for upstream's
+   multithreaded GPU back thread; option 2 (the same thing) is dropped, and upstream's version comes
    in with a later merge once it is released. The owner had it started on 2026-11-12, before
    option 3's verdict: done that day with nx2 `2eb5f081c` (merge `bd1ce62ff` on branch
    `r22-merge-nx2b`, now tuned4 and the base under the patch).
