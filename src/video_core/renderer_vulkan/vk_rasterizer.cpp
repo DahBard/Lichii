@@ -4334,8 +4334,9 @@ bool RasterizerVulkan::TryOcarinaDlss(const ComputePipeline& pipeline, bool repl
         oot_hud_frame.reset();
         oot_hud_view = VK_NULL_HANDLE;
         // AMD frame generation's HUD mask compares FSR's output before the HUD with the same
-        // image at the final pass (the 4K mode compares in AccelerateDisplay instead).
-        if (AmdFrameGen::SwapchainActive() && !four_k) {
+        // image at the final pass. The 4K mode compares its SDR composite in AccelerateDisplay
+        // instead; with HDR output, which has no composite, it is made this way too.
+        if (AmdFrameGen::SwapchainActive() && (!four_k || oot_hdr_present)) {
             SaveOcarinaPreHud(
                 target.ImageHandle(),
                 MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, true, target.format).format,
@@ -4726,6 +4727,27 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
     info.scaled_width = scaled ? resolution.ScaleUp(info.width) : info.width;
     info.scaled_height = scaled ? resolution.ScaleUp(info.height) : info.height;
     info.anti_aliased = oot_dlss_frame == render_trace_frame && !oot_live_dlss->EvaluationFailed();
+    if (oot_dlss_frame == render_trace_frame) {
+        const bool hdr = config.color_space == Tegra::ColorSpace::RGB2020_PQ;
+        if (std::exchange(oot_hdr_present, hdr) != hdr) {
+            // SDR and HDR make their HUD masks apart: neither uses the other's.
+            oot_live_dlss->ResetHudMask();
+        }
+        // With HDR output the final pass may be another shader than SDR's: the mask it would have
+        // made, while FSR's output still holds this frame and its HUD.
+        if (hdr && oot_pre_hud_frame == render_trace_frame &&
+            oot_hud_frame == render_trace_frame && oot_hud_view &&
+            AmdFrameGen::SwapchainActive()) {
+            oot_live_dlss->MakeHudMask(*oot_pre_hud_view, oot_hud_view, oot_pre_hud_extent);
+            oot_hud_frame.reset();
+            oot_hud_view = VK_NULL_HANDLE;
+            static bool logged = false;
+            if (!std::exchange(logged, true)) {
+                LOG_INFO(Render_Vulkan, "AMD frame generation: with HDR output the HUD mask is "
+                                        "made at presentation (the final pass isn't SDR's)");
+            }
+        }
+    }
     if (oot_4k_scene_frame == render_trace_frame && info.image &&
         info.image == oot_4k_guest_present && info.image_view &&
         info.width == 2560 && info.height == 1440 && !scaled &&

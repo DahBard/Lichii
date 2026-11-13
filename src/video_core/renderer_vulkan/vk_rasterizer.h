@@ -379,6 +379,9 @@ private:
     VkImage oot_scene_image{};  ///< FSR's output this frame, only compared, never used
     VkImageView oot_hud_view{}; ///< That image as the last HUD draw into it had it bound
     std::optional<u64> oot_hud_frame;
+    /// The last upscaled frame was presented as PQ (the game was told HDR), which the 4K
+    /// composite doesn't take: the HUD mask is then made as in place.
+    bool oot_hdr_present{};
     struct OcarinaActorPose {
         OcarinaVertexLayout layout;
         const Tegra::MemoryManager* channel{};
