@@ -1,7 +1,7 @@
 Lichii tuned for Intel Core Ultra 200H (Arrow Lake-H) + AMD Radeon RX 9070 XT
 ==============================================================================
 
-Test build of Lichii (github.com/zortos293/Lichii) from github.com/DahBard/Lichii, branch
+Test build of Lichii from github.com/DahBard/Blitchii (a private repository), branch
 "tuned". Same emulator and the same user data folder as the official Lichii builds,
 %APPDATA%\lichii (Fritchii and build 132 keep %APPDATA%\eden; see "First launch: import"
 below), plus:
