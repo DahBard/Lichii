@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -637,10 +636,10 @@ void RasterizerVulkan::InitFastDrawBreakClasses() {
 GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_indirect) {
     namespace FastDraw = VideoCommon::Nx2FastDraw;
     const ReusableDraw draw = std::exchange(reusable_draw, ReusableDraw{});
-    const FastDraw::Delta delta = std::exchange(FastDraw::g_delta, FastDraw::Delta{});
+    FastDraw::TakeDelta(taken_delta);
+    const FastDraw::Delta& delta = taken_delta;
     // A draw that stopped before binding its uniforms never handed its writes to the keeps.
     uniform_writes_lost |= std::exchange(taken_delta_unconsumed, true);
-    taken_delta = delta;
     const auto full = [&](FullDraw reason) -> GraphicsPipeline* {
         ++fast_draw_stats.full[static_cast<size_t>(reason)];
         return nullptr;

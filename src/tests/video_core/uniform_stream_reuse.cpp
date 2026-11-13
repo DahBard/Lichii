@@ -133,27 +133,23 @@ TEST_CASE("Uniform stream reuse preserves data through mutation and session rese
           "the reads did not take both the gathered and the in-place path");
 }
 
-TEST_CASE("Uniform keep verify tells why a kept range does not hold", "[video_core]") {
-    using Kind = VideoCommon::KeptUniformMismatch::Kind;
+TEST_CASE("Uniform keep verify checks the ranges a keep binds again", "[video_core]") {
     Memory memory;
     Runtime runtime;
     VideoCommon::ResetUniformStreamReuse<Runtime>();
     REQUIRE(VideoCommon::BindSmallUniformReusing(runtime, memory, 0, 0, 0, 0x100, 64));
+    REQUIRE(VideoCommon::KeptUniformMatches(runtime, 0, 0, 0x100, 64));
     REQUIRE(VideoCommon::KeptUniformHolds<Runtime>(memory, 0, 0, 0x100, 64));
     // Another range or size than the slot's last bind read, or no slot: the keep refuses them.
+    REQUIRE_FALSE(VideoCommon::KeptUniformMatches(runtime, 0, 0, 0x140, 64));
     REQUIRE_FALSE(VideoCommon::KeptUniformHolds<Runtime>(memory, 0, 0, 0x140, 64));
-    const auto moved = VideoCommon::KeptUniformMismatchOf(runtime, 0, 0, 0x140, 64);
-    REQUIRE(moved.kind == Kind::SlotRange);
-    REQUIRE(moved.slot_addr == 0x100);
-    REQUIRE(moved.slot_size == 64);
-    REQUIRE(VideoCommon::KeptUniformMismatchOf(runtime, 0, 0, 0x100, 32).kind == Kind::SlotRange);
-    REQUIRE(VideoCommon::KeptUniformMismatchOf(runtime, 5, 0, 0x100, 64).kind == Kind::SlotRange);
+    REQUIRE_FALSE(VideoCommon::KeptUniformMatches(runtime, 0, 0, 0x100, 32));
+    REQUIRE_FALSE(VideoCommon::KeptUniformMatches(runtime, 5, 0, 0x100, 64));
     // Bytes changed in the same command buffer: the keep would bind stale data.
     memory.bytes[0x104] = 1;
+    REQUIRE(VideoCommon::KeptUniformMatches(runtime, 0, 0, 0x100, 64));
     REQUIRE_FALSE(VideoCommon::KeptUniformHolds<Runtime>(memory, 0, 0, 0x100, 64));
-    REQUIRE(VideoCommon::KeptUniformMismatchOf(runtime, 0, 0, 0x100, 64).kind == Kind::Stale);
     // From a later command buffer the keep refuses the slot's allocation.
     runtime.NextTick();
-    REQUIRE(VideoCommon::KeptUniformMismatchOf(runtime, 0, 0, 0x100, 64).kind ==
-            Kind::OlderBuffer);
+    REQUIRE_FALSE(VideoCommon::KeptUniformMatches(runtime, 0, 0, 0x100, 64));
 }

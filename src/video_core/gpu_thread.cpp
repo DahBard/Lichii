@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
@@ -30,6 +29,7 @@
 #include "video_core/gpu_wait_stats.h"
 #include "video_core/nx2_back_idle_trace.h"
 #include "video_core/nx2_drain_check.h"
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/host1x/host1x.h"
@@ -261,6 +261,11 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     Tegra::DmaPusher::WaitForSnapshotCopies();
                 }
                 if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
+                    // The guest may have written pages the caches don't watch since the lists
+                    // before it: uniform keeps end here, in order on the back.
+                    split.Defer([] { VideoCommon::Nx2FastDraw::NoteSync(); },
+                                VideoCommon::GpuSplit::Writes::Noted,
+                                VideoCommon::GpuSplit::FastDrawNeutral);
                     Profile::Scope scope{Profile::Zone::Push};
                     Tegra::Nx2ListStats::NoteListQueued(submit_list->channel, -1);
                     scheduler.Push(system.GPU(), submit_list->channel, std::move(submit_list->entries));
@@ -306,6 +311,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 Tegra::DmaPusher::WaitForSnapshotCopies();
             }
             if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
+                VideoCommon::Nx2FastDraw::NoteSync();
                 Profile::Scope scope{Profile::Zone::Push};
                 Tegra::Nx2ListStats::NoteListQueued(submit_list->channel, -1);
                 scheduler.Push(system.GPU(), submit_list->channel, std::move(submit_list->entries));

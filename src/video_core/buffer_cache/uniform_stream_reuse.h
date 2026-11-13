@@ -147,13 +147,11 @@ template <class Runtime, class DeviceMemory>
     return true;
 }
 
-/// Uniform keeps: binds the slot's last allocation again without reading guest memory,
-/// when that bind read the same range in this command buffer. The caller guarantees that nothing
-/// ordered before this draw wrote the range since that bind (the previous draw's). Returns false
-/// (nothing bound) otherwise.
+/// Whether RebindKeptUniform binds the slot's last allocation again for this range: the slot's
+/// last bind read the same range in the command buffer that is current now.
 template <class Runtime>
-[[nodiscard]] bool RebindKeptUniform(Runtime& runtime, size_t stage, u32 index, u64 device_addr,
-                                     u32 size) {
+[[nodiscard]] bool KeptUniformMatches(Runtime& runtime, size_t stage, u32 index, u64 device_addr,
+                                      u32 size) {
     using Reuse = UniformStreamReuse<typename Runtime::StreamUniformRef>;
     if (size == 0 || size > Reuse::MaxBytes || stage >= Reuse::NumStages ||
         index >= Reuse::NumSlots) {
@@ -161,10 +159,23 @@ template <class Runtime>
     }
     const typename Reuse::Slot& slot =
         UniformStreamReuseState<typename Runtime::StreamUniformRef>().slots[stage][index];
-    if (slot.size != size || slot.device_addr != device_addr ||
-        slot.tick != runtime.CurrentTick()) {
+    return slot.size == size && slot.device_addr == device_addr &&
+           slot.tick == runtime.CurrentTick();
+}
+
+/// Uniform keeps: binds the slot's last allocation again without reading guest memory,
+/// when that bind read the same range in this command buffer. The caller guarantees that nothing
+/// ordered before this draw wrote the range since that bind (the previous draw's). Returns false
+/// (nothing bound) otherwise.
+template <class Runtime>
+[[nodiscard]] bool RebindKeptUniform(Runtime& runtime, size_t stage, u32 index, u64 device_addr,
+                                     u32 size) {
+    if (!KeptUniformMatches(runtime, stage, index, device_addr, size)) {
         return false;
     }
+    using Reuse = UniformStreamReuse<typename Runtime::StreamUniformRef>;
+    const typename Reuse::Slot& slot =
+        UniformStreamReuseState<typename Runtime::StreamUniformRef>().slots[stage][index];
     runtime.RebindStreamUniform(slot.ref, size);
     return true;
 }
@@ -186,37 +197,6 @@ template <class Runtime, class DeviceMemory>
     }
     device_memory.ReadBlockUnsafe(device_addr, reuse.scratch.data(), size);
     return std::memcmp(slot.bytes.data(), reuse.scratch.data(), size) == 0;
-}
-
-/// EDEN_NX2_UBO_KEEP_VERIFY: why a range KeptUniformHolds rejected does not hold.
-struct KeptUniformMismatch {
-    enum class Kind : u8 {
-        SlotRange,   ///< The slot's last bind read another range or size: RebindKeptUniform refuses
-        OlderBuffer, ///< The bytes changed under an earlier command buffer's allocation: it refuses
-        Stale,       ///< The bytes changed in this command buffer: it would bind stale data
-    };
-    Kind kind;
-    u64 slot_addr; ///< The range the slot's last bind read
-    u32 slot_size;
-};
-
-/// Classifies a range KeptUniformHolds rejected by the conditions RebindKeptUniform checks.
-template <class Runtime>
-[[nodiscard]] KeptUniformMismatch KeptUniformMismatchOf(Runtime& runtime, size_t stage, u32 index,
-                                                        u64 device_addr, u32 size) {
-    using Reuse = UniformStreamReuse<typename Runtime::StreamUniformRef>;
-    using Kind = KeptUniformMismatch::Kind;
-    if (size == 0 || size > Reuse::MaxBytes || stage >= Reuse::NumStages ||
-        index >= Reuse::NumSlots) {
-        return {Kind::SlotRange, 0, 0};
-    }
-    const typename Reuse::Slot& slot =
-        UniformStreamReuseState<typename Runtime::StreamUniformRef>().slots[stage][index];
-    if (slot.size != size || slot.device_addr != device_addr) {
-        return {Kind::SlotRange, slot.device_addr, slot.size};
-    }
-    return {slot.tick != runtime.CurrentTick() ? Kind::OlderBuffer : Kind::Stale,
-            slot.device_addr, slot.size};
 }
 
 } // namespace VideoCommon

@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
@@ -52,7 +51,7 @@ BufferCache<P>::BufferCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, R
     void(slot_buffers.insert(runtime, NullBufferParams{}));
     gpu_modified_ranges.Clear();
     inline_buffer_id = NULL_BUFFER_ID;
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     immediately_free = (Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive);
 #endif
     if (!runtime.CanReportMemoryUsage()) {
@@ -160,22 +159,20 @@ void BufferCache<P>::TickFrame() {
     if (frame_tick % 600 == 0) {
         UniformKeep& keep = uniform_keep;
         if (Nx2Profile::Enabled() || ubo_keep_verify) {
-            // With the verify, every mismatch by kind: the keep itself refuses the first two kinds
-            // of 'changed since the previous draw'; it would bind the stale bytes.
+            // With the verify, every mismatch by kind. It checks only ranges the keep binds again
+            // (KeptUniformMatches): a change since the previous draw is stale bytes it would bind.
             LOG_INFO(HW_GPU,
                      "Uniform keeps in 600 frames: {} kept, {} streamed, {} verified, {} verify "
                      "mismatches{}",
                      keep.kept, keep.streamed_binds, keep.verified, keep.mismatches,
                      ubo_keep_verify
-                         ? fmt::format(" (no longer streamed {}; changed since the previous draw: "
-                                       "slot address or size differs {}, older command buffer "
-                                       "{}, stale bytes {})",
-                                       keep.no_longer_streamed, keep.changed_slot,
-                                       keep.changed_older, keep.changed_stale)
+                         ? fmt::format(" (no longer streamed {}, changed since the previous "
+                                       "draw {})",
+                                       keep.no_longer_streamed, keep.changed_stale)
                          : std::string{});
         }
         keep.kept = keep.streamed_binds = keep.verified = keep.mismatches = 0;
-        keep.no_longer_streamed = keep.changed_slot = keep.changed_older = keep.changed_stale = 0;
+        keep.no_longer_streamed = keep.changed_stale = 0;
     }
     if (frame_tick % 600 == 0 && !uploaded_buffer_ranges.empty()) {
         for (const auto& [address, size] : uploaded_buffer_ranges) {
@@ -1552,6 +1549,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
 
     ClearDownload(*cpu_dest_address, amount);
     MarkVertexBuffersStale(*cpu_dest_address, amount);
+    NoteUniformWrite(*cpu_dest_address, amount);
 
     BufferId buffer_a;
     BufferId buffer_b;
@@ -1604,7 +1602,6 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     runtime.CopyBuffer(dest_buffer, src_buffer, copies, true);
     if (has_new_downloads) {
         memory_tracker.MarkRegionAsGpuModified(*cpu_dest_address, amount);
-        NoteUniformWrite(*cpu_dest_address, amount);
         const bool should_sync = Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
         if (should_sync) {
             runtime.Finish();
@@ -1632,6 +1629,7 @@ bool BufferCache<P>::DMAClear(GPUVAddr dst_address, u64 amount, u32 value) {
 
     ClearDownload(*cpu_dst_address, size);
     gpu_modified_ranges.Subtract(*cpu_dst_address, size);
+    NoteUniformWrite(*cpu_dst_address, size);
     // As an inline write: command list pages read the cleared words from guest memory.
     Nx2NoteListHostWrite(*cpu_dst_address, size);
 
@@ -1864,8 +1862,10 @@ void BufferCache<P>::BeginGraphicsUniforms(const Nx2FastDraw::Delta* delta) {
     const u64 host_serial = gpu_memory != nullptr ? gpu_memory->HostPointerSerial() : 0;
     const bool known = delta != nullptr && !delta->no_uniform_keeps && !keep.memory_writes_lost &&
                        keep.draw_deletions == buffer_deletions &&
-                       keep.sync_serial == sync_serial && keep.host_serial == host_serial;
+                       keep.sync_serial == sync_serial && keep.host_serial == host_serial &&
+                       keep.gpu_memory == gpu_memory;
     keep.draw_deletions = buffer_deletions;
+    keep.gpu_memory = gpu_memory;
     keep.sync_serial = sync_serial;
     keep.host_serial = host_serial;
     if (!known) {
@@ -2736,34 +2736,20 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         // Unnoticed writes would reach a kept bank too: those stream as before.
         if (!native_bank && UniformRangeKept(stage, index, device_addr, size)) {
             if (ubo_keep_verify) {
-                ++uniform_keep.verified;
-                verify_kept = true;
-                if (!VideoCommon::KeptUniformHolds<Runtime>(device_memory, stage, index,
-                                                             device_addr, size)) {
-                    using Kind = VideoCommon::KeptUniformMismatch::Kind;
-                    const VideoCommon::KeptUniformMismatch mismatch =
-                        VideoCommon::KeptUniformMismatchOf<Runtime>(runtime, stage, index,
-                                                                    device_addr, size);
-                    u64& count = mismatch.kind == Kind::SlotRange     ? uniform_keep.changed_slot
-                                 : mismatch.kind == Kind::OlderBuffer ? uniform_keep.changed_older
-                                                                      : uniform_keep.changed_stale;
-                    ++uniform_keep.mismatches;
-                    // The first 16 of each kind every 600 frames.
-                    if (++count <= 16) {
-                        LOG_ERROR(HW_GPU,
-                                  "Uniform keep verify: stage {} slot {} at {:#x}+{:#x} changed "
-                                  "since the previous draw ({})",
-                                  stage, index, device_addr, size,
-                                  mismatch.kind == Kind::SlotRange
-                                      ? fmt::format("the slot's last bind read {:#x}+{:#x}: the "
-                                                    "keep refuses",
-                                                    mismatch.slot_addr, mismatch.slot_size)
-                                  : mismatch.kind == Kind::OlderBuffer
-                                      ? std::string{"bytes changed, but the slot's allocation is "
-                                                    "from an older command buffer: the keep "
-                                                    "refuses"}
-                                      : std::string{"bytes changed: the keep would bind stale "
-                                                    "data"});
+                // Only the ranges RebindKeptUniform would bind again: the others are streamed.
+                if (VideoCommon::KeptUniformMatches(runtime, stage, index, device_addr, size)) {
+                    ++uniform_keep.verified;
+                    verify_kept = true;
+                    if (!VideoCommon::KeptUniformHolds<Runtime>(device_memory, stage, index,
+                                                                 device_addr, size)) {
+                        ++uniform_keep.mismatches;
+                        // The first 16 of each kind every 600 frames.
+                        if (++uniform_keep.changed_stale <= 16) {
+                            LOG_ERROR(HW_GPU,
+                                      "Uniform keep verify: stage {} slot {} at {:#x}+{:#x} "
+                                      "changed since the previous draw",
+                                      stage, index, device_addr, size);
+                        }
                     }
                 }
             } else if (VideoCommon::RebindKeptUniform(runtime, stage, index, device_addr, size)) {
@@ -4374,7 +4360,7 @@ void BufferCache<P>::JoinOverlap(BufferId new_buffer_id, BufferId overlap_id,
     VideoCommon::Churn::Add(VideoCommon::Churn::BuffersJoined);
     VideoCommon::Churn::Add(VideoCommon::Churn::BufferJoinBytes, overlap.SizeBytes());
     runtime.CopyBuffer(new_buffer, overlap, copies, true);
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     if (immediately_free)
         runtime.Finish();
 #endif
@@ -4676,6 +4662,7 @@ bool BufferCache<P>::InlineMemory(DAddr dest_address, size_t copy_size,
         return false;
     }
 
+    NoteUniformWrite(dest_address, copy_size);
     InlineMemoryImplementation(dest_address, copy_size, inlined_buffer);
 
     return true;
@@ -4934,7 +4921,7 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
 
     Unregister(buffer_id);
 
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     if (!do_not_mark || !immediately_free)
 #endif
         delayed_destruction_ring.Push(std::move(slot_buffers[buffer_id]));

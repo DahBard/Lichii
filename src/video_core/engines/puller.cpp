@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <atomic>
@@ -585,6 +584,10 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
         // As for an acquire met at once: CanResumeAcquire read the word just now, which
         // DispatchCalls' check may have come before (Scheduler::Push).
         dma_pusher.ApplyCollectedWrites();
+        // Found met, as at once: the CPU may have rewritten what the next draws read before it
+        // released. A poll of the view can resume it before it sent the fence work that ends
+        // the keeps in order on the back (MaybeReleaseFences).
+        VideoCommon::Nx2FastDraw::NoteSync();
     }
     return true;
 }
@@ -765,6 +768,9 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         // Switch 2 waits on semaphores the CPU (or another channel) releases, e.g. once it has
         // written the commands this channel runs next: suspend the channel until the value is
         // met instead of reading ahead (approach from changes.patch).
+        // Without the split the draws before it already ran: this ends their uniform keeps. On the
+        // split's back they may run after it, so the paths below note it again once they find the
+        // acquire met, and ResumeAcquire once a suspended one resumes.
         VideoCommon::Nx2FastDraw::NoteSync();
         PendingAcquire acquire{
             .address = regs.semaphore_address.SemaphoreAddress(),
@@ -802,6 +808,9 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
                 if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Fast);
                 split.NoteSync();
+                // Found met: the CPU may have rewritten what the next draws read before it
+                // released (as on every met path here).
+                VideoCommon::Nx2FastDraw::NoteSync();
                 return;
             }
             // This channel's own release, still queued, meets it once the back runs it, which is
@@ -810,6 +819,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 released && acquire.Matches(*released)) {
                 if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Own);
                 split.NoteSync();
+                VideoCommon::Nx2FastDraw::NoteSync();
                 return;
             }
             if (FriztiPolls() && split.Active() &&
@@ -821,6 +831,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 if (acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
                     if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::Fast);
                     split.NoteSync();
+                    VideoCommon::Nx2FastDraw::NoteSync();
                     return;
                 }
                 if (const auto device =
@@ -871,6 +882,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 if (acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
                     if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterWait);
                     split.NoteSync();
+                    VideoCommon::Nx2FastDraw::NoteSync();
                     return;
                 }
             }
@@ -891,6 +903,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             NoteAcquireCheck(dma_pusher, acquire.address, false, met_before, met);
         }
         if (met) {
+            VideoCommon::Nx2FastDraw::NoteSync();
             if (auto* stats = AcquireStats::Get()) stats->Note(AcquireStats::AfterDrain);
             return;
         }
@@ -916,6 +929,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         }
     } else {
         DrainBack();
+        VideoCommon::Nx2FastDraw::NoteSync();
         do {
             const u32 word = dma_pusher.memory_manager.Read<u32>(regs.semaphore_address.SemaphoreAddress());
             regs.acquire_source = true;
@@ -968,12 +982,14 @@ bool Puller::AcquireWithoutDrain(DmaPusher& dma_pusher, PendingAcquire& acquire)
         answer = CheckAcquire(dma_pusher, acquire, answer, waits != 0, *device);
     }
     switch (answer.kind) {
-    case Kind::Met:
-        return true;
     case Kind::MetByQueued:
         // What the front reads after the acquire waits for the work sent before the release
         // (GpuSplit::NoteSync).
         split.NoteSync();
+        [[fallthrough]];
+    case Kind::Met:
+        // Found met: the CPU may have rewritten what the next draws read before it released.
+        VideoCommon::Nx2FastDraw::NoteSync();
         return true;
     case Kind::Flush:
         RequestFlush(dma_pusher, acquire, *device);
@@ -1080,6 +1096,8 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
                     : operation == 2 ? *released >= payload
                                      : static_cast<s32>(*released - payload) >= 0) {
                     split.NoteSync();
+                    // Met without the drain and fence break below: the uniform keeps end here.
+                    VideoCommon::Nx2FastDraw::NoteSync();
                     return;
                 }
             }
@@ -1091,6 +1109,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
             const u32 current = dma_pusher.memory_manager.Read<u32>(address);
             if (operation == 2 ? current >= payload : static_cast<s32>(current - payload) >= 0) {
                 split.NoteSync();
+                VideoCommon::Nx2FastDraw::NoteSync();
                 return;
             }
         }

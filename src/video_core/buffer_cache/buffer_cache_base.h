@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
@@ -200,7 +199,7 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
     friend struct BufferCacheTestAccess;
     // Page size for caching purposes.
     // This is unrelated to the CPU page size and it can be changed as it seems optimal.
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     static constexpr u32 CACHING_PAGEBITS = 12;
 #else
     static constexpr u32 CACHING_PAGEBITS = 16;
@@ -218,7 +217,7 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
     static constexpr bool SEPARATE_IMAGE_BUFFERS_BINDINGS = P::SEPARATE_IMAGE_BUFFER_BINDINGS;
     static constexpr bool USE_MEMORY_MAPS_FOR_UPLOADS = P::USE_MEMORY_MAPS_FOR_UPLOADS;
 
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     static constexpr s64 TARGET_THRESHOLD = 3_GiB;
 #else
     static constexpr s64 TARGET_THRESHOLD = 4_GiB;
@@ -895,7 +894,7 @@ private:
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 
     Common::SlotVector<Buffer> slot_buffers;
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     static constexpr size_t TICKS_TO_DESTROY = 6;
 #else
     static constexpr size_t TICKS_TO_DESTROY = 8;
@@ -988,15 +987,15 @@ private:
         u64 draw_deletions{}; ///< buffer_deletions when the previous draw began
         u64 sync_serial{};    ///< Nx2FastDraw::SyncSerial then
         u64 host_serial{};    ///< MemoryManager::HostPointerSerial then
+        /// gpu_memory then: another one's HostPointerSerial can be the same number
+        const Tegra::MemoryManager* gpu_memory{};
         u64 kept{};
         u64 streamed_binds{};
         u64 verified{};
         u64 mismatches{};
         /// The mismatches by kind (EDEN_NX2_UBO_KEEP_VERIFY): kept ranges the original path binds
-        /// from the buffer, and those KeptUniformHolds rejected by KeptUniformMismatch::Kind.
+        /// from the buffer, and those whose bytes KeptUniformHolds found changed.
         u64 no_longer_streamed{};
-        u64 changed_slot{};
-        u64 changed_older{};
         u64 changed_stale{};
     } uniform_keep;
 
@@ -1314,7 +1313,7 @@ private:
     u64 minimum_memory = 0;
     u64 critical_memory = 0;
     BufferId inline_buffer_id;
-#ifdef YUZU_LEGACY
+#ifdef LICHII_LEGACY
     bool immediately_free = false;
 #endif
 
