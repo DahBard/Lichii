@@ -1,4 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifdef _WIN32
@@ -26,6 +25,7 @@
 #include <string_view>
 #endif
 
+#include "common/literals.h"
 #include "common/memory_detect.h"
 
 namespace Common {
@@ -76,6 +76,25 @@ static MemoryInfo Detect() {
 const MemoryInfo& GetMemInfo() {
     static MemoryInfo mem_info = Detect();
     return mem_info;
+}
+
+HostRam GetHostRam() {
+#ifdef _WIN32
+    ULONGLONG kilobytes{};
+    if (GetPhysicallyInstalledSystemMemory(&kilobytes) && kilobytes != 0) {
+        return {kilobytes * 1024, true};
+    }
+#endif
+#ifdef __APPLE__
+    return {GetMemInfo().TotalPhysicalMemory, true};
+#else
+    return {GetMemInfo().TotalPhysicalMemory, false};
+#endif
+}
+
+bool IsBelowSwitch2RamMinimum(HostRam ram) {
+    using namespace Common::Literals;
+    return ram.bytes != 0 && ram.bytes < (ram.installed ? 16_GiB : 12_GiB);
 }
 
 ProcessMemoryUsage GetProcessMemoryUsage() {

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #if defined(_M_X64) || defined(__x86_64__)
@@ -15,12 +15,19 @@
 #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
 #include "core/arm/dynarmic/window_trace.h"
 #include "core/core_timing.h"
+#include "core/hardware_properties.h"
 #include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/nx2_thread_stats.h"
 #include "dynarmic/interface/A64/config.h"
 
 namespace Core {
 
 using namespace Common::Literals;
+
+namespace {
+// EDEN_NX2_GUEST_THREAD_STATS: the JIT's dispatcher counters of each core's JITs (one per process).
+std::array<Dynarmic::A64::UserConfig::Counters, Hardware::NUM_CPU_CORES> g_jit_counters{};
+} // Anonymous namespace
 
 DynarmicCallbacks64::DynarmicCallbacks64(ArmDynarmic64& parent, Kernel::KProcess* process)
     : m_parent{parent}, m_memory(process->GetMemory())
@@ -57,12 +64,12 @@ Dynarmic::A64::Vector DynarmicCallbacks64::MemoryRead128(u64 vaddr) {
 std::optional<u32> DynarmicCallbacks64::MemoryReadCode(u64 vaddr) {
     if (!m_memory.IsValidVirtualAddressRange(vaddr, sizeof(u32)))
         return std::nullopt;
-    auto const aligned_vaddr = vaddr & ~Core::Memory::YUZU_PAGEMASK;
+    auto const aligned_vaddr = vaddr & ~Core::Memory::LICHII_PAGEMASK;
     if (last_code_addr != aligned_vaddr) {
         m_memory.ReadBlock(aligned_vaddr, &cached_code_page, sizeof(cached_code_page));
         last_code_addr = aligned_vaddr;
     }
-    const u32 instruction = cached_code_page.inst[(vaddr & Core::Memory::YUZU_PAGEMASK) / sizeof(u32)];
+    const u32 instruction = cached_code_page.inst[(vaddr & Core::Memory::LICHII_PAGEMASK) / sizeof(u32)];
     if (WindowTrace::Enabled() && m_process->GetProgramId() == WindowTrace::ProgramId) {
         if (!m_window_trace) {
             m_window_trace = WindowTrace::sessions.Find(m_process);
@@ -204,6 +211,13 @@ void DynarmicCallbacks64::ExceptionRaised(u64 pc, Dynarmic::A64::Exception excep
     case Dynarmic::A64::Exception::SendEvent:
     case Dynarmic::A64::Exception::SendEventLocal:
     case Dynarmic::A64::Exception::Yield:
+        if (Kernel::Nx2ThreadStats::g_enabled) {
+            Kernel::Nx2ThreadStats::CountHint(
+                Kernel::Nx2ThreadStats::t_run,
+                static_cast<size_t>(exception) -
+                    static_cast<size_t>(Dynarmic::A64::Exception::WaitForInterrupt),
+                m_parent.m_system.CoreTiming().GetClockTicks(), m_spin_ticks);
+        }
         LOG_TRACE(Core_ARM, "ExceptionRaised(exception = {}, pc = {:08X}, code = {:08X}, cached = {:08X})", std::size_t(exception), pc, m_memory.Read32(pc), MemoryReadCode(pc).value_or(0));
         return;
     case Dynarmic::A64::Exception::NoExecuteFault:
@@ -263,6 +277,9 @@ u64 DynarmicCallbacks64::GetCNTPCT() {
 #endif
     }
     m_last_cntpct = ticks;
+    if (Kernel::Nx2ThreadStats::g_enabled) {
+        Kernel::Nx2ThreadStats::CountRead(Kernel::Nx2ThreadStats::t_run, ticks, m_spin_ticks);
+    }
     return ticks;
 }
 
@@ -456,12 +473,32 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
         config.fastmem_pointer = std::nullopt;
         config.fastmem_exclusive_access = false;
     }
+    if (Kernel::Nx2ThreadStats::g_enabled && m_core_index < g_jit_counters.size()) {
+        config.counters = &g_jit_counters[m_core_index];
+    }
     m_jit.emplace(config);
 }
 
 HaltReason ArmDynarmic64::RunThread(Kernel::KThread* thread) {
     m_jit->ClearExclusiveState();
-    return TranslateHaltReason(m_jit->Run());
+    if (!Kernel::Nx2ThreadStats::g_enabled || m_core_index >= g_jit_counters.size()) {
+        return TranslateHaltReason(m_jit->Run());
+    }
+    namespace Stats = Kernel::Nx2ThreadStats;
+    auto& timing = m_system.CoreTiming();
+    Stats::BeginRun();
+    const u64 start = timing.GetClockTicks();
+    const Dynarmic::HaltReason hr = m_jit->Run();
+    const u64 end = timing.GetClockTicks();
+    const Stats::Exit exit = Dynarmic::Has(hr, SupervisorCall) ? Stats::Exit::Svc
+                             : Dynarmic::Has(hr, BreakLoop)    ? Stats::Exit::Interrupt
+                             : Dynarmic::Has(hr, Dynarmic::HaltReason::CacheInvalidation)
+                                 ? Stats::Exit::CacheInvalidation
+                                 : Stats::Exit::Other;
+    const auto& jit = g_jit_counters[m_core_index];
+    Stats::EndRun(thread, m_core_index, start, end, exit, m_svc, jit.block_lookups,
+                  jit.blocks_compiled, jit.cache_clears);
+    return TranslateHaltReason(hr);
 }
 
 HaltReason ArmDynarmic64::StepThread(Kernel::KThread* thread) {
