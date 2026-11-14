@@ -24,6 +24,10 @@ Priorities (owner, 2026-11-10):
   standard.
 - Take changes from other forks only for a very good reason or when the owner names them. Vet
   everything that doesn't come from upstream Lichii heavily.
+- 2026-11-14 (owner): "do whatever guarantees the most performance. if the shortcut works, and I
+  haven't reported any issue with it, then keep it in without the upstream change." Where an
+  upstream change replaces one of our working shortcuts and costs performance, ours stays and that
+  upstream change is left out (first: #1486 in merge 4, reverted on branch `r22-up-no1486`).
 
 Round 22, in this order:
 1. Merge build 132.
@@ -98,8 +102,8 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   dropped the 11:00 check: v6 will be released soon, but where it will be hosted isn't known yet;
   the owner says where once it is public.
 - 2026-11-13: "When you are finished with your current goals merge upstream Lichii with our 'not a
-  fork'": merge 4, upstream nx2 `87d84d513c` (17 commits after build 171), on branch
-  `r22-merge-nx2d`.
+  fork'": merge 4, upstream nx2 `87d84d513c` (17 commits after build 171) without #1486, on branch
+  `r22-merge-nx2e` (`r22-merge-nx2d` was the first attempt, with #1486).
 - A scheduled task ("Resume Lichii work") resumes this session after a usage cut-off until this
   work is done, as the owner asked on 2026-11-12 ("When my usage runs out, resume when it renews
   ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the
