@@ -103,7 +103,9 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   the owner says where once it is public.
 - 2026-11-13: "When you are finished with your current goals merge upstream Lichii with our 'not a
   fork'": merge 4, upstream nx2 `87d84d513c` (17 commits after build 171) without #1486, on branch
-  `r22-merge-nx2e` (`r22-merge-nx2d` was the first attempt, with #1486).
+  `r22-merge-nx2e` (`r22-merge-nx2d` was the first attempt, with #1486). Done on 2026-11-14:
+  tuned4 `a8788276c`, `tuned` `ada9ce77c`; the base under the patch is now `85a2cc0ac7`
+  (`r22-up-no1486`); r62.
 - A scheduled task ("Resume Lichii work") resumes this session after a usage cut-off until this
   work is done, as the owner asked on 2026-11-12 ("When my usage runs out, resume when it renews
   ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the

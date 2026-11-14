@@ -51,18 +51,19 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   trigger in their 579 workflow files matches `upstream/...`). `upstream-nx2` is a stray copy of
   `upstream/nx2` that this session's git proxy can't delete; delete it on GitHub. This session's
   proxy also refuses tag pushes and more than about 20 refs per push.
-- Since 2026-11-13 (r60): branch `tuned` = upstream Lichii build 171, nx2 `c169856090` (merged in
-  `8619a1df3`; `2eb5f081c` in `526c0ab1c`, `17baed716` in `2d9ea59c5`) + the workflow + this
-  folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The patch is
-  `git diff --binary c169856090 tuned4` (364 files, 2.7 MB), backed up in `tuned4.bundle` (`git
-  fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has upstream nx2 up to
-  `c169856090`). Since upstream's rename the build target is `lichii` and the options are
+- Since 2026-11-14 (r62): branch `tuned` = upstream nx2 `87d84d513c` without #1486, branch
+  `r22-up-no1486` (`85a2cc0ac7` reverts `9441129819`; merged in `ada9ce77c`; build 171
+  `c169856090` in `8619a1df3`, `2eb5f081c` in `526c0ab1c`, `17baed716` in `2d9ea59c5`) + the
+  workflow + this folder. Round 21's Fritchii tree (branch `tuned5`) stays in the history. The
+  patch is `git diff --binary 85a2cc0ac7 tuned4` (318 files, 2.7 MB), backed up in
+  `tuned4.bundle` (`git fetch lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has
+  `85a2cc0ac7`). Since upstream's rename the build target is `lichii` and the options are
   `-DLICHII_*`. Variants: `pgo`, `pgo-lto` and `pgo-train`;
   `msvc` is off again. The 'AMD FidelityFX libraries' step puts AMD's signed FSR and frame
   generation DLLs (SDK v2.4.0, SHA-256 checked) next to lichii.exe for CheezyEmu's FSR port.
-- Branch `tuned` of DahBard/Blitchii = upstream nx2 `2eb5f081c` (2026-11-12; `17baed716` = round 22's merge, `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
+- Earlier bases of branch `tuned` of DahBard/Blitchii: upstream nx2 `2eb5f081c` (2026-11-12; `17baed716` = round 22's merge, `d2eaae4f3` = build 132 before it; `cbb512ee7` merged in round 19, `281477eac`
   in round 18; `ad477ef1f` = the 53 pull requests of 2026-11-08 in round 17, `bf4c42e22` = build 117 + 3 in
-  round 14, `92f021240` = build 116 in round 13, `588bfa6` before) + `.github/workflows/lichii-tuned.yml` + this folder. The
+  round 14, `92f021240` = build 116 in round 13, `588bfa6` before), each + `.github/workflows/lichii-tuned.yml` + this folder. The
   workflow applies `lichii-tuned/lichii-tuned.patch` and builds the Windows variants on every
   push to `tuned` that touches `lichii-tuned/**` or the workflow (a commit message with
   `[skip ci]` doesn't), and on a manual run (`workflow_dispatch`).
@@ -119,14 +120,15 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   to `d34bcee34` (the MinGW link fix), branch `r22-merge-nx2b`, and the stable build r58 up to
   `5fc428bdc`, branch `r22-r57`, r59 up to `134cfab02`, branch `r22-r59`, and merge 3 (nx2
   `65745c243f` in `9161e35d2`, build 171 `c169856090` in `31d387f72`, r59 merged in) up to
-  `04e8a8d2a`, branch `r22-merge-nx2c`; pushing it doesn't trigger builds).
+  `04e8a8d2a`, branch `r22-merge-nx2c`, r61's launcher cleanup `c73800765`, and merge 4
+  (`r22-up-no1486` in `a8788276c`), branch `r22-merge-nx2e`; pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
-  lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has upstream nx2 up to
-  `c169856090`, as `tuned` does). The patch is `git diff --binary c169856090 tuned4` (364 files,
-  2.7 MB); check it
+  lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has `85a2cc0ac7`, as `tuned` does).
+  The patch is `git diff --binary 85a2cc0ac7 tuned4` (318 files, 2.7 MB); check it
   with `git apply --check` on a clean `tuned` checkout before committing it. To move to a newer
   upstream: merge it into tuned4 and into `tuned`, then diff tuned4 against the merged upstream
-  commit.
+  commit. An upstream change we leave out (merge 4: #1486) is reverted on a branch from the
+  upstream commit (`r22-up-no1486`); that branch is what both merge, and the patch base.
 - Before turning `msvc` on, run `python3 -I lichii-tuned/check_patch_warnings.py <tuned4 checkout>`.
   It compiles the changed files with clang and GCC and reports warnings on added lines that the msvc
   variant treats as errors (shadowing, signed/unsigned compares, unused locals and captures,
@@ -342,7 +344,8 @@ is the next test.
       - `fd501a1d5`: Fritchii's c2d2f50d1 sizes a range from the block start, so it leaves out
         bytes written mid-block. Ranges are now exact.
       - `13dda6404`: a collected write that crosses the dirty managers' 2 KiB pages is split per
-        page instead of being cut short by a 32-bit shift.
+        page instead of being cut short by a 32-bit shift (since merge 4 upstream's own, #1586
+        with #1591).
       - `4728e4d7d`: the apply runs before a list's work, SEM_EXECUTE and accelerated copies;
         `910ec2b1e`: also when a Switch 2 SemaphoreOperation acquire is met or resumes (a draw
         after an acquire the CPU released mid-list read the old host copy).
@@ -435,7 +438,8 @@ asked. Nothing of round 18 has run in the game yet.
 - The workflow builds `pgo-train` again, for an Ocarina profile (none was ever recorded:
   `lichii-tuned/pgo/` is empty).
 - #717's guest CPU parts (merge `5f0e02841`, branch `r18-pr717`, ported by an Opus subagent
-  from eb3553bcb), every piece behind an `EDEN_NX2_*` switch, on unless 0:
+  from eb3553bcb), every piece behind an `EDEN_NX2_*` switch, on unless 0 (since merge 4 the
+  codegen is upstream's #1531, the same options without switches; see merge 4):
   - `06d6d329b` dynarmic x64 codegen: flag reuse (`_JIT_FLAGS`), a 2^16-entry 4-way dispatch
     table (`_JIT_DISPATCH`: 0 = old 2^20 table, 8-24 = bits), compact exits, far code, address
     folding into fastmem (`_JIT_FOLD_ADDR`, 64-bit fastmem only), `_JIT_ZEXT`,
@@ -460,7 +464,8 @@ asked. Nothing of round 18 has run in the game yet.
     binary here: the strcmp patch's exit register state, the zstd callers' use of the context.
   - Not ported: the native Ocarina macros (macro_hle_oot, they overlap #805's macro work), the
     GPU-thread, cache and drain changes (duplicates of #805), the DLSS CMake condition.
-  - Launchers: ab-15 (all of it off), ab-16 (codegen off), ab-17 (Ocarina patches off).
+  - Launchers: ab-15 (all of it off), ab-16 (codegen off; removed in r62), ab-17 (Ocarina
+    patches off).
 - #805 (merge `da05287c7`, branch `r18-pr805`, 47 commits of head 34621dcd6 by an Opus
   subagent; cherry-picks keep jpkto as author): acquires from a front semaphore view and QMD
   view instead of drains, macros that read memory run on the back (`EDEN_NX2_BACK_MACROS`),
@@ -497,7 +502,8 @@ for Intel, and the fork survey's picks. The owner skipped testing round 16 (r26)
   VK_EXT_mesh_shader, so our drop of them went), #812, #752 (a channel waits for a GPU-written
   list without blocking the others). Kept from tuned4: the record conversions, #408's attribute
   keys (deduplicated in memory only: the file keeps every record, so builds that key them apart
-  lose nothing), EXP8's copy skip, banded untiles, no cold hints,
+  lose nothing), EXP8's copy skip, banded untiles, no cold hints (since merge 4 upstream #1581's:
+  only while RAM is short),
   batched collector downloads, the front's write tracking and mixed macro reads, the genlock
   beside #655's timer pacing, and the raw Dynamic FPS step, now also applied to #655's FPS
   Unlock patch (it shares the routine head TuneDynamicFps patches).
@@ -533,8 +539,10 @@ r23 showed. Fritchii's numbered switches are read too (`EDEN_NX2_EXP<n>`).
   `LICHII_BANK_DEDUPE`.
 - EXP8 (`54dd4bf3c`, Fritchii 7d75f9133, 7cdbcc3fa; Hyrule Field 1% low 30.3 -> 35.1 there):
   idle staging buffers kept, no guest upload for a new 2D image GPU copies overwrite whole,
-  banded untiles on the transcode workers, no HintCold. `LICHII_TEXTURE_UPLOADS` bits (15; since
-  round 17 bit 1 switches nothing: upstream #778 always keeps idle buffers).
+  banded untiles on the transcode workers, no HintCold (since merge 4 upstream #1581's: uploads
+  are hinted cold only while less than a quarter of the RAM and less than 4 GiB is free).
+  `LICHII_TEXTURE_UPLOADS` bits (15; since round 17 bit 1 switches nothing: upstream #778 always
+  keeps idle buffers; since merge 4 bit 8 neither).
 - EXP21 (`2b72dc569`, Fritchii d603d98bb): a texture handle word that is a storage buffer
   address binds no texture (waterfall flicker). Round 17: upstream #778 does it always, so
   `LICHII_NULL_POINTER_HANDLES` went.
@@ -2340,7 +2348,8 @@ Own changes:
      and the back's uniform zone against r58/r59 (#1441/#1521 end keeps at reports and lists);
      #1520's 'GPUSnapshot' copier thread on the hybrid CPU (our placement doesn't know it);
      VRAM with #1435 on top of #1306 (up to ~1 GiB more); the new 'GPU thread waits for
-     suspended channels' line; a new JIT crash or glitch: A/B with ab-16 (#1517); 'ExeFS:
+     suspended channels' line; a new JIT crash or glitch: A/B with ab-16 (#1517; since r62 CPU
+     accuracy Paranoid, see merge 4); 'ExeFS:
      Ignoring installed update' if the dump is an NUP or tree .nx with an update (#1504).
      The Qt frontend's recorded PGO data is lost until the next pgo-train (src/yuzu ->
      src/lichii; GUI only). To offer upstream, with the owner's approval: `3880800d0` (a failed
@@ -2348,6 +2357,86 @@ Own changes:
      or #1523-dropped boot record whose draw key differs, also erase the draw key's hash from
      disk_pipelines (`admit`, ours; re-capture comes one session later); ClockTrace
      PollStart/PollEnd around the front's new hardware poll.
+   - Merge 4, done 2026-11-14 (r62; notes in scratchpad/merge4/): upstream nx2 `87d84d513c` (17
+     commits after build 171) without #1486, as branch `r22-up-no1486` (`87d84d513c` +
+     `85a2cc0ac7`, the revert of `9441129819`), merged into tuned4 `c73800765` in `a8788276c`
+     (branch `r22-merge-nx2e`) and into `tuned` in `ada9ce77c`. 30 content conflicts; upstream's
+     ocarina_upscale.h and its test (modified there, deleted here) stay deleted. The first
+     attempt (`r22-merge-nx2d`, backup `r22-merge-nx2d-wip`) took #1486 and dropped our list
+     path; its resolutions of the 16 other commits were reused (scratchpad/merge4/area-reports.md).
+     Two area resolvers, five reviewers with verifiers: no major defect.
+     - Kept over upstream. Owner (2026-11-14): "do whatever guarantees the most performance. if
+       the shortcut works, and I haven't reported any issue with it, then keep it in without the
+       upstream change". Our list path (Nx2ListIndirect/Nx2ListSlots, `EDEN_NX2_LIST_INDIRECT`,
+       #805 by jpkto, `8635b6b4a3` and follow-ups, on since round 18) and the front QMD view
+       (front_qmd.h) stay; #1486 (list-fed grid macro calls, EGLA-146 lever 5) is out. Its
+       kept-word patches mark Ocarina's QMD pages GPU-written (Nx2InlineKeptWords ->
+       MarkWrittenBuffer -> Nx2MarkGpuWritten), so the QMD view would lose its table at every
+       list-fed dispatch (ReadDescriptor -> Lost::GpuWritten): the front stops valuing QMD
+       releases there and its acquires wait for the back. Take #1486 only if upstream stops
+       marking those pages or our path breaks. The revert also leaves out #1486's
+       ObtainIndirectBuffer for indirect compute arguments: only the classic Switch 1 launch
+       reaches it (Switch 2 channels are native), and DiscardWrite avoids that change's page
+       downloads.
+     - Ours beside upstream's code: the hint pause (`EDEN_NX2_HINT_PAUSE`) and inline CNTPCT
+       (`LICHII_JIT_INLINE_CNTPCT`, `EDEN_NX2_CNTPCT_PAUSE`) with #1531; profiled runs keep fast
+       Maxwell3D and so #1585's blocks (counted and timed per write under 'method'; the ring
+       entries line counts them as "register blocks"), where upstream's profile turns them off;
+       the 'Zero-page pass' slow-pass lines and the SEC_RESERVE commit line with #1580;
+       precompile_pending with #1577's stale check (Ask asks for either; a stale file alone is
+       rebuilt without asking, as upstream); CheezyEmu's FSR over #1589's renderer hunks (#1589's
+       DLSS render scales need Streamline, which our MinGW builds don't have); our extra
+       NoteShutdownProgress() and pipeline cache teardown with #1576; EXP35's g_writes_collected
+       with #1586's MayHavePending; our batched pipeline_cache.InvalidateRegions in #1586's
+       OnCacheInvalidations.
+     - Upstream's in place of ours: #1531 = our #717 codegen port (`06d6d329b`), the same options,
+       always on except under CPU accuracy Paranoid, plus guest BL/BLR/RET as host call/ret
+       (host_call_return, multicore only). The `EDEN_NX2_JIT_*` switches are gone, so ab-16 was
+       removed; for a JIT crash or glitch, compare with CPU accuracy Paranoid (or Debugging with
+       the return stack buffer unchecked, which turns host call/ret off). #1586's page-crossing
+       Collect (with #1591's size_t) replaces `13dda6404`; its prepare-time clock skip is our
+       `b95617b80`. #1581 replaces LICHII_TEXTURE_UPLOADS bit 8: every cold hint (texture and
+       buffer uploads, nx2_gsv's 30 s pass) runs only while less than min(RAM/4, 4 GiB) is free;
+       r61 hinted buffers and GPU-only regions every time. #1580's early-exit page check and
+       300 s backoff were ours since r50; its bulk-mapping wait is new. #1576 is round 20's
+       Fritchii teardown wait plus shutdown_timer.stop().
+     - New from upstream: #1585 (the front's 3D state writes go to the back as register blocks;
+       with our FoldInstance a fold flushes gathered writes first and a state write flushes a
+       pending fold, Publish/Drain/WaitFor/Reserve flush both, SettleIdleBack publishes them,
+       FrontDmaRead flushes both, FlushFoldedInstances sends to the split that folded and sets
+       draw.begin's dirty flags, and a block that may issue a deferred draw notes a cache
+       write); #1586's other cuts (InvalidateGPUCache gathers only when a manager shows a write;
+       AccelerateInlineToMemory skips the buffer cache lock off GPU-written and list pages;
+       bounded usage tracker resets; OnCacheInvalidations takes each lock once; a vertex input
+       state cache; uniform slots on a miss streak skip the compare; fast draw breaks skip the
+       atomic add on the drawing thread); #1573, #1592, #1574, #1575 (synchronous GPU only),
+       #1577, #1570, #1590 and #1582 (Android). New diagnostics: `EDEN_NX2_BACKX_VERIFY` (in
+       verify.bat) and `EDEN_NX2_REG_BLOCK_VERIFY` (verify-blocks.bat; `EDEN_NX2_PERF_VERIFY`
+       turns the blocks off, so verify.bat can't check them).
+     - Our store-only drop of a same-value index_buffer.first (`1aa5fded3f`) also drops it after
+       a register block, where the per-write path, whose state write still waits in the back's
+       sink, sends it and marks its dirty flags again. The value is the same, so nothing changes
+       on the back. Upstream's new block-versus-single-write test failed on those flags (a model
+       of its seed-7 stream: round 153), so our copy leaves index_buffer.first out of its random
+       executable writes (the argument is still drawn, so the stream stays upstream's).
+     - Unchanged: VulkanPipelineCacheVersion 54 and PreparationVersion "tuned 1" (no new
+       preparation). WarmBuilderVersion 3 (#1577) makes the first r62 launch rebuild Ocarina's
+       precache file once ('Shader precache for 0400486024dec000: built by an older version,
+       building it'), and the loading screen then builds its ~4,000 compute programs again.
+       `3880800d0` is still missing upstream at `87d84d513c`.
+     - Refuted in review: #1586's break skip after a mid-game split restart (no break it skips
+       runs on the front with default settings); host_call_return without a switch (upstream's
+       code as is, and the settings above turn it off).
+     - Watch in the owner's first r62 session: the precache rebuild above, once; frame times and
+       gpu_back_cpu_ms_per_frame with perf-trace-noprofile against r61 on the same route (#1585
+       and #1586 should lower the back; in perf-trace the 'method' zone keeps about r61's
+       counts and takes less time); the guest cores ('Guest core N per second') with host
+       call/ret; any new JIT crash ('Host crash:') or glitch; the profile's waits for the back
+       by site at r61's (list path and QMD view kept); RAM in the heap trace (cold hints only
+       under 4 GiB free); 'Zero-page pass' lines after loads; verify.bat's 'BackX gather checks'
+       (writes no manager showed: 0) and no 'BackX verify mismatch'; verify-blocks.bat's
+       'Register block verify' (0 differ); stopping Ocarina and starting a game again without
+       restarting Lichii (#1592).
 1. Plan to 60 fps with 1% lows above 30 at 1440p -> 4K FSR 4 (agreed with the owner after r22).
    r27: the frame is ~33 ms; the guest cores 4 and 5 (26.2, 24.8 ms) now bound it, then the back
    (22.7): each must fall under ~15 ms; the GPU has room (~12 ms of 16.7 with FSR 4). The host
