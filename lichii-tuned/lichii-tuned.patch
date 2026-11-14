@@ -13882,7 +13882,7 @@ index 0000000000..b093b0bc5b
 +
 +} // namespace Shader::TranslateProfile
 diff --git a/src/tests/CMakeLists.txt b/src/tests/CMakeLists.txt
-index f1969920af..01d80418ac 100644
+index f1969920af..45e530ae8f 100644
 --- a/src/tests/CMakeLists.txt
 +++ b/src/tests/CMakeLists.txt
 @@ -9,6 +9,7 @@ add_executable(tests
@@ -13935,6 +13935,19 @@ index f1969920af..01d80418ac 100644
      common/bit_field.cpp
      common/bit_util.cpp
      common/cityhash.cpp
+@@ -243,6 +247,12 @@ create_target_directory_groups(tests)
+ target_link_libraries(tests PRIVATE common core audio_core input_common video_core frontend_common)
+ target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
+ 
++# The split tests keep up to three GpuSplits (320 KiB of write sets each since 129c827f08) and two
++# Maxwell3D fixtures in one frame, past the 1 MiB main thread stack MinGW links by default.
++if (MINGW)
++    target_link_options(tests PRIVATE "LINKER:--stack,8388608")
++endif()
++
+ if (TARGET dynarmic::dynarmic)
+     target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/window_trace.cpp)
+     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
 diff --git a/src/tests/common/clock_trace.cpp b/src/tests/common/clock_trace.cpp
 new file mode 100644
 index 0000000000..d68abc3f2e

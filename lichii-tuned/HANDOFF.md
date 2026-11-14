@@ -121,7 +121,8 @@ researching other Switch 2 emulator forks for what Lichii lacks, especially on A
   `5fc428bdc`, branch `r22-r57`, r59 up to `134cfab02`, branch `r22-r59`, and merge 3 (nx2
   `65745c243f` in `9161e35d2`, build 171 `c169856090` in `31d387f72`, r59 merged in) up to
   `04e8a8d2a`, branch `r22-merge-nx2c`, r61's launcher cleanup `c73800765`, and merge 4
-  (`r22-up-no1486` in `a8788276c`), branch `r22-merge-nx2e`; pushing it doesn't trigger builds).
+  (`r22-up-no1486` in `a8788276c`), branch `r22-merge-nx2e`, and the tests' stack `cf51fcc85`;
+  pushing it doesn't trigger builds).
   `lichii-tuned/tuned4.bundle` holds the same history as a backup (`git fetch
   lichii-tuned/tuned4.bundle tuned4:tuned4` in a clone that has `85a2cc0ac7`, as `tuned` does).
   The patch is `git diff --binary 85a2cc0ac7 tuned4` (318 files, 2.7 MB); check it
@@ -2419,6 +2420,17 @@ Own changes:
        on the back. Upstream's new block-versus-single-write test failed on those flags (a model
        of its seed-7 stream: round 153), so our copy leaves index_buffer.first out of its random
        executable writes (the argument is still drawn, so the stream stays upstream's).
+     - CI: build run #2 (r62) passed. Tests run #1 died 30 s in with MSYS2 bash's exit code 127
+       and no Catch2 output (its stdout is fully buffered and was lost): a stack overflow in
+       #1585's register block test, whose frame is 1.14 MB for the Windows target because our
+       GpuSplit holds 320 KiB of write sets inline (`129c827f08`; upstream's holds 8 KiB), past
+       the 1 MiB main thread stack lld gives MinGW programs; the QMD launch test's frame was
+       already 0.95 MB. tuned4 `cf51fcc85` links the tests program with an 8 MiB stack on MinGW
+       (lichii.exe unchanged: its split is a static). Exit code 127 from tests.exe under MSYS2's
+       bash means a Windows status bash doesn't map (stack overflow, fast fail, heap
+       corruption), not a missing command; the test files run in reverse link order (the last
+       source's tests first), and `-Wframe-larger-than=` on a MinGW-target compile of a test file
+       shows its frames.
      - Unchanged: VulkanPipelineCacheVersion 54 and PreparationVersion "tuned 1" (no new
        preparation). WarmBuilderVersion 3 (#1577) makes the first r62 launch rebuild Ocarina's
        precache file once ('Shader precache for 0400486024dec000: built by an older version,
