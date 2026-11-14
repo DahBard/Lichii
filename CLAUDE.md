@@ -106,11 +106,10 @@ Then (owner, 2026-11-12 evening, after testing r58: "the best looking and smooth
   `r22-merge-nx2e` (`r22-merge-nx2d` was the first attempt, with #1486). Done on 2026-11-14:
   tuned4 `a8788276c`, `tuned` `ada9ce77c`; the base under the patch is now `85a2cc0ac7`
   (`r22-up-no1486`); r62.
-- A scheduled task ("Resume Lichii work") resumes this session after a usage cut-off until this
-  work is done, as the owner asked on 2026-11-12 ("When my usage runs out, resume when it renews
-  ... etc."). Since 2026-11-13 it runs once at each usage renewal, the first at 6:31 EST (the
-  owner's time, instead of every 2 hours), and each run re-arms it for the next renewal 5 hours
-  later. It doesn't interrupt work that is running.
+- A scheduled task ("Resume Lichii work") resumed this session after usage cut-offs, as the owner
+  asked on 2026-11-12 ("When my usage runs out, resume when it renews ... etc."), once at each
+  usage renewal from 2026-11-13. Deleted on 2026-11-14 once merge 4 (r62) was built and tested;
+  create it again for the next long piece of work.
 
 - 2026-11-13: the repository moved to DahBard/Blitchii, private, with its full history; our own
   files keep no reference to the origin repository (upstream's own code and the git history stay as

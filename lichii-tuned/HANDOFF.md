@@ -2430,7 +2430,12 @@ Own changes:
        bash means a Windows status bash doesn't map (stack overflow, fast fail, heap
        corruption), not a missing command; the test files run in reverse link order (the last
        source's tests first), and `-Wframe-larger-than=` on a MinGW-target compile of a test file
-       shows its frames.
+       shows its frames. Tests run #2 (the fix, by hand): 1400 test cases, 1399 passed, 1
+       skipped. Its clock trace step failed with no code change behind it: on that runner the
+       sampler's PDH setup took about 28 s (0 start and window lines in the test's 14 s, then a
+       13.7 s StopSession, which joins the thread still in Setup()); r61's runs read the counters
+       in under 1 ms. If it repeats, let the test wait for the start line before it times the
+       window and the stop.
      - Unchanged: VulkanPipelineCacheVersion 54 and PreparationVersion "tuned 1" (no new
        preparation). WarmBuilderVersion 3 (#1577) makes the first r62 launch rebuild Ocarina's
        precache file once ('Shader precache for 0400486024dec000: built by an older version,
